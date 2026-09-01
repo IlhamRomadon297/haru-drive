@@ -85,7 +85,6 @@ export default {
           });
         }
 
-        // Also query from D1
         if (env.harudrive_db) {
           const { results } = await env.harudrive_db.prepare("SELECT file_path FROM shortlinks WHERE type = 'folder'").all();
           (results || []).forEach(r => {
@@ -254,7 +253,7 @@ export default {
     }
 
     // ==========================================================
-    // API: Admin Manual File Upload (Direct to HF)
+    // API: Admin Manual File Upload (via HF Commit API)
     // ==========================================================
     if (url.pathname === '/api/admin/upload' && request.method === 'POST') {
       try {
@@ -267,28 +266,50 @@ export default {
         const file = formData.get('file');
         const targetDir = (formData.get('target_dir') || '').replace(/^\/+|\/+$/g, '');
         if (!file || typeof file === 'string') {
-          return new Response(JSON.stringify({ error: 'Tidak ada file yang diunggah.' }), { status: 400 });
+          return new Response(JSON.stringify({ error: 'Tidak ada file yang dipilih.' }), { status: 400 });
         }
 
         const filename = file.name;
         const fullPath = targetDir ? `${targetDir}/${filename}` : filename;
-        const uploadUrl = `https://huggingface.co/api/datasets/${HF_REPO_ID}/raw/main/${encodeURI(fullPath)}`;
 
-        const hfRes = await fetch(uploadUrl, {
+        const arrayBuffer = await file.arrayBuffer();
+        const uint8 = new Uint8Array(arrayBuffer);
+        let binary = '';
+        const chunkSize = 8192;
+        for (let i = 0; i < uint8.length; i += chunkSize) {
+          binary += String.fromCharCode.apply(null, uint8.subarray(i, i + chunkSize));
+        }
+        const base64Content = btoa(binary);
+
+        const commitUrl = `https://huggingface.co/api/datasets/${HF_REPO_ID}/commit/main`;
+        const commitPayload = {
+          summary: `Upload ${filename} via HaruDrive`,
+          operations: [
+            {
+              key: 'file',
+              value: {
+                content: base64Content,
+                path: fullPath,
+                encoding: 'base64'
+              }
+            }
+          ]
+        };
+
+        const hfRes = await fetch(commitUrl, {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${HF_TOKEN}`,
-            'Content-Type': file.type || 'application/octet-stream'
+            'Content-Type': 'application/json'
           },
-          body: file
+          body: JSON.stringify(commitPayload)
         });
 
-        if (!hfRes.ok && hfRes.status !== 201 && hfRes.status !== 200) {
+        if (!hfRes.ok) {
           const errText = await hfRes.text();
           return new Response(JSON.stringify({ error: `Gagal upload ke HF: ${errText}` }), { status: hfRes.status });
         }
 
-        // Save to D1
         const shortId = await generateShortId(fullPath);
         if (env.harudrive_db) {
           await env.harudrive_db.prepare(
@@ -344,7 +365,7 @@ export default {
         if (ghRes.status === 204) {
           return new Response(JSON.stringify({
             success: true,
-            message: '🚀 Cloud Mirror berhasil dijalankan di GitHub Actions!',
+            message: 'Cloud Mirror berhasil dijalankan di GitHub Actions!',
             repo: repo,
             target_path: targetPath
           }), { headers: { 'Content-Type': 'application/json' } });
@@ -372,17 +393,31 @@ export default {
           return new Response(JSON.stringify({ error: 'Path folder tidak boleh kosong.' }), { status: 400 });
         }
 
-        const keepFileUrl = `https://huggingface.co/api/datasets/${HF_REPO_ID}/raw/main/${encodeURI(folderPath)}/.gitkeep`;
-        const hfRes = await fetch(keepFileUrl, {
+        const commitUrl = `https://huggingface.co/api/datasets/${HF_REPO_ID}/commit/main`;
+        const commitPayload = {
+          summary: `Create folder ${folderPath} via HaruDrive`,
+          operations: [
+            {
+              key: 'file',
+              value: {
+                content: '',
+                path: `${folderPath}/.gitkeep`,
+                encoding: 'utf-8'
+              }
+            }
+          ]
+        };
+
+        const hfRes = await fetch(commitUrl, {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${HF_TOKEN}`,
-            'Content-Type': 'text/plain'
+            'Content-Type': 'application/json'
           },
-          body: ''
+          body: JSON.stringify(commitPayload)
         });
 
-        if (!hfRes.ok && hfRes.status !== 201 && hfRes.status !== 200) {
+        if (!hfRes.ok) {
           const errText = await hfRes.text();
           return new Response(JSON.stringify({ error: `Gagal membuat folder di HF: ${errText}` }), { status: hfRes.status });
         }
@@ -419,22 +454,47 @@ export default {
           return new Response(JSON.stringify({ error: 'Path lama dan baru wajib diisi.' }), { status: 400 });
         }
 
-        const commitUrl = `https://huggingface.co/api/datasets/${HF_REPO_ID}/commit/main`;
-        const commitPayload = {
-          summary: `Rename ${oldPath} to ${newPath} via HaruDrive`,
-          operations: [
-            { key: 'deleted', value: { path: oldPath } },
-            { key: 'copied', value: { src_path: oldPath, path: newPath } }
-          ]
-        };
+        // Fetch full tree to support renaming folders with subfiles
+        const treeRes = await fetch(`https://huggingface.co/api/datasets/${HF_REPO_ID}/tree/main?recursive=true`, {
+          headers: { 'Authorization': `Bearer ${HF_TOKEN}` }
+        });
+        const treeItems = treeRes.ok ? await treeRes.json() : [];
 
+        const operations = [];
+        let isDirectory = false;
+
+        treeItems.forEach(item => {
+          if (item.type === 'file') {
+            if (item.path === oldPath) {
+              operations.push({ key: 'deleted', value: { path: oldPath } });
+              operations.push({ key: 'copied', value: { src_path: oldPath, path: newPath } });
+            } else if (item.path.startsWith(oldPath + '/')) {
+              isDirectory = true;
+              const subPath = item.path.substring(oldPath.length + 1);
+              const targetItemPath = `${newPath}/${subPath}`;
+              operations.push({ key: 'deleted', value: { path: item.path } });
+              operations.push({ key: 'copied', value: { src_path: item.path, path: targetItemPath } });
+            }
+          }
+        });
+
+        // Fallback if not in recursive tree
+        if (operations.length === 0) {
+          operations.push({ key: 'deleted', value: { path: oldPath } });
+          operations.push({ key: 'copied', value: { src_path: oldPath, path: newPath } });
+        }
+
+        const commitUrl = `https://huggingface.co/api/datasets/${HF_REPO_ID}/commit/main`;
         const hfRes = await fetch(commitUrl, {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${HF_TOKEN}`,
             'Content-Type': 'application/json'
           },
-          body: JSON.stringify(commitPayload)
+          body: JSON.stringify({
+            summary: `Rename ${oldPath} to ${newPath} via HaruDrive`,
+            operations: operations
+          })
         });
 
         if (!hfRes.ok) {
@@ -445,10 +505,11 @@ export default {
         if (env.harudrive_db) {
           const newName = newPath.split('/').pop();
           const newShortId = await generateShortId(newPath);
-          await env.harudrive_db.prepare('DELETE FROM shortlinks WHERE file_path = ?').bind(oldPath).run();
+          await env.harudrive_db.prepare('DELETE FROM shortlinks WHERE file_path = ? OR file_path LIKE ?')
+            .bind(oldPath, `${oldPath}/%`).run();
           await env.harudrive_db.prepare(
             'INSERT OR REPLACE INTO shortlinks (short_id, file_path, name, type, size) VALUES (?, ?, ?, ?, ?)'
-          ).bind(newShortId, newPath, newName, 'file', 0).run();
+          ).bind(newShortId, newPath, newName, isDirectory ? 'folder' : 'file', 0).run();
         }
 
         return new Response(JSON.stringify({ success: true, oldPath, newPath }), {
@@ -460,7 +521,7 @@ export default {
     }
 
     // ==========================================================
-    // API: Admin File Manager (Move Files to Target Folder)
+    // API: Admin File Manager (Move Files / Folders)
     // ==========================================================
     if (url.pathname === '/api/admin/move' && request.method === 'POST') {
       try {
@@ -472,17 +533,47 @@ export default {
         const paths = body.paths || (body.path ? [body.path] : []);
         const targetFolder = (body.target_folder || '').replace(/^\/+|\/+$/g, '');
         if (!paths.length) {
-          return new Response(JSON.stringify({ error: 'Tidak ada file yang dipilih untuk dipindahkan.' }), { status: 400 });
+          return new Response(JSON.stringify({ error: 'Tidak ada file/folder yang dipilih.' }), { status: 400 });
         }
+
+        // Fetch repo tree to expand any directories
+        const treeRes = await fetch(`https://huggingface.co/api/datasets/${HF_REPO_ID}/tree/main?recursive=true`, {
+          headers: { 'Authorization': `Bearer ${HF_TOKEN}` }
+        });
+        const treeItems = treeRes.ok ? await treeRes.json() : [];
 
         const operations = [];
         for (const p of paths) {
           const cleanP = p.replace(/^\/+|\/+$/g, '');
           const filename = cleanP.split('/').pop();
-          const newPath = targetFolder ? `${targetFolder}/${filename}` : filename;
-          if (cleanP !== newPath) {
-            operations.push({ key: 'deleted', value: { path: cleanP } });
-            operations.push({ key: 'copied', value: { src_path: cleanP, path: newPath } });
+
+          let matchedFiles = 0;
+          treeItems.forEach(item => {
+            if (item.type === 'file') {
+              if (item.path === cleanP) {
+                matchedFiles++;
+                const newPath = targetFolder ? `${targetFolder}/${filename}` : filename;
+                if (cleanP !== newPath) {
+                  operations.push({ key: 'deleted', value: { path: cleanP } });
+                  operations.push({ key: 'copied', value: { src_path: cleanP, path: newPath } });
+                }
+              } else if (item.path.startsWith(cleanP + '/')) {
+                matchedFiles++;
+                const relPath = item.path.substring(cleanP.length + 1);
+                const newPath = targetFolder ? `${targetFolder}/${filename}/${relPath}` : `${filename}/${relPath}`;
+                operations.push({ key: 'deleted', value: { path: item.path } });
+                operations.push({ key: 'copied', value: { src_path: item.path, path: newPath } });
+              }
+            }
+          });
+
+          // Fallback if not found in tree
+          if (matchedFiles === 0) {
+            const newPath = targetFolder ? `${targetFolder}/${filename}` : filename;
+            if (cleanP !== newPath) {
+              operations.push({ key: 'deleted', value: { path: cleanP } });
+              operations.push({ key: 'copied', value: { src_path: cleanP, path: newPath } });
+            }
           }
         }
 
@@ -495,14 +586,14 @@ export default {
               'Content-Type': 'application/json'
             },
             body: JSON.stringify({
-              summary: `Move ${paths.length} file(s) to /${targetFolder} via HaruDrive`,
+              summary: `Move ${paths.length} item(s) to /${targetFolder} via HaruDrive`,
               operations: operations
             })
           });
 
           if (!hfRes.ok) {
             const errText = await hfRes.text();
-            return new Response(JSON.stringify({ error: `Gagal memindahkan file: ${errText}` }), { status: hfRes.status });
+            return new Response(JSON.stringify({ error: `Gagal memindahkan: ${errText}` }), { status: hfRes.status });
           }
 
           if (env.harudrive_db) {
@@ -511,7 +602,8 @@ export default {
               const filename = cleanP.split('/').pop();
               const newPath = targetFolder ? `${targetFolder}/${filename}` : filename;
               const newShortId = await generateShortId(newPath);
-              await env.harudrive_db.prepare('DELETE FROM shortlinks WHERE file_path = ?').bind(cleanP).run();
+              await env.harudrive_db.prepare('DELETE FROM shortlinks WHERE file_path = ? OR file_path LIKE ?')
+                .bind(cleanP, `${cleanP}/%`).run();
               await env.harudrive_db.prepare(
                 'INSERT OR REPLACE INTO shortlinks (short_id, file_path, name, type, size) VALUES (?, ?, ?, ?, ?)'
               ).bind(newShortId, newPath, filename, 'file', 0).run();
@@ -539,35 +631,64 @@ export default {
 
         const paths = body.paths || (body.path ? [body.path] : []);
         if (!paths.length) {
-          return new Response(JSON.stringify({ error: 'Tidak ada path yang dipilih untuk dihapus.' }), { status: 400 });
+          return new Response(JSON.stringify({ error: 'Tidak ada item yang dipilih untuk dihapus.' }), { status: 400 });
         }
 
-        let deletedCount = 0;
-        for (const filePath of paths) {
-          const cleanPath = filePath.replace(/^\/+|\/+$/g, '');
-          const hfDeleteUrl = `https://huggingface.co/api/datasets/${HF_REPO_ID}/raw/main/${encodeURI(cleanPath)}`;
-          try {
-            const hfRes = await fetch(hfDeleteUrl, {
-              method: 'DELETE',
-              headers: {
-                'Authorization': `Bearer ${HF_TOKEN}`,
-                'Content-Type': 'application/json'
-              },
-              body: JSON.stringify({ commit_message: `Delete ${cleanPath} via HaruDrive` })
-            });
-            if (hfRes.ok || hfRes.status === 200 || hfRes.status === 204) {
-              deletedCount++;
-              if (env.harudrive_db) {
-                await env.harudrive_db.prepare('DELETE FROM shortlinks WHERE file_path = ? OR file_path LIKE ?')
-                  .bind(cleanPath, `${cleanPath}/%`).run();
+        // Fetch repo tree to find all sub-files if a folder is deleted
+        const treeRes = await fetch(`https://huggingface.co/api/datasets/${HF_REPO_ID}/tree/main?recursive=true`, {
+          headers: { 'Authorization': `Bearer ${HF_TOKEN}` }
+        });
+        const treeItems = treeRes.ok ? await treeRes.json() : [];
+
+        const deleteOps = [];
+        for (const p of paths) {
+          const cleanP = p.replace(/^\/+|\/+$/g, '');
+          let matched = false;
+
+          treeItems.forEach(item => {
+            if (item.path === cleanP || item.path.startsWith(cleanP + '/')) {
+              matched = true;
+              if (item.type === 'file') {
+                deleteOps.push({ key: 'deleted', value: { path: item.path } });
               }
             }
-          } catch (e) {
-            console.error('Delete error for', cleanPath, e);
+          });
+
+          // Fallback single file delete
+          if (!matched) {
+            deleteOps.push({ key: 'deleted', value: { path: cleanP } });
           }
         }
 
-        return new Response(JSON.stringify({ success: true, deletedCount }), {
+        if (deleteOps.length > 0) {
+          const commitUrl = `https://huggingface.co/api/datasets/${HF_REPO_ID}/commit/main`;
+          const hfRes = await fetch(commitUrl, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${HF_TOKEN}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              summary: `Delete ${paths.length} item(s) via HaruDrive`,
+              operations: deleteOps
+            })
+          });
+
+          if (!hfRes.ok) {
+            const errText = await hfRes.text();
+            return new Response(JSON.stringify({ error: `Gagal menghapus di HF: ${errText}` }), { status: hfRes.status });
+          }
+        }
+
+        if (env.harudrive_db) {
+          for (const p of paths) {
+            const cleanP = p.replace(/^\/+|\/+$/g, '');
+            await env.harudrive_db.prepare('DELETE FROM shortlinks WHERE file_path = ? OR file_path LIKE ?')
+              .bind(cleanP, `${cleanP}/%`).run();
+          }
+        }
+
+        return new Response(JSON.stringify({ success: true, deletedCount: paths.length }), {
           headers: { 'Content-Type': 'application/json' }
         });
       } catch (err) {
@@ -703,7 +824,7 @@ function getMimeType(filename) {
 }
 
 // ==========================================================
-// HTML Page Generator with Cyber-Sakura Visuals
+// HTML Page Generator with Pure Clean Minimalist Aesthetics
 // ==========================================================
 function htmlPage(content, env, pageMode = 'public') {
   return `<!DOCTYPE html>
@@ -711,7 +832,6 @@ function htmlPage(content, env, pageMode = 'public') {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <!-- PURE CLEAN TITLE: HaruDrive -->
   <title>HaruDrive</title>
   
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22%23ec4899%22><path d=%22M12 2a4 4 0 0 0-3.5 6 4 4 0 0 0-6 3.5 4 4 0 0 0 3.5 6 4 4 0 0 0 6 3.5 4 4 0 0 0 6-3.5 4 4 0 0 0 3.5-6 4 4 0 0 0-3.5-6 4 4 0 0 0-6-3.5z%22/><circle cx=%2212%22 cy=%2212%22 r=%222.5%22 fill=%22%23ffffff%22/></svg>">
@@ -786,7 +906,7 @@ function htmlPage(content, env, pageMode = 'public') {
       stroke-linejoin: round;
       flex-shrink: 0;
     }
-    .icon-sm { width: 14px; height: 14px; }
+    .icon-sm { width: 15px; height: 15px; }
     .icon-lg { width: 22px; height: 22px; }
 
     .sakura-icon-svg {
@@ -1034,11 +1154,13 @@ function htmlPage(content, env, pageMode = 'public') {
     .crumb-sep { color: var(--text-dim); }
     .crumb-current { color: var(--text); font-weight: 700; }
     .toolbar-actions { display: flex; align-items: center; gap: 8px; }
+    
+    /* MODERN TOOLBAR ACTION BUTTONS (NO TEXT EMOJIS) */
     .btn-action-tool {
       display: inline-flex;
       align-items: center;
-      gap: 5px;
-      padding: 6px 14px;
+      gap: 7px;
+      padding: 7px 14px;
       border-radius: var(--radius-sm);
       border: 1px solid var(--border);
       background: var(--bg-card);
@@ -1051,6 +1173,7 @@ function htmlPage(content, env, pageMode = 'public') {
     .btn-action-tool:hover {
       border-color: var(--primary-light);
       background: rgba(99, 102, 241, 0.12);
+      transform: translateY(-1px);
     }
 
     .file-table-wrapper {
@@ -1097,7 +1220,6 @@ function htmlPage(content, env, pageMode = 'public') {
       min-width: 0;
     }
     
-    /* MODERN GRADIENT ICON BOXES */
     .file-icon-box {
       width: 32px;
       height: 32px;
@@ -1177,7 +1299,6 @@ function htmlPage(content, env, pageMode = 'public') {
     .btn-act.btn-delete { color: #ef4444; border-color: rgba(239, 68, 68, 0.25); }
     .btn-act.btn-delete:hover { background: #ef4444; color: white; }
 
-    /* FLAWLESS CENTERED BULK TOOLBAR (NO JUMPING) */
     .bulk-toolbar {
       position: fixed;
       bottom: 24px;
@@ -1329,7 +1450,6 @@ function htmlPage(content, env, pageMode = 'public') {
       box-shadow: 0 0 0 3px rgba(236, 72, 153, 0.2);
     }
 
-    /* CUSTOM PIN INPUT STYLING (AVOIDS CHROME PASSWORD SAVER) */
     .pin-input-stealth {
       -webkit-text-security: disc;
       -moz-text-security: disc;
@@ -1339,7 +1459,6 @@ function htmlPage(content, env, pageMode = 'public') {
       text-align: center;
     }
 
-    /* GOOGLE DRIVE STYLE INTERACTIVE FOLDER SELECTOR */
     .folder-tree-box {
       border: 1px solid var(--border);
       border-radius: 12px;
@@ -1492,8 +1611,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   window.addEventListener('popstate', handlePopState);
 
-  // Initial Load
-  const isUnlocked = localStorage.getItem('harudrive_admin_pin') === '290722';
+  const isUnlocked = (localStorage.getItem('harudrive_admin_pin') || getCookie('harudrive_admin_pin')) === '290722';
   if (!isPageAdmin || isUnlocked) {
     const pathName = window.location.pathname;
     if (pathName.startsWith('/folder/')) {
@@ -1529,7 +1647,6 @@ function initAdminConsole() {
 
 function unlockAdminConsole() {
   const pinInput = document.getElementById('gatePinInput');
-  const rememberCb = document.getElementById('gateRememberPin');
   const pin = (pinInput?.value || '').trim();
 
   if (pin === '290722') {
@@ -1541,7 +1658,7 @@ function unlockAdminConsole() {
     loadFolder(currentPath, currentFolderId);
     fetchFolderTree();
   } else {
-    alert('❌ PIN Admin Salah!');
+    alert('PIN Admin Salah!');
     pinInput?.focus();
     pinInput?.select();
   }
@@ -1552,7 +1669,7 @@ function lockAdminSession() {
   deleteCookie('harudrive_admin_pin');
   document.getElementById('adminLoginGate').style.display = 'flex';
   document.getElementById('adminMainContent').style.display = 'none';
-  alert('🔒 Console Admin telah dikunci.');
+  alert('Console Admin telah dikunci.');
 }
 
 // Navigation
@@ -1603,13 +1720,14 @@ function renderFolderPickerUI(containerId, inputId, selectedValue = '') {
 
   folders.forEach(f => {
     const isSelected = f === selectedValue;
-    const displayName = f ? \`📁 /\${f}\` : '🏠 Root (/)';
+    const displayName = f ? \`/\${f}\` : 'Root (/)';
     const indent = f ? (f.split('/').length - 1) * 16 : 0;
 
     html += \`
       <div class="folder-tree-item \${isSelected ? 'selected' : ''}" style="margin-left: \${indent}px;" onclick="selectFolderPickerItem('\${containerId}', '\${inputId}', '\${escapeJs(f)}')">
+        <svg class="icon icon-sm" style="color: #f59e0b;" viewBox="0 0 24 24"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>
         <span>\${escapeHtml(displayName)}</span>
-        \${isSelected ? '<span style="margin-left: auto; font-size: 0.8rem;">✓</span>' : ''}
+        \${isSelected ? '<span style="margin-left: auto; font-size: 0.8rem; color: #ec4899;">✓</span>' : ''}
       </div>
     \`;
   });
@@ -1861,14 +1979,14 @@ function closeUploadModal() {
 function handleFileSelected(files) {
   if (files && files.length > 0) {
     selectedUploadFile = files[0];
-    document.getElementById('selectedFileName').textContent = \`📄 \${selectedUploadFile.name} (\${formatBytes(selectedUploadFile.size)})\`;
+    document.getElementById('selectedFileName').textContent = \`\${selectedUploadFile.name} (\${formatBytes(selectedUploadFile.size)})\`;
     document.getElementById('selectedFileInfo').style.display = 'block';
   }
 }
 async function submitManualUpload() {
   if (!selectedUploadFile) return alert('Silakan pilih file terlebih dahulu!');
   const targetDir = (document.getElementById('uploadTargetDirInput').value || '').trim();
-  const pin = localStorage.getItem('harudrive_admin_pin') || '290722';
+  const pin = localStorage.getItem('harudrive_admin_pin') || getCookie('harudrive_admin_pin') || '290722';
 
   const progressBox = document.getElementById('uploadProgressBox');
   const progressBar = document.getElementById('uploadProgressBar');
@@ -1896,7 +2014,7 @@ async function submitManualUpload() {
       closeUploadModal();
       loadFolder(currentPath, currentFolderId);
       fetchFolderTree();
-      alert(\`✅ File berhasil diunggah ke /\${data.path}\`);
+      alert(\`File berhasil diunggah ke /\${data.path}\`);
     } else {
       alert('Gagal upload: ' + (data.error || 'Terjadi kesalahan'));
     }
@@ -1932,7 +2050,7 @@ async function submitRename() {
   const pathParts = oldPath.split('/');
   pathParts.pop();
   const newPath = pathParts.length ? \`\${pathParts.join('/')}/\${newName}\` : newName;
-  const pin = localStorage.getItem('harudrive_admin_pin') || '290722';
+  const pin = localStorage.getItem('harudrive_admin_pin') || getCookie('harudrive_admin_pin') || '290722';
 
   try {
     const res = await fetch('/api/admin/rename', {
@@ -1984,7 +2102,7 @@ function closeMoveModal() {
 }
 async function submitMove() {
   const destFolder = (document.getElementById('moveDestinationInput').value || '').trim();
-  const pin = localStorage.getItem('harudrive_admin_pin') || '290722';
+  const pin = localStorage.getItem('harudrive_admin_pin') || getCookie('harudrive_admin_pin') || '290722';
 
   try {
     const res = await fetch('/api/admin/move', {
@@ -1998,7 +2116,7 @@ async function submitMove() {
       clearBulkSelection();
       loadFolder(currentPath, currentFolderId);
       fetchFolderTree();
-      alert(\`✅ Berhasil memindahkan \${data.movedCount} item ke /\${destFolder}\`);
+      alert(\`Berhasil memindahkan \${data.movedCount} item ke /\${destFolder}\`);
     } else {
       alert('Gagal memindahkan: ' + (data.error || 'Terjadi kesalahan'));
     }
@@ -2024,7 +2142,7 @@ async function submitNewFolder() {
   const folderName = (nameInput?.value || '').trim();
   if (!folderName) return alert('Masukkan nama folder!');
 
-  const pin = localStorage.getItem('harudrive_admin_pin') || '290722';
+  const pin = localStorage.getItem('harudrive_admin_pin') || getCookie('harudrive_admin_pin') || '290722';
   const targetPath = currentPath ? \`\${currentPath}/\${folderName}\` : folderName;
 
   try {
@@ -2047,10 +2165,10 @@ async function submitNewFolder() {
   }
 }
 
-// Single Item Delete
+// Single Item Delete (Recursive support for folders)
 async function deleteSingleItem(itemPath) {
   if (!confirm(\`Yakin ingin menghapus permanent:\\n\${itemPath}?\`)) return;
-  const pin = localStorage.getItem('harudrive_admin_pin') || '290722';
+  const pin = localStorage.getItem('harudrive_admin_pin') || getCookie('harudrive_admin_pin') || '290722';
 
   try {
     const res = await fetch('/api/admin/delete', {
@@ -2107,7 +2225,7 @@ function clearBulkSelection() {
 
 async function bulkDeleteSelected() {
   if (!confirm(\`Hapus permanent \${selectedFiles.size} item yang dipilih?\`)) return;
-  const pin = localStorage.getItem('harudrive_admin_pin') || '290722';
+  const pin = localStorage.getItem('harudrive_admin_pin') || getCookie('harudrive_admin_pin') || '290722';
 
   try {
     const res = await fetch('/api/admin/delete', {
@@ -2157,7 +2275,7 @@ async function submitCloudMirror() {
   const gdriveUrl = (urlInput?.value || '').trim();
   if (!gdriveUrl) return alert('Masukkan URL Google Drive!');
 
-  const pin = localStorage.getItem('harudrive_admin_pin') || prompt('Masukkan PIN Admin:');
+  const pin = localStorage.getItem('harudrive_admin_pin') || getCookie('harudrive_admin_pin') || prompt('Masukkan PIN Admin:');
   if (!pin) return;
 
   const btn = document.getElementById('startMirrorBtn');
@@ -2172,7 +2290,7 @@ async function submitCloudMirror() {
     const data = await res.json();
     if (res.ok && data.success) {
       closeMirrorModal();
-      alert('🚀 Cloud Mirror Runner berhasil dijalankan di GitHub Actions!');
+      alert('Cloud Mirror Runner berhasil dijalankan di GitHub Actions!');
     } else {
       alert('Gagal: ' + (data.error || 'Akses Ditolak'));
     }
@@ -2198,7 +2316,7 @@ function updateThemeIcon(isLight) {
   }
 }
 
-// PREMIUM MODERN SVG ICONS
+// Modern SVG Icons
 function getModernSvgIcon(type) {
   if (type === 'folder') {
     return \`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>\`;
@@ -2480,7 +2598,6 @@ function adminConsoleUI() {
       <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 20px;">Masukkan PIN Admin untuk mengelola file, folder, dan Cloud Mirror:</p>
       
       <div style="display: flex; flex-direction: column; gap: 14px;">
-        <!-- STEALTH PIN INPUT: Uses text mode with webkit-text-security so password managers NEVER prompt 'save password' -->
         <input type="text" id="gatePinInput" inputmode="numeric" placeholder="••••••" maxlength="10" autocomplete="off" data-lpignore="true" data-1p-ignore="true" class="form-input-pro pin-input-stealth">
         <label style="display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 0.84rem; cursor: pointer;">
           <input type="checkbox" id="gateRememberPin" checked>
@@ -2504,17 +2621,17 @@ function adminConsoleUI() {
       <div class="toolbar-actions">
         <button class="btn-action-tool" style="background: rgba(99, 102, 241, 0.15); border-color: rgba(99, 102, 241, 0.4); color: var(--primary-light);" onclick="openUploadModal()">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-          <span>⬆ Upload File</span>
+          <span>Upload File</span>
         </button>
 
         <button class="btn-action-tool" style="background: rgba(16, 185, 129, 0.12); border-color: rgba(16, 185, 129, 0.35); color: #10b981;" onclick="openNewFolderModal()">
-          <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>
-          <span>+ Folder Baru</span>
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/><line x1="12" y1="10" x2="12" y2="16"/><line x1="9" y1="13" x2="15" y2="13"/></svg>
+          <span>Folder Baru</span>
         </button>
 
         <button class="btn-action-tool" style="background: rgba(236, 72, 153, 0.12); border-color: rgba(236, 72, 153, 0.35); color: #ec4899;" onclick="openMirrorModal()">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/><polyline points="12 13 12 7 9 10"/><polyline points="12 7 15 10"/></svg>
-          <span>⚡ Cloud Mirror</span>
+          <span>Cloud Mirror</span>
         </button>
 
         <button class="btn-action-tool" onclick="loadFolder(currentPath, currentFolderId)">
@@ -2559,11 +2676,11 @@ function adminConsoleUI() {
     <button class="btn-bulk" onclick="clearBulkSelection()">Batal</button>
   </div>
 
-  <!-- MANUAL UPLOAD MODAL (WITH INTERACTIVE FOLDER SELECTOR) -->
+  <!-- MANUAL UPLOAD MODAL -->
   <div id="uploadModal" class="modal-backdrop" style="display: none;">
     <div class="modal-card">
       <div class="modal-header">
-        <span class="modal-title">⬆ Upload File ke HaruDrive</span>
+        <span class="modal-title">Upload File ke HaruDrive</span>
         <button class="btn-close-circle" onclick="closeUploadModal()">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
@@ -2571,7 +2688,7 @@ function adminConsoleUI() {
       <div class="modal-body">
         <div class="dropzone-box" onclick="document.getElementById('manualFileInput').click()">
           <svg class="icon icon-lg" style="margin: 0 auto 8px; color: var(--accent);" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-          <p style="font-size: 0.9rem; font-weight: 700; color: var(--text);">Klik di sini untuk memilih file dari PC / HP</p>
+          <p style="font-size: 0.9rem; font-weight: 700; color: var(--text);">Pilih File dari Komputer / HP</p>
           <p style="font-size: 0.78rem; color: var(--text-muted); margin-top: 4px;">Atau drag and drop file langsung ke sini</p>
           <input type="file" id="manualFileInput" style="display: none;" onchange="handleFileSelected(this.files)">
         </div>
@@ -2585,7 +2702,7 @@ function adminConsoleUI() {
         <input type="hidden" id="uploadTargetDirInput">
         
         <div id="uploadProgressBox" style="display: none;">
-          <div style="font-size: 0.82rem; color: var(--primary-light); margin-bottom: 4px;" id="uploadStatusText">Mengupload ke Hugging Face...</div>
+          <div style="font-size: 0.82rem; color: var(--primary-light); margin-bottom: 4px;" id="uploadStatusText">Mengupload ke Storage...</div>
           <div style="width: 100%; height: 6px; background: rgba(255,255,255,0.1); border-radius: 4px; overflow: hidden;">
             <div id="uploadProgressBar" style="width: 30%; height: 100%; background: var(--accent-gradient); border-radius: 4px; transition: width 0.3s;"></div>
           </div>
@@ -2602,7 +2719,7 @@ function adminConsoleUI() {
   <div id="renameModal" class="modal-backdrop" style="display: none;">
     <div class="modal-card">
       <div class="modal-header">
-        <span class="modal-title">✏️ Ubah Nama (Rename)</span>
+        <span class="modal-title">Ubah Nama</span>
         <button class="btn-close-circle" onclick="closeRenameModal()">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
@@ -2619,11 +2736,11 @@ function adminConsoleUI() {
     </div>
   </div>
 
-  <!-- MOVE MODAL (WITH INTERACTIVE GDRIVE-STYLE FOLDER SELECTOR) -->
+  <!-- MOVE MODAL -->
   <div id="moveModal" class="modal-backdrop" style="display: none;">
     <div class="modal-card">
       <div class="modal-header">
-        <span class="modal-title">📦 Pindahkan File (Move)</span>
+        <span class="modal-title">Pindahkan File</span>
         <button class="btn-close-circle" onclick="closeMoveModal()">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
@@ -2645,7 +2762,7 @@ function adminConsoleUI() {
   <div id="newFolderModal" class="modal-backdrop" style="display: none;">
     <div class="modal-card">
       <div class="modal-header">
-        <span class="modal-title">📁 Buat Folder Baru</span>
+        <span class="modal-title">Buat Folder Baru</span>
         <button class="btn-close-circle" onclick="closeNewFolderModal()">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
@@ -2661,11 +2778,11 @@ function adminConsoleUI() {
     </div>
   </div>
 
-  <!-- CLOUD MIRROR MODAL (WITH INTERACTIVE FOLDER SELECTOR) -->
+  <!-- CLOUD MIRROR MODAL -->
   <div id="mirrorModal" class="modal-backdrop" style="display: none;">
     <div class="modal-card">
       <div class="modal-header">
-        <span class="modal-title">⚡ Cloud Mirror Runner</span>
+        <span class="modal-title">Cloud Mirror Runner</span>
         <button class="btn-close-circle" onclick="closeMirrorModal()">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
