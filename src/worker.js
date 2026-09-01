@@ -358,7 +358,7 @@ export default {
       }
     }
 
-    // API: Mkdir
+    // API: Mkdir (NDJSON Protocol)
     if (url.pathname === '/api/admin/mkdir' && request.method === 'POST') {
       try {
         const body = await request.json();
@@ -372,16 +372,21 @@ export default {
         }
 
         const commitUrl = `https://huggingface.co/api/datasets/${HF_REPO_ID}/commit/main`;
+        const lines = [
+          JSON.stringify({ key: 'header', value: { summary: `Create folder ${folderPath} via HaruDrive`, description: '' } }),
+          JSON.stringify({ key: 'file', value: { content: '', path: `${folderPath}/.gitkeep`, encoding: 'utf-8' } })
+        ];
+        const ndjsonBody = lines.join('
+') + '
+';
+
         const hfRes = await fetch(commitUrl, {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${HF_TOKEN}`,
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/x-ndjson'
           },
-          body: JSON.stringify({
-            summary: `Create folder ${folderPath} via HaruDrive`,
-            operations: [{ key: 'file', value: { content: '', path: `${folderPath}/.gitkeep`, encoding: 'utf-8' } }]
-          })
+          body: ndjsonBody
         });
 
         if (!hfRes.ok) {
@@ -392,9 +397,11 @@ export default {
         const shortId = await generateShortId(folderPath);
         if (env.harudrive_db) {
           const folderName = folderPath.split('/').pop();
-          await env.harudrive_db.prepare(
-            'INSERT OR REPLACE INTO shortlinks (short_id, file_path, name, type, size) VALUES (?, ?, ?, ?, ?)'
-          ).bind(shortId, folderPath, folderName, 'folder', 0).run();
+          try {
+            await env.harudrive_db.prepare(
+              'INSERT OR REPLACE INTO shortlinks (short_id, file_path, name, type, size) VALUES (?, ?, ?, ?, ?)'
+            ).bind(shortId, folderPath, folderName, 'folder', 0).run();
+          } catch (e) {}
         }
 
         return new Response(JSON.stringify({ success: true, folderId: shortId, folderPath }), {
@@ -584,7 +591,7 @@ export default {
       }
     }
 
-    // API: Delete (Guaranteed Full Deletion of Files & Folders)
+    // API: Delete (Guaranteed Full Deletion of Files & Folders via NDJSON Protocol)
     if (url.pathname === '/api/admin/delete' && request.method === 'POST') {
       try {
         const body = await request.json();
@@ -597,82 +604,60 @@ export default {
           return new Response(JSON.stringify({ error: 'Tidak ada item yang dipilih untuk dihapus.' }), { status: 400 });
         }
 
-        // Fetch repo tree from root
+        // Fetch repo tree to identify directory vs file
         const treeRes = await fetch(`https://huggingface.co/api/datasets/${HF_REPO_ID}/tree/main?recursive=true`, {
           headers: { 'Authorization': `Bearer ${HF_TOKEN}` }
         });
         const treeItems = treeRes.ok ? await treeRes.json() : [];
 
-        const deleteOps = [];
-        const addedPaths = new Set();
+        const lines = [
+          JSON.stringify({ key: 'header', value: { summary: `Delete ${paths.length} item(s) via HaruDrive`, description: '' } })
+        ];
 
+        const deletedSet = new Set();
         for (const p of paths) {
           const cleanP = p.replace(/^\/+|\/+$/g, '');
-          let matched = 0;
+          if (!cleanP) continue;
 
-          treeItems.forEach(item => {
-            if (item.path === cleanP || item.path.startsWith(cleanP + '/')) {
-              if (item.type === 'file' && !addedPaths.has(item.path)) {
-                matched++;
-                addedPaths.add(item.path);
-                deleteOps.push({ key: 'deleted', value: { path: item.path } });
-              }
+          // Check if it's a directory in treeItems
+          const isDirInTree = treeItems.some(it => it.path === cleanP && it.type === 'directory');
+          const hasChildrenInTree = treeItems.some(it => it.path.startsWith(cleanP + '/'));
+          const isDir = isDirInTree || hasChildrenInTree;
+
+          if (isDir) {
+            if (!deletedSet.has('dir:' + cleanP)) {
+              deletedSet.add('dir:' + cleanP);
+              lines.push(JSON.stringify({ key: 'deletedFolder', value: { path: cleanP } }));
             }
-          });
-
-          // Also check specific folder tree if root didn't find files
-          if (matched === 0) {
-            try {
-              const subTreeRes = await fetch(`https://huggingface.co/api/datasets/${HF_REPO_ID}/tree/main/${encodeURI(cleanP)}?recursive=true`, {
-                headers: { 'Authorization': `Bearer ${HF_TOKEN}` }
-              });
-              if (subTreeRes.ok) {
-                const subItems = await subTreeRes.json();
-                subItems.forEach(sItem => {
-                  if (sItem.type === 'file' && !addedPaths.has(sItem.path)) {
-                    matched++;
-                    addedPaths.add(sItem.path);
-                    deleteOps.push({ key: 'deleted', value: { path: sItem.path } });
-                  }
-                });
-              }
-            } catch (e) {}
-          }
-
-          // Fallback: Delete path and .gitkeep directly
-          if (matched === 0) {
-            if (!addedPaths.has(cleanP)) {
-              addedPaths.add(cleanP);
-              deleteOps.push({ key: 'deleted', value: { path: cleanP } });
-            }
-            const keepPath = `${cleanP}/.gitkeep`;
-            if (!addedPaths.has(keepPath)) {
-              addedPaths.add(keepPath);
-              deleteOps.push({ key: 'deleted', value: { path: keepPath } });
+          } else {
+            if (!deletedSet.has('file:' + cleanP)) {
+              deletedSet.add('file:' + cleanP);
+              lines.push(JSON.stringify({ key: 'deletedFile', value: { path: cleanP } }));
             }
           }
         }
 
-        if (deleteOps.length > 0) {
-          const commitUrl = `https://huggingface.co/api/datasets/${HF_REPO_ID}/commit/main`;
-          const hfRes = await fetch(commitUrl, {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${HF_TOKEN}`,
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-              summary: `Delete ${paths.length} item(s) via HaruDrive`,
-              operations: deleteOps
-            })
-          });
+        const commitUrl = `https://huggingface.co/api/datasets/${HF_REPO_ID}/commit/main`;
+        const ndjsonBody = lines.join('
+') + '
+';
 
-          if (!hfRes.ok) {
-            const errText = await hfRes.text();
-            console.error('HF Commit delete err:', errText);
-          }
+        const hfRes = await fetch(commitUrl, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${HF_TOKEN}`,
+            'Content-Type': 'application/x-ndjson'
+          },
+          body: ndjsonBody
+        });
+
+        if (!hfRes.ok) {
+          const errText = await hfRes.text();
+          console.error('HF Commit delete error:', errText);
+          return new Response(JSON.stringify({ error: `Gagal commit delete ke HF: ${errText}` }), { status: hfRes.status });
         }
 
+        // Clean D1 database
         if (env.harudrive_db) {
           for (const p of paths) {
             const cleanP = p.replace(/^\/+|\/+$/g, '');
