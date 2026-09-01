@@ -785,7 +785,7 @@ function htmlPage(content, env, pageMode = 'public') {
       --accent-gradient: linear-gradient(135deg, #ec4899 0%, #a855f7 50%, #6366f1 100%);
       --bg: #090d16;
       --bg-surface: rgba(17, 24, 39, 0.82);
-      --bg-card: rgba(22, 30, 49, 0.90);
+      --bg-card: rgba(22, 30, 49, 0.92);
       --border: rgba(255, 255, 255, 0.08);
       --border-focus: rgba(236, 72, 153, 0.5);
       --text: #f8fafc;
@@ -798,7 +798,7 @@ function htmlPage(content, env, pageMode = 'public') {
     }
 
     body.light {
-      --bg: #f8fafc;
+      --bg: #f4f6fb;
       --bg-surface: rgba(255, 255, 255, 0.94);
       --bg-card: #ffffff;
       --border: #e2e8f0;
@@ -806,7 +806,7 @@ function htmlPage(content, env, pageMode = 'public') {
       --text: #0f172a;
       --text-muted: #475569;
       --text-dim: #64748b;
-      --hover-row: rgba(99, 102, 241, 0.05);
+      --hover-row: rgba(99, 102, 241, 0.06);
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -1062,7 +1062,7 @@ function htmlPage(content, env, pageMode = 'public') {
       flex: 1;
     }
 
-    /* BREADCRUMB & ACTION BAR SYSTEM */
+    /* BREADCRUMB & TOP TOOLBAR */
     .breadcrumb-bar {
       padding: 10px 16px;
       border-radius: var(--radius);
@@ -1245,39 +1245,60 @@ function htmlPage(content, env, pageMode = 'public') {
     .btn-act.btn-delete { color: #ef4444; border-color: rgba(239, 68, 68, 0.25); }
     .btn-act.btn-delete:hover { background: #ef4444; color: white; }
 
+    /* ==========================================================
+       FLOATING BULK TOOLBAR (Perfect Mobile Adaptive & No Overflow)
+       ========================================================== */
     .bulk-toolbar {
       position: fixed;
-      bottom: 24px;
+      bottom: 20px;
       left: 50%;
       transform: translateX(-50%);
       display: flex;
       align-items: center;
-      gap: 10px;
-      padding: 10px 22px;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 8px 16px;
       border-radius: 30px;
-      box-shadow: 0 12px 40px rgba(0,0,0,0.6);
-      z-index: 90;
+      box-shadow: 0 14px 45px rgba(0, 0, 0, 0.65);
+      z-index: 1000;
       background: var(--bg-card);
-      border: 1px solid rgba(236, 72, 153, 0.3);
+      border: 1px solid rgba(236, 72, 153, 0.4);
+      max-width: 95vw;
+      width: auto;
       animation: toolbarSlideUp 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
     }
     @keyframes toolbarSlideUp {
       0% { opacity: 0; transform: translate(-50%, 25px); }
       100% { opacity: 1; transform: translate(-50%, 0); }
     }
+    
+    .bulk-count-badge {
+      font-size: 0.82rem;
+      font-weight: 700;
+      color: var(--text);
+      white-space: nowrap;
+      padding-right: 4px;
+    }
+
     .btn-bulk {
       display: inline-flex;
       align-items: center;
-      gap: 6px;
-      padding: 6px 14px;
+      gap: 5px;
+      padding: 6px 12px;
       border-radius: 20px;
       border: 1px solid var(--border);
       font-weight: 600;
-      font-size: 0.84rem;
+      font-size: 0.8rem;
       cursor: pointer;
       background: var(--bg-surface);
       color: var(--text);
+      white-space: nowrap;
       transition: all 0.2s;
+      flex-shrink: 0;
+    }
+    .btn-bulk:hover {
+      border-color: var(--primary-light);
+      background: rgba(99, 102, 241, 0.15);
     }
     .btn-bulk.danger {
       background: rgba(239, 68, 68, 0.15);
@@ -1286,7 +1307,27 @@ function htmlPage(content, env, pageMode = 'public') {
     }
     .btn-bulk.danger:hover { background: #ef4444; color: white; }
 
-    /* MODAL SYSTEM (MOBILE ADAPTIVE) */
+    .btn-bulk-close {
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text-muted);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      transition: all 0.2s;
+    }
+    .btn-bulk-close:hover {
+      background: rgba(239, 68, 68, 0.2);
+      color: #ef4444;
+      border-color: rgba(239, 68, 68, 0.4);
+    }
+
+    /* MODALS */
     .modal-backdrop {
       position: fixed;
       inset: 0;
@@ -1490,7 +1531,6 @@ function htmlPage(content, env, pageMode = 'public') {
       .filter-strip { padding: 6px 12px; }
       .container { padding: 0 10px; margin: 10px auto; }
       
-      /* Breadcrumb on top, actions row clean underneath */
       .breadcrumb-bar {
         flex-direction: column;
         align-items: stretch;
@@ -1498,19 +1538,17 @@ function htmlPage(content, env, pageMode = 'public') {
         padding: 12px 14px;
       }
       .toolbar-actions {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
         width: 100%;
-        display: flex;
-        gap: 6px;
-        overflow-x: auto;
-        padding-bottom: 2px;
       }
       .btn-action-tool {
-        flex: 1;
         padding: 8px 10px;
         font-size: 0.78rem;
+        width: 100%;
       }
 
-      /* Responsive File Table */
       .col-date, .file-date-cell { display: none; }
       .col-size, .file-size-cell { display: none; }
       
@@ -1518,7 +1556,6 @@ function htmlPage(content, env, pageMode = 'public') {
       .file-row { padding: 10px 12px; }
       .col-cb { width: 28px; }
       
-      /* Action column minimal size */
       .col-actions { width: 75px; }
       .file-actions-cell { width: 75px; gap: 4px; }
       body[data-mode="admin"] .col-actions { width: 105px; }
@@ -1527,9 +1564,21 @@ function htmlPage(content, env, pageMode = 'public') {
       .btn-act { width: 28px; height: 28px; }
       .file-title { font-size: 0.84rem; }
 
-      .bulk-toolbar { width: calc(100% - 24px); padding: 8px 14px; border-radius: 16px; }
+      /* Mobile Bulk Toolbar: Perfectly Compact & Fitted */
+      .bulk-toolbar {
+        width: calc(100% - 20px);
+        padding: 7px 10px;
+        gap: 5px;
+        bottom: 14px;
+      }
+      .bulk-count-badge { font-size: 0.76rem; }
+      .btn-bulk {
+        padding: 5px 8px;
+        font-size: 0.74rem;
+        gap: 3px;
+      }
+      .btn-bulk svg { width: 13px; height: 13px; }
       
-      /* Responsive modal centered nicely */
       .modal-backdrop { padding: 12px; align-items: center; }
       .modal-card { max-width: 100%; border-radius: 18px; }
     }
@@ -1758,7 +1807,7 @@ async function loadFolder(path = '', id = '') {
   }
 }
 
-// Render File Table (NO REDUNDANT PLAY BUTTON - DIRECT ROW CLICK TO PLAY!)
+// Render File Table
 function renderFileList() {
   const container = document.getElementById('fileListContainer');
   if (!container) return;
@@ -1789,7 +1838,6 @@ function renderFileList() {
 
     const downloadShortLink = \`/d/\${file.id}\`;
 
-    // Direct Click Behavior
     const clickAction = isDir 
       ? (isPageAdmin ? \`navigateToAdmin('\${escapeJs(file.path)}')\` : \`navigateTo('\${escapeJs(file.path)}', '\${file.id}')\`)
       : (isVideo ? \`playVideo('\${file.id}', '\${escapeJs(file.name)}')\` : \`downloadFile('\${file.id}')\`);
@@ -2490,14 +2538,16 @@ function publicUI() {
     </div>
   </main>
 
-  <!-- FLOATING BULK TOOLBAR -->
+  <!-- FLOATING BULK TOOLBAR (PUBLIC) -->
   <div id="bulkToolbar" class="bulk-toolbar" style="display: none;">
-    <span id="bulkCount" style="font-size: 0.85rem; font-weight: 700;">0 Dipilih</span>
+    <span id="bulkCount" class="bulk-count-badge">0 Dipilih</span>
     <button class="btn-bulk" onclick="bulkCopyLinks()">
       <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
       <span>Salin Link</span>
     </button>
-    <button class="btn-bulk" onclick="clearBulkSelection()">Batal</button>
+    <button class="btn-bulk-close" onclick="clearBulkSelection()" title="Batal Pilih">
+      <svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    </button>
   </div>
 
   <!-- THEATER PLYR VIDEO MODAL -->
@@ -2529,7 +2579,7 @@ function adminConsoleUI() {
       <div class="nav-left">
         <a href="javascript:void(0)" class="brand-logo" onclick="navigateToAdmin('')">
           <div class="logo-glow-wrap">
-            <svg class="sakura-icon-svg" viewBox="0 0 24 24"><path d="M12 2a4 4 0 0 0-3.5 6 4 4 0 0 0-6 3.5 4 4 0 0 0 3.5 6 4 4 0 0 0 6 3.5 4 4 0 0 0 6-3.5 4 4 0 0 0 3.5-6 4 4 0 0 0-3.5-6 4 4 0 0 0-6-3.5z"/><circle cx="12" cy="12" r="2.5" fill="#ffffff"/></svg>
+            <svg class="sakura-icon-svg" viewBox="0 0 24 24"><path d="M12 2a4 4 0 0 0-3.5 6 4 4 0 0 0-6 3.5 4 4 0 0 0 3.5 6 4 4 0 0 0 6 3.5 4 4 0 0 0 3.5-6 4 4 0 0 0-3.5-6 4 4 0 0 0-6-3.5z"/><circle cx="12" cy="12" r="2.5" fill="#ffffff"/></svg>
           </div>
           <div class="brand-info">
             <span class="brand-title">HaruDrive</span>
@@ -2600,6 +2650,7 @@ function adminConsoleUI() {
 
         <button class="btn-action-tool" onclick="loadFolder(currentPath, currentFolderId)" title="Refresh">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+          <span>Refresh</span>
         </button>
       </div>
     </div>
@@ -2622,9 +2673,9 @@ function adminConsoleUI() {
     </div>
   </div>
 
-  <!-- BULK TOOLBAR -->
+  <!-- FLOATING BULK TOOLBAR (ADMIN) -->
   <div id="bulkToolbar" class="bulk-toolbar" style="display: none;">
-    <span id="bulkCount" style="font-size: 0.85rem; font-weight: 700;">0 Dipilih</span>
+    <span id="bulkCount" class="bulk-count-badge">0 Dipilih</span>
     <button class="btn-bulk" style="color: var(--primary-light);" onclick="openBulkMoveModal()">
       <svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/><path d="M3 12h12"/></svg>
       <span>Pindahkan</span>
@@ -2637,7 +2688,9 @@ function adminConsoleUI() {
       <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
       <span>Salin Link</span>
     </button>
-    <button class="btn-bulk" onclick="clearBulkSelection()">Batal</button>
+    <button class="btn-bulk-close" onclick="clearBulkSelection()" title="Batal Pilih">
+      <svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    </button>
   </div>
 
   <!-- UPLOAD MODAL -->
