@@ -1,0 +1,20 @@
+name = "haru-drive"
+main = "src/worker.js"
+compatibility_date = "2024-07-30"
+workers_dev = true
+
+# Uncomment and set your custom domain if needed:
+# routes = [
+#   { pattern = "drive.yourdomain.com/*", zone_name = "yourdomain.com" }
+# ]
+
+# Environment Variables (Set secrets via `npx wrangler secret put KEY` or Cloudflare Dashboard)
+[vars]
+# HF_REPO_ID = "username/your-hf-dataset"
+# GITHUB_REPO = "IlhamRomadon297/haru-drive"
+
+# Cloudflare D1 Database Binding (Optional for shortlinks & fast cache)
+# [[d1_databases]]
+# binding = "harudrive_db"
+# database_name = "harudrive-db"
+# database_id = "your-d1-database-id"

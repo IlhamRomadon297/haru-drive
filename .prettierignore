@@ -1,0 +1,7 @@
+# Editor integration
+.editorconfig
+.prettierrc
+.eslintrc.json
+
+# Config examples (not actual secrets)
+.env.example
