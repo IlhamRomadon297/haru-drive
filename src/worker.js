@@ -58,7 +58,7 @@ export default {
       });
     }
 
-    // API: Available Folders
+    // API: Available Folders (100% Live Hugging Face Tree)
     if (url.pathname === '/api/folders') {
       try {
         const repoId = HF_REPO_ID;
@@ -78,16 +78,9 @@ export default {
           });
         }
 
-        if (env.harudrive_db) {
-          const { results } = await env.harudrive_db.prepare("SELECT file_path FROM shortlinks WHERE type = 'folder'").all();
-          (results || []).forEach(r => {
-            if (r.file_path) folderSet.add(r.file_path);
-          });
-        }
-
         const sortedFolders = Array.from(folderSet).sort((a, b) => a.localeCompare(b));
         return new Response(JSON.stringify({ folders: sortedFolders }), {
-          headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+          headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' }
         });
       } catch (err) {
         return new Response(JSON.stringify({ folders: [''] }), {
@@ -1987,10 +1980,11 @@ function downloadFile(shortId) {
 }
 
 // Manual Upload Modal (Admin)
-function openUploadModal() {
+async function openUploadModal() {
   const m = document.getElementById('uploadModal');
   if (!m) return;
 
+  await fetchFolderTree();
   renderFolderPickerUI('uploadFolderPicker', 'uploadTargetDirInput', currentPath);
   selectedUploadFile = null;
   document.getElementById('selectedFileInfo').style.display = 'none';
@@ -2283,9 +2277,10 @@ function bulkCopyLinks() {
 }
 
 // Cloud Mirror Modal
-function openMirrorModal() {
+async function openMirrorModal() {
   const m = document.getElementById('mirrorModal');
   if (m) {
+    await fetchFolderTree();
     renderFolderPickerUI('mirrorFolderPicker', 'mirrorTargetPath', currentPath);
     m.style.display = 'flex';
   }
