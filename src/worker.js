@@ -2,7 +2,7 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
-    // Reliable Environment Secrets with In-Code Defaults
+    // Reliable Environment Secrets
     const HF_REPO_ID = env.HF_REPO_ID || 'harumidesu/harudrive-data';
     const HF_TOKEN = env.HF_TOKEN || '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';
     const APP_PASSWORD = env.APP_PASSWORD || 'HaruDrive_Desu';
@@ -61,6 +61,47 @@ export default {
           'Set-Cookie': 'harudrive_auth=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT'
         }
       });
+    }
+
+    // ==========================================================
+    // API: Get All Available Folders (For GDrive-style Folder Picker)
+    // ==========================================================
+    if (url.pathname === '/api/folders') {
+      try {
+        const repoId = HF_REPO_ID;
+        const hfTreeUrl = `https://huggingface.co/api/datasets/${repoId}/tree/main?recursive=true`;
+        const hfHeaders = { 'User-Agent': 'HaruDrive/1.0' };
+        if (HF_TOKEN) hfHeaders['Authorization'] = `Bearer ${HF_TOKEN}`;
+
+        const hfRes = await fetch(hfTreeUrl, { headers: hfHeaders });
+        const folderSet = new Set(['']); // root
+
+        if (hfRes.ok) {
+          const items = await hfRes.json();
+          items.forEach(item => {
+            if (item.type === 'directory' && !item.path.startsWith('.')) {
+              folderSet.add(item.path);
+            }
+          });
+        }
+
+        // Also query from D1
+        if (env.harudrive_db) {
+          const { results } = await env.harudrive_db.prepare("SELECT file_path FROM shortlinks WHERE type = 'folder'").all();
+          (results || []).forEach(r => {
+            if (r.file_path) folderSet.add(r.file_path);
+          });
+        }
+
+        const sortedFolders = Array.from(folderSet).sort((a, b) => a.localeCompare(b));
+        return new Response(JSON.stringify({ folders: sortedFolders }), {
+          headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+        });
+      } catch (err) {
+        return new Response(JSON.stringify({ folders: [''] }), {
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
     }
 
     // ==========================================================
@@ -179,7 +220,7 @@ export default {
           return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
         });
 
-        // Batch save to D1 for shortlink resolution
+        // Batch save to D1
         if (env.harudrive_db && formattedFiles.length > 0) {
           try {
             const stmt = env.harudrive_db.prepare(
@@ -271,7 +312,7 @@ export default {
         const body = await request.json();
         const pin = body.admin_pin || '';
         if (pin !== ADMIN_PIN) {
-          return new Response(JSON.stringify({ error: 'PIN Admin Salah! Akses ditolak.' }), { status: 403 });
+          return new Response(JSON.stringify({ error: 'PIN Admin Salah!' }), { status: 403 });
         }
 
         const gdriveUrl = (body.gdrive_url || '').trim();
@@ -670,7 +711,8 @@ function htmlPage(content, env, pageMode = 'public') {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>${pageMode === 'admin' ? 'HaruDrive Admin Console' : 'HaruDrive - High-Speed Cloud Index'}</title>
+  <!-- PURE CLEAN TITLE: HaruDrive -->
+  <title>HaruDrive</title>
   
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22%23ec4899%22><path d=%22M12 2a4 4 0 0 0-3.5 6 4 4 0 0 0-6 3.5 4 4 0 0 0 3.5 6 4 4 0 0 0 6 3.5 4 4 0 0 0 6-3.5 4 4 0 0 0 3.5-6 4 4 0 0 0-3.5-6 4 4 0 0 0-6-3.5z%22/><circle cx=%2212%22 cy=%2212%22 r=%222.5%22 fill=%22%23ffffff%22/></svg>">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -790,6 +832,7 @@ function htmlPage(content, env, pageMode = 'public') {
       gap: 10px;
       text-decoration: none;
       user-select: none;
+      cursor: pointer;
     }
     .logo-glow-wrap {
       width: 38px;
@@ -1053,6 +1096,8 @@ function htmlPage(content, env, pageMode = 'public') {
       cursor: pointer;
       min-width: 0;
     }
+    
+    /* MODERN GRADIENT ICON BOXES */
     .file-icon-box {
       width: 32px;
       height: 32px;
@@ -1061,12 +1106,23 @@ function htmlPage(content, env, pageMode = 'public') {
       align-items: center;
       justify-content: center;
       flex-shrink: 0;
-      background: rgba(99, 102, 241, 0.1);
-      color: var(--primary-light);
     }
-    .file-icon-box.folder { background: rgba(245, 158, 11, 0.12); color: #f59e0b; }
-    .file-icon-box.video { background: rgba(236, 72, 153, 0.12); color: #ec4899; }
-    .file-icon-box.archive { background: rgba(168, 85, 247, 0.12); color: #a855f7; }
+    .file-icon-box.folder {
+      background: rgba(245, 158, 11, 0.15);
+      border: 1px solid rgba(245, 158, 11, 0.3);
+    }
+    .file-icon-box.video {
+      background: rgba(236, 72, 153, 0.15);
+      border: 1px solid rgba(236, 72, 153, 0.3);
+    }
+    .file-icon-box.archive {
+      background: rgba(168, 85, 247, 0.15);
+      border: 1px solid rgba(168, 85, 247, 0.3);
+    }
+    .file-icon-box.file {
+      background: rgba(99, 102, 241, 0.15);
+      border: 1px solid rgba(99, 102, 241, 0.3);
+    }
 
     .file-title {
       font-size: 0.9rem;
@@ -1076,7 +1132,7 @@ function htmlPage(content, env, pageMode = 'public') {
       overflow: hidden;
       text-overflow: ellipsis;
     }
-    .file-row.is-folder .file-title { color: var(--primary-light); }
+    .file-row.is-folder .file-title { color: #f59e0b; }
 
     .file-size-cell, .file-date-cell {
       font-size: 0.8rem;
@@ -1121,6 +1177,7 @@ function htmlPage(content, env, pageMode = 'public') {
     .btn-act.btn-delete { color: #ef4444; border-color: rgba(239, 68, 68, 0.25); }
     .btn-act.btn-delete:hover { background: #ef4444; color: white; }
 
+    /* FLAWLESS CENTERED BULK TOOLBAR (NO JUMPING) */
     .bulk-toolbar {
       position: fixed;
       bottom: 24px;
@@ -1129,13 +1186,17 @@ function htmlPage(content, env, pageMode = 'public') {
       display: flex;
       align-items: center;
       gap: 10px;
-      padding: 10px 20px;
+      padding: 10px 22px;
       border-radius: 30px;
-      box-shadow: 0 10px 35px rgba(0,0,0,0.5);
+      box-shadow: 0 12px 40px rgba(0,0,0,0.6);
       z-index: 90;
       background: var(--bg-card);
-      border: 1px solid var(--border);
-      animation: modalPop 0.25s ease-out;
+      border: 1px solid rgba(236, 72, 153, 0.3);
+      animation: toolbarSlideUp 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    }
+    @keyframes toolbarSlideUp {
+      0% { opacity: 0; transform: translate(-50%, 25px); }
+      100% { opacity: 1; transform: translate(-50%, 0); }
     }
     .btn-bulk {
       display: inline-flex;
@@ -1172,16 +1233,16 @@ function htmlPage(content, env, pageMode = 'public') {
     }
     .modal-card {
       width: 100%;
-      max-width: 500px;
+      max-width: 520px;
       border-radius: 20px;
       background: var(--bg-card);
       border: 1px solid var(--border);
       box-shadow: 0 25px 60px rgba(0, 0, 0, 0.6);
       overflow: hidden;
-      animation: modalPop 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+      animation: modalPop 0.22s cubic-bezier(0.16, 1, 0.3, 1);
     }
     @keyframes modalPop {
-      0% { opacity: 0; transform: scale(0.95) translateY(10px); }
+      0% { opacity: 0; transform: scale(0.96) translateY(10px); }
       100% { opacity: 1; transform: scale(1) translateY(0); }
     }
     
@@ -1206,11 +1267,11 @@ function htmlPage(content, env, pageMode = 'public') {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding: 12px 18px;
+      padding: 14px 20px;
       border-bottom: 1px solid var(--border);
     }
     .modal-title {
-      font-size: 0.95rem;
+      font-size: 1rem;
       font-weight: 700;
       color: var(--text);
       white-space: nowrap;
@@ -1219,8 +1280,8 @@ function htmlPage(content, env, pageMode = 'public') {
       max-width: 85%;
     }
     .btn-close-circle {
-      width: 28px;
-      height: 28px;
+      width: 30px;
+      height: 30px;
       border-radius: 50%;
       border: 1px solid var(--border);
       background: transparent;
@@ -1238,13 +1299,13 @@ function htmlPage(content, env, pageMode = 'public') {
     }
 
     .modal-body {
-      padding: 14px 18px;
+      padding: 16px 20px;
       display: flex;
       flex-direction: column;
-      gap: 12px;
+      gap: 14px;
     }
     .modal-footer {
-      padding: 12px 18px;
+      padding: 14px 20px;
       border-top: 1px solid var(--border);
       display: flex;
       justify-content: flex-end;
@@ -1268,6 +1329,52 @@ function htmlPage(content, env, pageMode = 'public') {
       box-shadow: 0 0 0 3px rgba(236, 72, 153, 0.2);
     }
 
+    /* CUSTOM PIN INPUT STYLING (AVOIDS CHROME PASSWORD SAVER) */
+    .pin-input-stealth {
+      -webkit-text-security: disc;
+      -moz-text-security: disc;
+      letter-spacing: 6px;
+      font-size: 1.3rem !important;
+      font-weight: 700;
+      text-align: center;
+    }
+
+    /* GOOGLE DRIVE STYLE INTERACTIVE FOLDER SELECTOR */
+    .folder-tree-box {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: rgba(11, 15, 25, 0.5);
+      max-height: 180px;
+      overflow-y: auto;
+      padding: 6px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    body.light .folder-tree-box { background: #f8fafc; }
+    .folder-tree-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.86rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      transition: all 0.15s;
+    }
+    .folder-tree-item:hover {
+      background: rgba(99, 102, 241, 0.1);
+      color: var(--text);
+    }
+    .folder-tree-item.selected {
+      background: rgba(236, 72, 153, 0.15);
+      border: 1px solid rgba(236, 72, 153, 0.4);
+      color: #ec4899;
+      font-weight: 700;
+    }
+
     .external-players-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
     .btn-ext-player {
       display: inline-flex;
@@ -1288,7 +1395,6 @@ function htmlPage(content, env, pageMode = 'public') {
       background: rgba(99, 102, 241, 0.12);
     }
 
-    /* DRAG DROP ZONE */
     .dropzone-box {
       border: 2px dashed rgba(236, 72, 153, 0.4);
       background: rgba(236, 72, 153, 0.04);
@@ -1342,6 +1448,7 @@ function htmlPage(content, env, pageMode = 'public') {
 let currentPath = '';
 let currentFolderId = '';
 let allFiles = [];
+let availableFolders = [''];
 let activeFilter = 'all';
 let selectedFiles = new Set();
 let plyrPlayerInstance = null;
@@ -1385,7 +1492,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   window.addEventListener('popstate', handlePopState);
 
-  if (!isPageAdmin || localStorage.getItem('harudrive_admin_pin')) {
+  // Initial Load
+  const isUnlocked = localStorage.getItem('harudrive_admin_pin') === '290722';
+  if (!isPageAdmin || isUnlocked) {
     const pathName = window.location.pathname;
     if (pathName.startsWith('/folder/')) {
       const fId = pathName.replace('/folder/', '').split('/')[0];
@@ -1396,13 +1505,17 @@ document.addEventListener('DOMContentLoaded', () => {
       loadFolder(p, '');
     }
   }
+
+  if (isPageAdmin) {
+    fetchFolderTree();
+  }
 });
 
-// Admin Console Auth Manager
+// Admin Console Auth Manager with Auto-Session Persistence
 function initAdminConsole() {
   const gate = document.getElementById('adminLoginGate');
   const main = document.getElementById('adminMainContent');
-  const savedPin = localStorage.getItem('harudrive_admin_pin');
+  const savedPin = localStorage.getItem('harudrive_admin_pin') || getCookie('harudrive_admin_pin');
 
   if (savedPin === '290722') {
     if (gate) gate.style.display = 'none';
@@ -1410,7 +1523,7 @@ function initAdminConsole() {
   } else {
     if (gate) gate.style.display = 'flex';
     if (main) main.style.display = 'none';
-    document.getElementById('gatePinInput')?.focus();
+    setTimeout(() => document.getElementById('gatePinInput')?.focus(), 150);
   }
 }
 
@@ -1420,12 +1533,13 @@ function unlockAdminConsole() {
   const pin = (pinInput?.value || '').trim();
 
   if (pin === '290722') {
-    if (rememberCb && rememberCb.checked) {
-      localStorage.setItem('harudrive_admin_pin', pin);
-    }
+    localStorage.setItem('harudrive_admin_pin', pin);
+    setCookie('harudrive_admin_pin', pin, 30);
+    
     document.getElementById('adminLoginGate').style.display = 'none';
     document.getElementById('adminMainContent').style.display = 'block';
     loadFolder(currentPath, currentFolderId);
+    fetchFolderTree();
   } else {
     alert('❌ PIN Admin Salah!');
     pinInput?.focus();
@@ -1435,6 +1549,7 @@ function unlockAdminConsole() {
 
 function lockAdminSession() {
   localStorage.removeItem('harudrive_admin_pin');
+  deleteCookie('harudrive_admin_pin');
   document.getElementById('adminLoginGate').style.display = 'flex';
   document.getElementById('adminMainContent').style.display = 'none';
   alert('🔒 Console Admin telah dikunci.');
@@ -1463,6 +1578,47 @@ function handlePopState(e) {
     const urlParams = new URLSearchParams(window.location.search);
     loadFolder(urlParams.get('p') || '', '');
   }
+}
+
+// Fetch Folder Tree for Folder Pickers
+async function fetchFolderTree() {
+  try {
+    const res = await fetch('/api/folders');
+    if (res.ok) {
+      const data = await res.json();
+      availableFolders = data.folders || [''];
+    }
+  } catch (e) {}
+}
+
+function renderFolderPickerUI(containerId, inputId, selectedValue = '') {
+  const container = document.getElementById(containerId);
+  const hiddenInput = document.getElementById(inputId);
+  if (!container) return;
+
+  hiddenInput.value = selectedValue;
+  let html = '';
+  
+  const folders = Array.from(new Set(['', ...availableFolders]));
+
+  folders.forEach(f => {
+    const isSelected = f === selectedValue;
+    const displayName = f ? \`📁 /\${f}\` : '🏠 Root (/)';
+    const indent = f ? (f.split('/').length - 1) * 16 : 0;
+
+    html += \`
+      <div class="folder-tree-item \${isSelected ? 'selected' : ''}" style="margin-left: \${indent}px;" onclick="selectFolderPickerItem('\${containerId}', '\${inputId}', '\${escapeJs(f)}')">
+        <span>\${escapeHtml(displayName)}</span>
+        \${isSelected ? '<span style="margin-left: auto; font-size: 0.8rem;">✓</span>' : ''}
+      </div>
+    \`;
+  });
+
+  container.innerHTML = html;
+}
+
+function selectFolderPickerItem(containerId, inputId, folderPath) {
+  renderFolderPickerUI(containerId, inputId, folderPath);
 }
 
 // Load Folder Files
@@ -1510,7 +1666,7 @@ async function loadFolder(path = '', id = '') {
   }
 }
 
-// Render File Table
+// Render File Table with Modern SVG Icons
 function renderFileList() {
   const container = document.getElementById('fileListContainer');
   if (!container) return;
@@ -1539,7 +1695,6 @@ function renderFileList() {
     const iconType = isDir ? 'folder' : (isVideo ? 'video' : (file.mimeType.includes('zip') ? 'archive' : 'file'));
     const isChecked = selectedFiles.has(file.path);
 
-    const fileShortLink = \`/file/\${file.id}\`;
     const downloadShortLink = \`/d/\${file.id}\`;
 
     const clickAction = isDir 
@@ -1553,7 +1708,7 @@ function renderFileList() {
       </div>
       <div class="file-name-cell" onclick="\${clickAction}">
         <div class="file-icon-box \${iconType}">
-          \${getFileSvgIcon(iconType)}
+          \${getModernSvgIcon(iconType)}
         </div>
         <span class="file-title" title="\${escapeHtml(file.name)}">\${escapeHtml(file.name)}</span>
       </div>
@@ -1600,7 +1755,7 @@ function updateBreadcrumbs() {
 
   const baseRootUrl = isPageAdmin ? '/admin' : '/';
   let html = \`
-    <a href="\${baseRootUrl}" class="crumb" onclick="\${isPageAdmin ? \`navigateToAdmin('')\` : \`navigateTo('')\`}; return false;">
+    <a href="javascript:void(0)" class="crumb" onclick="\${isPageAdmin ? \`navigateToAdmin('')\` : \`navigateTo('')\`}; return false;">
       <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
       <span>Home</span>
     </a>\`;
@@ -1615,7 +1770,7 @@ function updateBreadcrumbs() {
       if (isLast) {
         html += \`<span class="crumb-current">\${escapeHtml(p)}</span>\`;
       } else {
-        html += \`<a href="\${baseRootUrl}?p=\${encodeURIComponent(accum)}" class="crumb" onclick="\${isPageAdmin ? \`navigateToAdmin('\${escapeJs(accum)}')\` : \`navigateTo('\${escapeJs(accum)}')\`}; return false;">\${escapeHtml(p)}</a>\`;
+        html += \`<a href="javascript:void(0)" class="crumb" onclick="\${isPageAdmin ? \`navigateToAdmin('\${escapeJs(accum)}')\` : \`navigateTo('\${escapeJs(accum)}')\`}; return false;">\${escapeHtml(p)}</a>\`;
       }
     });
   }
@@ -1691,10 +1846,9 @@ function downloadFile(shortId) {
 // Manual Upload Modal (Admin)
 function openUploadModal() {
   const m = document.getElementById('uploadModal');
-  const targetDirInput = document.getElementById('uploadTargetDirInput');
   if (!m) return;
 
-  targetDirInput.value = currentPath;
+  renderFolderPickerUI('uploadFolderPicker', 'uploadTargetDirInput', currentPath);
   selectedUploadFile = null;
   document.getElementById('selectedFileInfo').style.display = 'none';
   document.getElementById('uploadProgressBox').style.display = 'none';
@@ -1741,6 +1895,7 @@ async function submitManualUpload() {
     if (res.ok && data.success) {
       closeUploadModal();
       loadFolder(currentPath, currentFolderId);
+      fetchFolderTree();
       alert(\`✅ File berhasil diunggah ke /\${data.path}\`);
     } else {
       alert('Gagal upload: ' + (data.error || 'Terjadi kesalahan'));
@@ -1789,6 +1944,7 @@ async function submitRename() {
     if (res.ok && data.success) {
       closeRenameModal();
       loadFolder(currentPath, currentFolderId);
+      fetchFolderTree();
     } else {
       alert('Gagal rename: ' + (data.error || 'Terjadi kesalahan'));
     }
@@ -1797,19 +1953,17 @@ async function submitRename() {
   }
 }
 
-// Move Modal Logic (Admin)
+// Move Modal Logic with Folder Selector (Admin)
 let moveItemsQueue = [];
 function openMoveModalSingle(itemPath) {
   moveItemsQueue = [itemPath];
   const m = document.getElementById('moveModal');
   const desc = document.getElementById('moveTargetDesc');
-  const input = document.getElementById('moveDestinationInput');
   if (!m) return;
 
   desc.textContent = \`Memindahkan: \${itemPath.split('/').pop()}\`;
-  input.value = currentPath;
+  renderFolderPickerUI('moveFolderPicker', 'moveDestinationInput', currentPath);
   m.style.display = 'flex';
-  input.focus();
 }
 function openBulkMoveModal() {
   moveItemsQueue = Array.from(selectedFiles);
@@ -1817,13 +1971,11 @@ function openBulkMoveModal() {
 
   const m = document.getElementById('moveModal');
   const desc = document.getElementById('moveTargetDesc');
-  const input = document.getElementById('moveDestinationInput');
   if (!m) return;
 
   desc.textContent = \`Memindahkan \${moveItemsQueue.length} item terpilih.\`;
-  input.value = currentPath;
+  renderFolderPickerUI('moveFolderPicker', 'moveDestinationInput', currentPath);
   m.style.display = 'flex';
-  input.focus();
 }
 function closeMoveModal() {
   const m = document.getElementById('moveModal');
@@ -1845,6 +1997,7 @@ async function submitMove() {
       closeMoveModal();
       clearBulkSelection();
       loadFolder(currentPath, currentFolderId);
+      fetchFolderTree();
       alert(\`✅ Berhasil memindahkan \${data.movedCount} item ke /\${destFolder}\`);
     } else {
       alert('Gagal memindahkan: ' + (data.error || 'Terjadi kesalahan'));
@@ -1885,6 +2038,7 @@ async function submitNewFolder() {
       closeNewFolderModal();
       if (nameInput) nameInput.value = '';
       loadFolder(currentPath, currentFolderId);
+      fetchFolderTree();
     } else {
       alert('Gagal: ' + (data.error || 'Terjadi kesalahan'));
     }
@@ -1907,6 +2061,7 @@ async function deleteSingleItem(itemPath) {
     const data = await res.json();
     if (res.ok && data.success) {
       loadFolder(currentPath, currentFolderId);
+      fetchFolderTree();
     } else {
       alert('Gagal menghapus: ' + (data.error || 'Error'));
     }
@@ -1964,6 +2119,7 @@ async function bulkDeleteSelected() {
     if (res.ok && data.success) {
       clearBulkSelection();
       loadFolder(currentPath, currentFolderId);
+      fetchFolderTree();
     } else {
       alert('Gagal: ' + (data.error || 'Error'));
     }
@@ -1986,7 +2142,10 @@ function bulkCopyLinks() {
 // Cloud Mirror Modal
 function openMirrorModal() {
   const m = document.getElementById('mirrorModal');
-  if (m) m.style.display = 'flex';
+  if (m) {
+    renderFolderPickerUI('mirrorFolderPicker', 'mirrorTargetPath', currentPath);
+    m.style.display = 'flex';
+  }
 }
 function closeMirrorModal() {
   const m = document.getElementById('mirrorModal');
@@ -1994,12 +2153,11 @@ function closeMirrorModal() {
 }
 async function submitCloudMirror() {
   const urlInput = document.getElementById('mirrorGdriveUrl');
-  const targetInput = document.getElementById('mirrorTargetPath');
+  const targetPath = (document.getElementById('mirrorTargetPath').value || '').trim();
   const gdriveUrl = (urlInput?.value || '').trim();
-  const targetPath = (targetInput?.value || '').trim();
   if (!gdriveUrl) return alert('Masukkan URL Google Drive!');
 
-  const pin = localStorage.getItem('harudrive_admin_pin') || prompt('Masukkan PIN Admin...:');
+  const pin = localStorage.getItem('harudrive_admin_pin') || prompt('Masukkan PIN Admin:');
   if (!pin) return;
 
   const btn = document.getElementById('startMirrorBtn');
@@ -2040,17 +2198,42 @@ function updateThemeIcon(isLight) {
   }
 }
 
-function getFileSvgIcon(type) {
+// PREMIUM MODERN SVG ICONS
+function getModernSvgIcon(type) {
   if (type === 'folder') {
-    return '<svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>';
+    return \`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>\`;
   }
   if (type === 'video') {
-    return '<svg class="icon icon-sm" viewBox="0 0 24 24"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>';
+    return \`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ec4899" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"/></svg>\`;
   }
   if (type === 'archive') {
-    return '<svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>';
+    return \`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#a855f7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="20" x="2" y="2" rx="5" ry="5"/><path d="M10 2v20"/><path d="M14 2v20"/><path d="M2 12h20"/></svg>\`;
   }
-  return '<svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
+  return \`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#818cf8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><polyline points="14 2 14 8 20 8"/></svg>\`;
+}
+
+// Cookie Helpers
+function setCookie(name, value, days) {
+  let expires = "";
+  if (days) {
+    const date = new Date();
+    date.setTime(date.getTime() + (days*24*60*60*1000));
+    expires = "; expires=" + date.toUTCString();
+  }
+  document.cookie = name + "=" + (value || "")  + expires + "; path=/; SameSite=Lax";
+}
+function getCookie(name) {
+  const nameEQ = name + "=";
+  const ca = document.cookie.split(';');
+  for(let i=0;i < ca.length;i++) {
+    let c = ca[i];
+    while (c.charAt(0)==' ') c = c.substring(1,c.length);
+    if (c.indexOf(nameEQ) == 0) return c.substring(nameEQ.length,c.length);
+  }
+  return null;
+}
+function deleteCookie(name) {
+  document.cookie = name +'=; Path=/; Expires=Thu, 01 Jan 1970 00:00:01 GMT;';
 }
 
 function formatBytes(bytes) {
@@ -2104,7 +2287,7 @@ function loginUI(errorMsg = '') {
       <div class="logo-glow-wrap" style="margin: 0 auto 16px; width: 56px; height: 56px;">
         <svg class="sakura-icon-svg" style="width: 32px; height: 32px;" viewBox="0 0 24 24"><path d="M12 2a4 4 0 0 0-3.5 6 4 4 0 0 0-6 3.5 4 4 0 0 0 3.5 6 4 4 0 0 0 6 3.5 4 4 0 0 0 6-3.5 4 4 0 0 0 3.5-6 4 4 0 0 0-3.5-6 4 4 0 0 0-6-3.5z"/><circle cx="12" cy="12" r="2.5" fill="#ffffff"/></svg>
       </div>
-      <h2 style="font-size: 1.6rem; font-weight: 800; margin-bottom: 6px; background: var(--accent-gradient); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">HaruDrive Index</h2>
+      <h2 style="font-size: 1.6rem; font-weight: 800; margin-bottom: 6px; background: var(--accent-gradient); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">HaruDrive</h2>
       <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 24px;">Masukkan password untuk mengakses storage cloud.</p>
       
       ${errorMsg ? `<div style="background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.4); color: #f87171; padding: 10px; border-radius: 10px; font-size: 0.85rem; margin-bottom: 18px;">${errorMsg}</div>` : ''}
@@ -2123,7 +2306,7 @@ function publicUI() {
   <header class="navbar-cyber glass">
     <div class="nav-container">
       <div class="nav-left">
-        <a href="/" class="brand-logo" id="logoLink">
+        <a href="/" class="brand-logo" id="logoLink" onclick="navigateTo(''); return false;">
           <div class="logo-glow-wrap">
             <svg class="sakura-icon-svg" viewBox="0 0 24 24"><path d="M12 2a4 4 0 0 0-3.5 6 4 4 0 0 0-6 3.5 4 4 0 0 0 3.5 6 4 4 0 0 0 6 3.5 4 4 0 0 0 6-3.5 4 4 0 0 0 3.5-6 4 4 0 0 0-3.5-6 4 4 0 0 0-6-3.5z"/><circle cx="12" cy="12" r="2.5" fill="#ffffff"/></svg>
           </div>
@@ -2195,7 +2378,6 @@ function publicUI() {
 
   <!-- MAIN VIEW -->
   <main class="container">
-    <!-- Breadcrumb Toolbar -->
     <div class="breadcrumb-bar glass">
       <div class="crumb-group" id="breadcrumbNav">
         <a href="/" class="crumb" onclick="navigateTo('/'); return false;">
@@ -2205,7 +2387,6 @@ function publicUI() {
       </div>
     </div>
 
-    <!-- File Table -->
     <div class="file-table-wrapper glass">
       <div class="table-header">
         <div class="col-cb"><input type="checkbox" id="selectAllCheckbox" onchange="toggleSelectAll(this.checked)"></div>
@@ -2223,7 +2404,7 @@ function publicUI() {
     </div>
   </main>
 
-  <!-- FLOATING BULK ACTIONS TOOLBAR -->
+  <!-- FLOATING BULK ACTIONS TOOLBAR (PUBLIC) -->
   <div id="bulkToolbar" class="bulk-toolbar" style="display: none;">
     <span id="bulkCount" style="font-size: 0.85rem; font-weight: 700;">0 Dipilih</span>
     <button class="btn-bulk" onclick="bulkCopyLinks()">
@@ -2260,7 +2441,7 @@ function adminConsoleUI() {
   <header class="navbar-cyber glass">
     <div class="nav-container">
       <div class="nav-left">
-        <a href="/admin" class="brand-logo">
+        <a href="javascript:void(0)" class="brand-logo" onclick="navigateToAdmin('')">
           <div class="logo-glow-wrap">
             <svg class="sakura-icon-svg" viewBox="0 0 24 24"><path d="M12 2a4 4 0 0 0-3.5 6 4 4 0 0 0-6 3.5 4 4 0 0 0 3.5 6 4 4 0 0 0 6 3.5 4 4 0 0 0 6-3.5 4 4 0 0 0 3.5-6 4 4 0 0 0-3.5-6 4 4 0 0 0-6-3.5z"/><circle cx="12" cy="12" r="2.5" fill="#ffffff"/></svg>
           </div>
@@ -2291,7 +2472,7 @@ function adminConsoleUI() {
 
   <!-- ADMIN AUTH BARRIER (IF LOCKED) -->
   <div id="adminLoginGate" style="display: none; min-height: 75vh; align-items: center; justify-content: center; padding: 20px;">
-    <div class="glass" style="max-width: 420px; width: 100%; padding: 32px; border-radius: 24px; text-align: center; box-shadow: 0 20px 50px rgba(0,0,0,0.4);">
+    <div class="glass" style="max-width: 440px; width: 100%; padding: 36px 32px; border-radius: 24px; text-align: center; box-shadow: 0 20px 50px rgba(0,0,0,0.4);">
       <div class="logo-glow-wrap" style="margin: 0 auto 16px; width: 56px; height: 56px;">
         <svg class="icon icon-lg" style="color: #ec4899;" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
       </div>
@@ -2299,10 +2480,11 @@ function adminConsoleUI() {
       <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 20px;">Masukkan PIN Admin untuk mengelola file, folder, dan Cloud Mirror:</p>
       
       <div style="display: flex; flex-direction: column; gap: 14px;">
-        <input type="password" id="gatePinInput" placeholder="PIN Admin..." maxlength="10" class="form-input-pro" style="padding: 12px; font-size: 1.2rem; text-align: center; letter-spacing: 4px;">
+        <!-- STEALTH PIN INPUT: Uses text mode with webkit-text-security so password managers NEVER prompt 'save password' -->
+        <input type="text" id="gatePinInput" inputmode="numeric" placeholder="••••••" maxlength="10" autocomplete="off" data-lpignore="true" data-1p-ignore="true" class="form-input-pro pin-input-stealth">
         <label style="display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 0.84rem; cursor: pointer;">
           <input type="checkbox" id="gateRememberPin" checked>
-          <span>Ingat PIN di browser ini</span>
+          <span>Ingat sesi Admin di browser ini</span>
         </label>
         <button class="nav-btn" style="width: 100%; justify-content: center; padding: 12px; background: var(--accent-gradient); color: white; border: none; font-size: 0.95rem; font-weight: 700;" onclick="unlockAdminConsole()">Buka Console Admin</button>
       </div>
@@ -2311,17 +2493,15 @@ function adminConsoleUI() {
 
   <!-- ADMIN CONSOLE MAIN CONTENT -->
   <div id="adminMainContent" class="container" style="display: none;">
-    <!-- Storage Stat & Quick Tools Bar -->
     <div class="breadcrumb-bar glass" style="margin-bottom: 16px;">
       <div class="crumb-group" id="breadcrumbNav">
-        <a href="/admin" class="crumb" onclick="navigateToAdmin(''); return false;">
+        <a href="javascript:void(0)" class="crumb" onclick="navigateToAdmin(''); return false;">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
           <span>Root / Home</span>
         </a>
       </div>
 
       <div class="toolbar-actions">
-        <!-- MANUAL UPLOAD BUTTON -->
         <button class="btn-action-tool" style="background: rgba(99, 102, 241, 0.15); border-color: rgba(99, 102, 241, 0.4); color: var(--primary-light);" onclick="openUploadModal()">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
           <span>⬆ Upload File</span>
@@ -2379,7 +2559,7 @@ function adminConsoleUI() {
     <button class="btn-bulk" onclick="clearBulkSelection()">Batal</button>
   </div>
 
-  <!-- MANUAL UPLOAD MODAL -->
+  <!-- MANUAL UPLOAD MODAL (WITH INTERACTIVE FOLDER SELECTOR) -->
   <div id="uploadModal" class="modal-backdrop" style="display: none;">
     <div class="modal-card">
       <div class="modal-header">
@@ -2400,8 +2580,9 @@ function adminConsoleUI() {
           <span id="selectedFileName" style="font-size: 0.85rem; font-weight: 600;"></span>
         </div>
 
-        <label style="font-size: 0.82rem; font-weight: 600;">Folder Tujuan:</label>
-        <input type="text" id="uploadTargetDirInput" class="form-input-pro" placeholder="Biarkan kosong untuk root (/)">
+        <label style="font-size: 0.82rem; font-weight: 600;">Pilih Folder Tujuan:</label>
+        <div id="uploadFolderPicker" class="folder-tree-box"></div>
+        <input type="hidden" id="uploadTargetDirInput">
         
         <div id="uploadProgressBox" style="display: none;">
           <div style="font-size: 0.82rem; color: var(--primary-light); margin-bottom: 4px;" id="uploadStatusText">Mengupload ke Hugging Face...</div>
@@ -2438,7 +2619,7 @@ function adminConsoleUI() {
     </div>
   </div>
 
-  <!-- MOVE MODAL -->
+  <!-- MOVE MODAL (WITH INTERACTIVE GDRIVE-STYLE FOLDER SELECTOR) -->
   <div id="moveModal" class="modal-backdrop" style="display: none;">
     <div class="modal-card">
       <div class="modal-header">
@@ -2449,8 +2630,9 @@ function adminConsoleUI() {
       </div>
       <div class="modal-body">
         <p id="moveTargetDesc" style="font-size: 0.85rem; color: var(--text-muted);"></p>
-        <label style="font-size: 0.85rem; font-weight: 600;">Folder Tujuan di HaruDrive:</label>
-        <input type="text" id="moveDestinationInput" class="form-input-pro" placeholder="contoh: VIU/Series atau biarkan kosong untuk Root (/)">
+        <label style="font-size: 0.85rem; font-weight: 600;">Pilih Folder Tujuan:</label>
+        <div id="moveFolderPicker" class="folder-tree-box"></div>
+        <input type="hidden" id="moveDestinationInput">
       </div>
       <div class="modal-footer">
         <button class="nav-btn" onclick="closeMoveModal()">Batal</button>
@@ -2479,7 +2661,7 @@ function adminConsoleUI() {
     </div>
   </div>
 
-  <!-- CLOUD MIRROR MODAL -->
+  <!-- CLOUD MIRROR MODAL (WITH INTERACTIVE FOLDER SELECTOR) -->
   <div id="mirrorModal" class="modal-backdrop" style="display: none;">
     <div class="modal-card">
       <div class="modal-header">
@@ -2492,8 +2674,9 @@ function adminConsoleUI() {
         <label style="font-size: 0.84rem; font-weight: 600;">Google Drive URL / Folder Link:</label>
         <input type="text" id="mirrorGdriveUrl" class="form-input-pro" placeholder="https://drive.google.com/drive/folders/...">
         
-        <label style="font-size: 0.84rem; font-weight: 600;">Target Folder di HaruDrive:</label>
-        <input type="text" id="mirrorTargetPath" class="form-input-pro" placeholder="contoh: VIU/Series atau biarkan kosong">
+        <label style="font-size: 0.84rem; font-weight: 600;">Pilih Folder Tujuan di HaruDrive:</label>
+        <div id="mirrorFolderPicker" class="folder-tree-box"></div>
+        <input type="hidden" id="mirrorTargetPath">
       </div>
       <div class="modal-footer">
         <button class="nav-btn" onclick="closeMirrorModal()">Batal</button>
