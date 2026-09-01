@@ -70,8 +70,8 @@ export default {
         }
 
         const hfTreeUrl = reqPath 
-          ? `https://huggingface.co/api/datasets/${encodeURIComponent(repoId)}/tree/main/${encodeURI(reqPath)}`
-          : `https://huggingface.co/api/datasets/${encodeURIComponent(repoId)}/tree/main`;
+          ? `https://huggingface.co/api/datasets/${repoId}/tree/main/${encodeURI(reqPath)}`
+          : `https://huggingface.co/api/datasets/${repoId}/tree/main`;
 
         const hfHeaders = { 'User-Agent': 'HaruDrive/1.0' };
         if (env.HF_TOKEN) {
@@ -244,7 +244,7 @@ export default {
       }
 
       const repoId = env.HF_REPO_ID;
-      const hfFileUrl = `https://huggingface.co/datasets/${encodeURIComponent(repoId)}/resolve/main/${encodeURI(filePath)}`;
+      const hfFileUrl = `https://huggingface.co/datasets/${repoId}/resolve/main/${encodeURI(filePath)}`;
 
       const hfReqHeaders = new Headers();
       hfReqHeaders.set('User-Agent', 'HaruDrive/1.0');
