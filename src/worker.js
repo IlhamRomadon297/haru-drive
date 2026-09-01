@@ -27,7 +27,7 @@ export default {
           }
         });
       } else {
-        return new Response(htmlPage(loginUI('Incorrect password. Please try again.'), env), {
+        return new Response(htmlPage(loginUI('Password salah. Silakan coba lagi.'), env), {
           headers: { 'Content-Type': 'text/html;charset=UTF-8' }
         });
       }
@@ -215,84 +215,6 @@ export default {
     }
 
     // ==========================================================
-    // API: Realtime Mirror Status (Live In-Web Progress)
-    // ==========================================================
-    if (url.pathname === '/api/admin/mirror/status') {
-      try {
-        const pat = GITHUB_PAT;
-        const repo = GITHUB_REPO;
-        if (!pat) {
-          return new Response(JSON.stringify({ error: 'GITHUB_PAT not configured' }), { status: 500 });
-        }
-
-        const ghRes = await fetch(`https://api.github.com/repos/${repo}/actions/workflows/mirror.yml/runs?per_page=1`, {
-          headers: {
-            'Authorization': `Bearer ${pat}`,
-            'Accept': 'application/vnd.github+json',
-            'User-Agent': 'HaruDrive-Admin'
-          }
-        });
-
-        if (!ghRes.ok) {
-          return new Response(JSON.stringify({ error: `GitHub API error (${ghRes.status})` }), { status: ghRes.status });
-        }
-
-        const data = await ghRes.json();
-        const runs = data.workflow_runs || [];
-        if (runs.length === 0) {
-          return new Response(JSON.stringify({ status: 'idle', hasActiveRun: false }), {
-            headers: { 'Content-Type': 'application/json' }
-          });
-        }
-
-        const latestRun = runs[0];
-        const isActive = latestRun.status === 'in_progress' || latestRun.status === 'queued';
-        let stepName = 'Memulai runner cloud...';
-        let progressPercent = 15;
-
-        if (latestRun.jobs_url && isActive) {
-          try {
-            const jobsRes = await fetch(latestRun.jobs_url, {
-              headers: {
-                'Authorization': `Bearer ${pat}`,
-                'Accept': 'application/vnd.github+json',
-                'User-Agent': 'HaruDrive-Admin'
-              }
-            });
-            if (jobsRes.ok) {
-              const jobsData = await jobsRes.json();
-              const mainJob = (jobsData.jobs || [])[0];
-              if (mainJob && mainJob.steps) {
-                const currentStep = mainJob.steps.find(s => s.status === 'in_progress') || mainJob.steps.slice().reverse().find(s => s.status === 'completed');
-                if (currentStep) {
-                  stepName = currentStep.name;
-                  const totalSteps = mainJob.steps.length;
-                  const stepIndex = mainJob.steps.indexOf(currentStep) + 1;
-                  progressPercent = Math.min(95, Math.max(15, Math.round((stepIndex / totalSteps) * 100)));
-                }
-              }
-            }
-          } catch (e) {}
-        }
-
-        return new Response(JSON.stringify({
-          status: latestRun.conclusion || latestRun.status,
-          hasActiveRun: isActive,
-          runId: latestRun.id,
-          htmlUrl: latestRun.html_url,
-          createdAt: latestRun.created_at,
-          updatedAt: latestRun.updated_at,
-          stepName: stepName,
-          progressPercent: isActive ? progressPercent : (latestRun.conclusion === 'success' ? 100 : 0)
-        }), {
-          headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' }
-        });
-      } catch (err) {
-        return new Response(JSON.stringify({ error: err.message }), { status: 500 });
-      }
-    }
-
-    // ==========================================================
     // API: Start Cloud Mirror (GitHub Actions Dispatch)
     // ==========================================================
     if (url.pathname === '/api/admin/mirror' && request.method === 'POST') {
@@ -332,13 +254,13 @@ export default {
         if (ghRes.status === 204) {
           return new Response(JSON.stringify({
             success: true,
-            message: '🚀 Cloud Mirror berhasil dijalankan!',
+            message: '🚀 Cloud Mirror berhasil dijalankan di GitHub Actions!',
             repo: repo,
             target_path: targetPath
           }), { headers: { 'Content-Type': 'application/json' } });
         } else {
           const errText = await ghRes.text();
-          return new Response(JSON.stringify({ error: `GitHub dispatch failed (${ghRes.status}): ${errText}` }), { status: ghRes.status });
+          return new Response(JSON.stringify({ error: `GitHub dispatch error (${ghRes.status}): ${errText}` }), { status: ghRes.status });
         }
       } catch (err) {
         return new Response(JSON.stringify({ error: err.message }), { status: 500 });
@@ -561,7 +483,7 @@ function getMimeType(filename) {
 }
 
 // ==========================================================
-// HTML Page Generator with Plyr.js & Crisp Vector SVG Icons
+// HTML Page Generator with Cyber-Sakura Visuals
 // ==========================================================
 function htmlPage(content, env) {
   return `<!DOCTYPE html>
@@ -570,7 +492,10 @@ function htmlPage(content, env) {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>HaruDrive - High-Speed Cloud Storage Index</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22%23ec4899%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22><path d=%22M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6%22/></svg>">
+  
+  <!-- Favicon Sakura SVG -->
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22%23ec4899%22><path d=%22M12 2a4 4 0 0 0-3.5 6 4 4 0 0 0-6 3.5 4 4 0 0 0 3.5 6 4 4 0 0 0 6 3.5 4 4 0 0 0 6-3.5 4 4 0 0 0 3.5-6 4 4 0 0 0-3.5-6 4 4 0 0 0-6-3.5z%22/><circle cx=%2212%22 cy=%2212%22 r=%222.5%22 fill=%22%23ffffff%22/></svg>">
+  
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
@@ -586,8 +511,8 @@ function htmlPage(content, env) {
       --accent: #ec4899;
       --accent-gradient: linear-gradient(135deg, #ec4899 0%, #a855f7 50%, #6366f1 100%);
       --bg: #090d16;
-      --bg-surface: rgba(17, 24, 39, 0.78);
-      --bg-card: rgba(22, 30, 49, 0.88);
+      --bg-surface: rgba(17, 24, 39, 0.82);
+      --bg-card: rgba(22, 30, 49, 0.90);
       --border: rgba(255, 255, 255, 0.08);
       --border-focus: rgba(236, 72, 153, 0.5);
       --text: #f8fafc;
@@ -602,7 +527,7 @@ function htmlPage(content, env) {
     /* PURE FLAWLESS LIGHT THEME */
     body.light {
       --bg: #f8fafc;
-      --bg-surface: rgba(255, 255, 255, 0.92);
+      --bg-surface: rgba(255, 255, 255, 0.94);
       --bg-card: #ffffff;
       --border: #e2e8f0;
       --border-focus: #ec4899;
@@ -616,9 +541,9 @@ function htmlPage(content, env) {
     body {
       font-family: var(--font);
       background-color: var(--bg);
-      background-image: radial-gradient(at 0% 0%, rgba(236, 72, 153, 0.12) 0px, transparent 45%),
-                        radial-gradient(at 100% 0%, rgba(99, 102, 241, 0.12) 0px, transparent 45%),
-                        radial-gradient(at 50% 100%, rgba(168, 85, 247, 0.08) 0px, transparent 50%);
+      background-image: radial-gradient(at 0% 0%, rgba(236, 72, 153, 0.15) 0px, transparent 45%),
+                        radial-gradient(at 100% 0%, rgba(99, 102, 241, 0.15) 0px, transparent 45%),
+                        radial-gradient(at 50% 100%, rgba(168, 85, 247, 0.1) 0px, transparent 50%);
       color: var(--text);
       min-height: 100vh;
       display: flex;
@@ -639,8 +564,8 @@ function htmlPage(content, env) {
 
     /* SVG Icon Helpers */
     .icon {
-      width: 18px;
-      height: 18px;
+      width: 17px;
+      height: 17px;
       stroke-width: 2;
       stroke: currentColor;
       fill: none;
@@ -651,13 +576,22 @@ function htmlPage(content, env) {
     .icon-sm { width: 14px; height: 14px; }
     .icon-lg { width: 22px; height: 22px; }
 
+    /* SAKURA BLOSSOM LOGO */
+    .sakura-icon-svg {
+      width: 22px;
+      height: 22px;
+      fill: #ec4899;
+      filter: drop-shadow(0 0 6px rgba(236, 72, 153, 0.6));
+      flex-shrink: 0;
+    }
+
     /* NAVBAR */
     .navbar-cyber {
       position: sticky;
       top: 0;
       z-index: 100;
       border-bottom: 1px solid var(--border);
-      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+      box-shadow: 0 4px 25px rgba(0, 0, 0, 0.15);
     }
     .nav-container {
       display: flex;
@@ -693,16 +627,16 @@ function htmlPage(content, env) {
       height: 38px;
       border-radius: 12px;
       background: rgba(236, 72, 153, 0.15);
-      border: 1px solid rgba(236, 72, 153, 0.35);
-      color: #ec4899;
+      border: 1px solid rgba(236, 72, 153, 0.4);
       display: flex;
       align-items: center;
       justify-content: center;
-      box-shadow: 0 0 15px rgba(236, 72, 153, 0.25);
-      transition: transform 0.2s;
+      box-shadow: 0 0 16px rgba(236, 72, 153, 0.3);
+      transition: transform 0.25s, box-shadow 0.25s;
     }
     .brand-logo:hover .logo-glow-wrap {
-      transform: scale(1.08) rotate(6deg);
+      transform: scale(1.08) rotate(12deg);
+      box-shadow: 0 0 22px rgba(236, 72, 153, 0.5);
     }
     .brand-info { display: flex; flex-direction: column; }
     .brand-title {
@@ -817,13 +751,14 @@ function htmlPage(content, env) {
       transform: translateY(-1px);
     }
     .btn-mirror-stealth {
-      background: rgba(236, 72, 153, 0.12);
-      border-color: rgba(236, 72, 153, 0.35);
+      background: rgba(236, 72, 153, 0.15);
+      border-color: rgba(236, 72, 153, 0.4);
       color: #ec4899;
+      display: none; /* ONLY VISIBLE WHEN ADMIN IS ON */
     }
     .btn-admin-badge {
-      background: rgba(16, 185, 129, 0.12);
-      border-color: rgba(16, 185, 129, 0.35);
+      background: rgba(16, 185, 129, 0.15);
+      border-color: rgba(16, 185, 129, 0.4);
       color: #10b981;
     }
 
@@ -1105,13 +1040,13 @@ function htmlPage(content, env) {
       color: white;
     }
 
-    /* MODAL SYSTEM & PLYR FIXES */
+    /* MODAL SYSTEM & COMPACT THEATER PLYR */
     .modal-backdrop {
       position: fixed;
       inset: 0;
       background: rgba(5, 8, 16, 0.85);
-      backdrop-filter: blur(14px);
-      -webkit-backdrop-filter: blur(14px);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
       z-index: 2000;
       display: flex;
       align-items: center;
@@ -1120,7 +1055,7 @@ function htmlPage(content, env) {
     }
     .modal-card {
       width: 100%;
-      max-width: 560px;
+      max-width: 500px;
       border-radius: 20px;
       background: var(--bg-card);
       border: 1px solid var(--border);
@@ -1132,15 +1067,22 @@ function htmlPage(content, env) {
       0% { opacity: 0; transform: scale(0.95) translateY(10px); }
       100% { opacity: 1; transform: scale(1) translateY(0); }
     }
+    
+    /* COMPACT THEATER VIDEO CARD (PERFECTLY FITS VIEWPORT) */
     .video-card {
-      max-width: 920px;
+      max-width: 760px;
+      width: 100%;
+      max-height: 88vh;
       border-radius: 18px;
+      display: flex;
+      flex-direction: column;
     }
     .video-container-wrap {
       width: 100%;
       background: #000;
       overflow: hidden;
       aspect-ratio: 16 / 9;
+      max-height: 52vh;
     }
     .plyr--video {
       height: 100%;
@@ -1151,17 +1093,21 @@ function htmlPage(content, env) {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding: 16px 20px;
+      padding: 12px 18px;
       border-bottom: 1px solid var(--border);
     }
     .modal-title {
-      font-size: 1.1rem;
+      font-size: 0.95rem;
       font-weight: 700;
       color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 85%;
     }
     .btn-close-circle {
-      width: 30px;
-      height: 30px;
+      width: 28px;
+      height: 28px;
       border-radius: 50%;
       border: 1px solid var(--border);
       background: transparent;
@@ -1179,13 +1125,13 @@ function htmlPage(content, env) {
     }
 
     .modal-body {
-      padding: 20px;
+      padding: 14px 18px;
       display: flex;
       flex-direction: column;
-      gap: 14px;
+      gap: 12px;
     }
     .modal-footer {
-      padding: 14px 20px;
+      padding: 12px 18px;
       border-top: 1px solid var(--border);
       display: flex;
       justify-content: flex-end;
@@ -1212,20 +1158,19 @@ function htmlPage(content, env) {
     .external-players-row {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 6px;
       flex-wrap: wrap;
-      margin-top: 8px;
     }
     .btn-ext-player {
       display: inline-flex;
       align-items: center;
-      gap: 5px;
-      padding: 6px 12px;
+      gap: 4px;
+      padding: 5px 10px;
       border-radius: 8px;
       border: 1px solid var(--border);
       background: var(--bg-surface);
       color: var(--text);
-      font-size: 0.78rem;
+      font-size: 0.76rem;
       font-weight: 600;
       text-decoration: none;
       transition: all 0.2s;
@@ -1291,13 +1236,15 @@ document.addEventListener('DOMContentLoaded', () => {
   // Admin PIN check
   if (localStorage.getItem('harudrive_admin_pin')) {
     setAdminState(true);
+  } else {
+    setAdminState(false);
   }
 
   // Setup Event Listeners
   document.getElementById('darkToggle')?.addEventListener('click', toggleTheme);
   document.getElementById('refreshBtn')?.addEventListener('click', () => loadFolder(currentPath, currentFolderId));
   document.getElementById('mirrorModalBtn')?.addEventListener('click', openMirrorModal);
-  document.getElementById('adminToggleBtn')?.addEventListener('click', toggleAdminMode);
+  document.getElementById('adminToggleBtn')?.addEventListener('click', openAdminAuthModal);
   
   // Filter chips
   document.querySelectorAll('.filter-chip').forEach(btn => {
@@ -1464,7 +1411,7 @@ function renderFileList() {
           </button>
         \` : ''}
         \${isAdminActive ? \`
-          <button class="btn-act btn-delete" onclick="deleteSingleItem('\${escapeJs(file.path)}')" title="Hapus">
+          <button class="btn-act btn-delete" onclick="deleteSingleItem('\${escapeJs(file.path)}')" title="Hapus Permanen">
             <svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
           </button>
         \` : ''}
@@ -1573,25 +1520,13 @@ function downloadFile(shortId) {
   window.location.href = \`/d/\${shortId}\`;
 }
 
-// Admin Mode
-function toggleAdminMode() {
-  if (isAdminActive) {
-    setAdminState(false);
-  } else {
-    const savedPin = localStorage.getItem('harudrive_admin_pin');
-    if (savedPin) {
-      setAdminState(true);
-    } else {
-      openAdminAuthModal();
-    }
-  }
-}
-
+// Admin Mode State Manager
 function setAdminState(active) {
   isAdminActive = active;
   const btn = document.getElementById('adminToggleBtn');
   const btnText = document.getElementById('adminBtnText');
   const toolbar = document.getElementById('adminToolbar');
+  const mirrorBtn = document.getElementById('mirrorModalBtn');
 
   if (btn) {
     if (active) {
@@ -1602,14 +1537,34 @@ function setAdminState(active) {
       if (btnText) btnText.textContent = 'Admin';
     }
   }
+
+  // Show/Hide New Folder toolbar & Mirror button based on Admin state
   if (toolbar) toolbar.style.display = active ? 'flex' : 'none';
+  if (mirrorBtn) mirrorBtn.style.display = active ? 'inline-flex' : 'none';
+
   renderFileList();
 }
 
 function openAdminAuthModal() {
   const m = document.getElementById('adminAuthModal');
-  if (m) {
-    m.style.display = 'flex';
+  const inputSec = document.getElementById('adminAuthInputSection');
+  const activeSec = document.getElementById('adminActiveSection');
+  const footer = document.getElementById('adminAuthFooter');
+  const btnSubmit = document.getElementById('btnSubmitAdminAuth');
+
+  if (!m) return;
+  m.style.display = 'flex';
+
+  if (isAdminActive) {
+    // Mode Admin is already active: Show reset/lock options
+    if (inputSec) inputSec.style.display = 'none';
+    if (activeSec) activeSec.style.display = 'block';
+    if (btnSubmit) btnSubmit.style.display = 'none';
+  } else {
+    // Mode Admin is inactive: Show PIN prompt
+    if (inputSec) inputSec.style.display = 'flex';
+    if (activeSec) activeSec.style.display = 'none';
+    if (btnSubmit) btnSubmit.style.display = 'inline-flex';
     document.getElementById('adminPinInput')?.focus();
   }
 }
@@ -1627,14 +1582,25 @@ function verifyAdminPin() {
   if (pin === '290722') {
     if (rememberCb && rememberCb.checked) {
       localStorage.setItem('harudrive_admin_pin', pin);
+    } else {
+      localStorage.removeItem('harudrive_admin_pin');
     }
     setAdminState(true);
     closeAdminAuthModal();
+    if (pinInput) pinInput.value = '';
     alert('✅ Mode Admin Berhasil Diaktifkan!');
   } else {
-    alert('❌ PIN Admin Salah!');
+    alert('❌ PIN Admin Salah! Silakan periksa kembali.');
     pinInput?.focus();
+    pinInput?.select();
   }
+}
+
+function resetAndLockAdmin() {
+  localStorage.removeItem('harudrive_admin_pin');
+  setAdminState(false);
+  closeAdminAuthModal();
+  alert('🔒 Mode Admin telah dikunci & PIN tersimpan berhasil dihapus dari browser ini.');
 }
 
 // New Folder Modal
@@ -1886,8 +1852,8 @@ function loginUI(errorMsg = '') {
   return `
   <div style="min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px;">
     <div class="glass" style="max-width: 400px; width: 100%; padding: 32px; border-radius: 24px; text-align: center; box-shadow: 0 20px 50px rgba(0,0,0,0.3);">
-      <div class="logo-glow-wrap" style="margin: 0 auto 16px; width: 56px; height: 56px; font-size: 1.8rem;">
-        <svg class="icon icon-lg" viewBox="0 0 24 24"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+      <div class="logo-glow-wrap" style="margin: 0 auto 16px; width: 56px; height: 56px;">
+        <svg class="sakura-icon-svg" style="width: 32px; height: 32px;" viewBox="0 0 24 24"><path d="M12 2a4 4 0 0 0-3.5 6 4 4 0 0 0-6 3.5 4 4 0 0 0 3.5 6 4 4 0 0 0 6 3.5 4 4 0 0 0 6-3.5 4 4 0 0 0 3.5-6 4 4 0 0 0-3.5-6 4 4 0 0 0-6-3.5z"/><circle cx="12" cy="12" r="2.5" fill="#ffffff"/></svg>
       </div>
       <h2 style="font-size: 1.6rem; font-weight: 800; margin-bottom: 6px; background: var(--accent-gradient); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">HaruDrive Index</h2>
       <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 24px;">Masukkan password untuk mengakses storage cloud.</p>
@@ -1910,7 +1876,7 @@ function mainUI() {
       <div class="nav-left">
         <a href="/" class="brand-logo" id="logoLink">
           <div class="logo-glow-wrap">
-            <svg class="icon icon-lg" viewBox="0 0 24 24"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+            <svg class="sakura-icon-svg" viewBox="0 0 24 24"><path d="M12 2a4 4 0 0 0-3.5 6 4 4 0 0 0-6 3.5 4 4 0 0 0 3.5 6 4 4 0 0 0 6 3.5 4 4 0 0 0 6-3.5 4 4 0 0 0 3.5-6 4 4 0 0 0-3.5-6 4 4 0 0 0-6-3.5z"/><circle cx="12" cy="12" r="2.5" fill="#ffffff"/></svg>
           </div>
           <div class="brand-info">
             <span class="brand-title">HaruDrive</span>
@@ -1936,6 +1902,7 @@ function mainUI() {
           <svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
         </button>
 
+        <!-- MIRROR BUTTON (SHOWN ONLY WHEN ADMIN IS ACTIVE) -->
         <button class="nav-btn btn-mirror-stealth" id="mirrorModalBtn" title="Cloud Mirror Engine">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/><polyline points="12 13 12 7 9 10"/><polyline points="12 7 15 10"/></svg>
           <span class="btn-text-label">Mirror</span>
@@ -2034,7 +2001,7 @@ function mainUI() {
     <button class="btn-bulk" onclick="clearBulkSelection()">Batal</button>
   </div>
 
-  <!-- PLYR VIDEO MODAL -->
+  <!-- COMPACT THEATER PLYR VIDEO MODAL -->
   <div id="videoModal" class="modal-backdrop" style="display: none;">
     <div class="modal-card video-card">
       <div class="modal-header">
@@ -2046,33 +2013,44 @@ function mainUI() {
       <div class="video-container-wrap">
         <video id="plyrPlayer" playsinline controls></video>
       </div>
-      <div class="modal-body" style="padding: 14px 20px;">
-        <div style="font-size: 0.78rem; font-weight: 700; color: var(--text-dim); text-transform: uppercase;">Buka di External Player:</div>
+      <div class="modal-body" style="padding: 10px 18px 14px;">
+        <div style="font-size: 0.72rem; font-weight: 700; color: var(--text-dim); text-transform: uppercase; margin-bottom: 6px;">Buka di External Player:</div>
         <div class="external-players-row" id="externalPlayersContainer"></div>
       </div>
     </div>
   </div>
 
-  <!-- ADMIN AUTH MODAL -->
+  <!-- ADMIN AUTH MODAL (WITH RESET/LOCK SUPPORT) -->
   <div id="adminAuthModal" class="modal-backdrop" style="display: none;">
     <div class="modal-card">
       <div class="modal-header">
-        <span class="modal-title">🔐 Buka Mode Admin File Manager</span>
+        <span class="modal-title" id="adminModalTitle">🔐 Mode Admin File Manager</span>
         <button class="btn-close-circle" onclick="closeAdminAuthModal()">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
       </div>
-      <div class="modal-body">
-        <p style="font-size: 0.86rem; color: var(--text-muted);">Masukkan 6-digit PIN Admin Anda untuk mengaktifkan fitur Buat Folder, Rename, dan Hapus:</p>
-        <input type="password" id="adminPinInput" class="form-input-pro" placeholder="Masukkan PIN Admin (290722)" maxlength="10" style="text-align: center; font-size: 1.2rem; letter-spacing: 4px;">
+      
+      <div id="adminAuthInputSection" class="modal-body">
+        <p style="font-size: 0.86rem; color: var(--text-muted);">Masukkan 6-digit PIN Admin Anda untuk mengaktifkan fitur Buat Folder, Rename, Delete, dan Cloud Mirror:</p>
+        <input type="password" id="adminPinInput" class="form-input-pro" placeholder="PIN Admin (290722)" maxlength="10" style="text-align: center; font-size: 1.2rem; letter-spacing: 4px;">
         <label style="display: flex; align-items: center; gap: 8px; font-size: 0.84rem; cursor: pointer;">
           <input type="checkbox" id="rememberAdminPin" checked>
           <span>Ingat PIN Admin di browser ini</span>
         </label>
       </div>
-      <div class="modal-footer">
-        <button class="nav-btn" onclick="closeAdminAuthModal()">Batal</button>
-        <button class="nav-btn" style="background: var(--accent-gradient); color: white; border: none;" onclick="verifyAdminPin()">Aktifkan Admin</button>
+
+      <div id="adminActiveSection" class="modal-body" style="display: none;">
+        <div style="background: rgba(16, 185, 129, 0.12); border: 1px solid rgba(16, 185, 129, 0.3); padding: 14px; border-radius: 12px; text-align: center;">
+          <p style="font-size: 0.95rem; font-weight: 700; color: #10b981; margin-bottom: 4px;">✅ Mode Admin Sedang Aktif</p>
+          <p style="font-size: 0.82rem; color: var(--text-muted);">Semua fitur manajemen file dan tombol Cloud Mirror sudah terbuka.</p>
+        </div>
+        <p style="font-size: 0.84rem; color: var(--text-muted); margin-top: 6px;">Ingin mengunci kembali atau mereset PIN tersimpan di browser ini?</p>
+        <button class="nav-btn" style="width: 100%; justify-content: center; background: rgba(239, 68, 68, 0.15); border-color: rgba(239, 68, 68, 0.4); color: #ef4444; font-weight: 700;" onclick="resetAndLockAdmin()">🔒 Kunci & Lupakan PIN Admin</button>
+      </div>
+
+      <div class="modal-footer" id="adminAuthFooter">
+        <button class="nav-btn" onclick="closeAdminAuthModal()">Tutup</button>
+        <button class="nav-btn" id="btnSubmitAdminAuth" style="background: var(--accent-gradient); color: white; border: none;" onclick="verifyAdminPin()">Aktifkan Admin</button>
       </div>
     </div>
   </div>
