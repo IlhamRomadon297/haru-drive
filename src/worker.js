@@ -58,7 +58,7 @@ export default {
       });
     }
 
-    // API: Available Folders (100% Live Hugging Face Tree)
+    // API: Available Folders
     if (url.pathname === '/api/folders') {
       try {
         const repoId = HF_REPO_ID;
@@ -78,9 +78,16 @@ export default {
           });
         }
 
+        if (env.harudrive_db) {
+          const { results } = await env.harudrive_db.prepare("SELECT file_path FROM shortlinks WHERE type = 'folder'").all();
+          (results || []).forEach(r => {
+            if (r.file_path) folderSet.add(r.file_path);
+          });
+        }
+
         const sortedFolders = Array.from(folderSet).sort((a, b) => a.localeCompare(b));
         return new Response(JSON.stringify({ folders: sortedFolders }), {
-          headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' }
+          headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
         });
       } catch (err) {
         return new Response(JSON.stringify({ folders: [''] }), {
@@ -362,8 +369,8 @@ export default {
         const runs = (data.workflow_runs || []).map(r => ({
           id: r.id,
           name: r.name || 'Cloud Mirror Runner',
-          status: r.status, // queued, in_progress, completed
-          conclusion: r.conclusion, // success, failure, cancelled, null
+          status: r.status,
+          conclusion: r.conclusion,
           created_at: r.created_at,
           updated_at: r.updated_at,
           html_url: r.html_url,
@@ -1751,7 +1758,6 @@ function unlockAdminConsole() {
     document.getElementById('adminMainContent').style.display = 'block';
     loadFolder(currentPath, currentFolderId);
     fetchFolderTree();
-    fetchAndRenderTasks();
   } else {
     alert('PIN Admin Salah!');
     pinInput?.focus();
@@ -2050,11 +2056,10 @@ function downloadFile(shortId) {
 }
 
 // Manual Upload Modal (Admin)
-async function openUploadModal() {
+function openUploadModal() {
   const m = document.getElementById('uploadModal');
   if (!m) return;
 
-  await fetchFolderTree();
   renderFolderPickerUI('uploadFolderPicker', 'uploadTargetDirInput', currentPath);
   selectedUploadFile = null;
   document.getElementById('selectedFileInfo').style.display = 'none';
@@ -2347,10 +2352,9 @@ function bulkCopyLinks() {
 }
 
 // Cloud Mirror Modal
-async function openMirrorModal() {
+function openMirrorModal() {
   const m = document.getElementById('mirrorModal');
   if (m) {
-    await fetchFolderTree();
     renderFolderPickerUI('mirrorFolderPicker', 'mirrorTargetPath', currentPath);
     m.style.display = 'flex';
   }
@@ -2459,10 +2463,7 @@ async function fetchAndRenderTasks() {
     if (!listEl) return;
 
     if (runs.length === 0) {
-      listEl.innerHTML = `
-        <div style="text-align: center; padding: 30px; color: var(--text-muted);">
-          <p style="font-size: 0.85rem;">Belum ada task Cloud Mirror yang dijalankan.</p>
-        </div>`;
+      listEl.innerHTML = '<div style="text-align: center; padding: 30px; color: var(--text-muted);"><p style="font-size: 0.85rem;">Belum ada task Cloud Mirror yang dijalankan.</p></div>';
       return;
     }
 
@@ -2475,65 +2476,44 @@ async function fetchAndRenderTasks() {
 
       let statusBadge = '';
       if (isRunning) {
-        statusBadge = `
-          <span style="display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border-radius: 12px; font-size: 0.72rem; font-weight: 700; background: rgba(245, 158, 11, 0.15); border: 1px solid rgba(245, 158, 11, 0.35); color: #f59e0b;">
-            <span class="pulse-dot" style="width: 6px; height: 6px; background: #f59e0b; box-shadow: 0 0 6px #f59e0b;"></span>
-            ${run.status === 'queued' ? 'Antre...' : 'Sedang Berjalan...'}
-          </span>`;
+        statusBadge = '<span style="display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border-radius: 12px; font-size: 0.72rem; font-weight: 700; background: rgba(245, 158, 11, 0.15); border: 1px solid rgba(245, 158, 11, 0.35); color: #f59e0b;"><span class="pulse-dot" style="width: 6px; height: 6px; background: #f59e0b; box-shadow: 0 0 6px #f59e0b;"></span>' + (run.status === 'queued' ? 'Antre...' : 'Sedang Berjalan...') + '</span>';
       } else if (isSuccess) {
-        statusBadge = `
-          <span style="display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 12px; font-size: 0.72rem; font-weight: 700; background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.35); color: #10b981;">
-            ✓ Selesai
-          </span>`;
+        statusBadge = '<span style="display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 12px; font-size: 0.72rem; font-weight: 700; background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.35); color: #10b981;">✓ Selesai</span>';
       } else {
-        statusBadge = `
-          <span style="display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 12px; font-size: 0.72rem; font-weight: 700; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.35); color: #ef4444;">
-            ✕ ${run.conclusion || 'Gagal'}
-          </span>`;
+        statusBadge = '<span style="display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 12px; font-size: 0.72rem; font-weight: 700; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.35); color: #ef4444;">✕ ' + (run.conclusion || 'Gagal') + '</span>';
       }
 
       const timeAgo = formatTimeAgo(run.created_at);
 
-      html += `
-        <div style="background: var(--bg-surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px; display: flex; flex-direction: column; gap: 8px; transition: all 0.2s;">
-          <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
-            <div style="display: flex; align-items: center; gap: 6px; min-width: 0;">
-              <svg class="icon icon-sm" style="color: var(--primary-light);" viewBox="0 0 24 24"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/><polyline points="12 13 12 7 9 10"/><polyline points="12 7 15 10"/></svg>
-              <span style="font-size: 0.85rem; font-weight: 700; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
-                ${escapeHtml(run.display_title || 'Mirror Job #' + run.id)}
-              </span>
-            </div>
-            ${statusBadge}
-          </div>
-
-          <div style="display: flex; align-items: center; justify-content: space-between; font-size: 0.75rem; color: var(--text-dim);">
-            <span>Mulai: ${timeAgo}</span>
-            <div style="display: flex; align-items: center; gap: 6px;">
-              ${isRunning ? `
-                <button class="nav-btn" style="padding: 3px 8px; font-size: 0.72rem; color: #ef4444; border-color: rgba(239,68,68,0.3); background: rgba(239,68,68,0.1);" onclick="cancelMirrorTask(${run.id})">
-                  Batalkan
-                </button>
-              ` : ''}
-              <a href="${run.html_url}" target="_blank" rel="noopener noreferrer" class="nav-btn" style="padding: 3px 8px; font-size: 0.72rem;">
-                Logs ↗
-              </a>
-            </div>
-          </div>
-        </div>
-      `;
+      html += '<div style="background: var(--bg-surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px; display: flex; flex-direction: column; gap: 8px; transition: all 0.2s;">' +
+        '<div style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">' +
+          '<div style="display: flex; align-items: center; gap: 6px; min-width: 0;">' +
+            '<svg class="icon icon-sm" style="color: var(--primary-light);" viewBox="0 0 24 24"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/><polyline points="12 13 12 7 9 10"/><polyline points="12 7 15 10"/></svg>' +
+            '<span style="font-size: 0.85rem; font-weight: 700; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">' + escapeHtml(run.display_title || 'Mirror Job #' + run.id) + '</span>' +
+          '</div>' +
+          statusBadge +
+        '</div>' +
+        '<div style="display: flex; align-items: center; justify-content: space-between; font-size: 0.75rem; color: var(--text-dim);">' +
+          '<span>Mulai: ' + timeAgo + '</span>' +
+          '<div style="display: flex; align-items: center; gap: 6px;">' +
+            (isRunning ? '<button class="nav-btn" style="padding: 3px 8px; font-size: 0.72rem; color: #ef4444; border-color: rgba(239,68,68,0.3); background: rgba(239,68,68,0.1);" onclick="cancelMirrorTask(' + run.id + ')">Batalkan</button>' : '') +
+            '<a href="' + run.html_url + '" target="_blank" rel="noopener noreferrer" class="nav-btn" style="padding: 3px 8px; font-size: 0.72rem;">Logs ↗</a>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
     });
 
     html += '</div>';
     listEl.innerHTML = html;
   } catch (err) {
     if (listEl) {
-      listEl.innerHTML = `<div style="text-align: center; padding: 20px; color: #ef4444; font-size: 0.85rem;">Gagal memuat task: ${err.message}</div>`;
+      listEl.innerHTML = '<div style="text-align: center; padding: 20px; color: #ef4444; font-size: 0.85rem;">Gagal memuat task: ' + err.message + '</div>';
     }
   }
 }
 
 async function cancelMirrorTask(runId) {
-  if (!confirm(`Yakin ingin membatalkan task #${runId}?`)) return;
+  if (!confirm('Yakin ingin membatalkan task #' + runId + '?')) return;
   const pin = localStorage.getItem('harudrive_admin_pin') || getCookie('harudrive_admin_pin') || '290722';
 
   try {
@@ -2557,10 +2537,10 @@ async function cancelMirrorTask(runId) {
 function formatTimeAgo(dateStr) {
   if (!dateStr) return '-';
   const diff = (Date.now() - new Date(dateStr).getTime()) / 1000;
-  if (diff < 60) return `${Math.floor(diff)} dtk lalu`;
-  if (diff < 3600) return `${Math.floor(diff / 60)} mnt lalu`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)} jam lalu`;
-  return `${Math.floor(diff / 86400)} hari lalu`;
+  if (diff < 60) return Math.floor(diff) + ' dtk lalu';
+  if (diff < 3600) return Math.floor(diff / 60) + ' mnt lalu';
+  if (diff < 86400) return Math.floor(diff / 3600) + ' jam lalu';
+  return Math.floor(diff / 86400) + ' hari lalu';
 }
 
 // Helpers
