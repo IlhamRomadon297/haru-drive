@@ -2,7 +2,7 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
-    // Reliable Environment Secrets with Defaults
+    // Reliable Environment Secrets with In-Code Defaults
     const HF_REPO_ID = env.HF_REPO_ID || 'harumidesu/harudrive-data';
     const HF_TOKEN = env.HF_TOKEN || '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';
     const APP_PASSWORD = env.APP_PASSWORD || 'HaruDrive_Desu';
@@ -367,7 +367,7 @@ function loginUI(errorMsg = '') {
   return `
   <div class="login-wrapper">
     <div class="login-card glass">
-      <div class="brand-logo">
+      <div class="brand-logo" style="justify-content:center; margin-bottom:12px;">
         <span class="logo-icon">🌸</span>
         <h1 class="brand-title">HaruDrive</h1>
       </div>
@@ -440,8 +440,11 @@ function mainUI() {
   <div id="videoModal" class="modal-backdrop" style="display:none;" onclick="if(event.target===this)closeModal()">
     <div class="modal-card video-card glass">
       <div class="modal-header">
-        <h3 id="modalTitle" class="modal-title">Streaming Video</h3>
-        <button class="btn-close" onclick="closeModal()">✕</button>
+        <div class="modal-title-group">
+          <span class="modal-header-icon">🎬</span>
+          <h3 id="modalTitle" class="modal-title">Streaming Video</h3>
+        </div>
+        <button class="btn-close-circle" onclick="closeModal()" title="Close">✕</button>
       </div>
       <div class="modal-body">
         <video id="videoPlayer" controls autoplay playsinline controlslist="nodownload"></video>
@@ -453,56 +456,80 @@ function mainUI() {
   <div id="mirrorModal" class="modal-backdrop" style="display:none;" onclick="if(event.target===this)closeMirrorModal()">
     <div class="modal-card mirror-card glass">
       <div class="modal-header">
-        <div class="mirror-header-title">
-          <span style="font-size:1.5rem;">🚀</span>
+        <div class="modal-title-group">
+          <div class="modal-badge-icon">🚀</div>
           <div>
-            <h3>Cloud-to-Cloud Mirror (Admin Only)</h3>
-            <p class="subtitle">Sync Google Drive Folder/File to Hugging Face Dataset with 0% local bandwidth!</p>
+            <div class="title-with-badge">
+              <h3 class="modal-title">Cloud-to-Cloud Mirror</h3>
+              <span class="badge-admin">Admin Only 🛡️</span>
+            </div>
+            <p class="modal-subtitle">Transfer GDrive files straight to Hugging Face with 0% local bandwidth!</p>
           </div>
         </div>
-        <button class="btn-close" onclick="closeMirrorModal()">✕</button>
+        <button class="btn-close-circle" onclick="closeMirrorModal()" title="Close">✕</button>
       </div>
+
       <div class="modal-body">
-        <div class="info-card">
-          <span class="info-badge">Gigabit Server Speed</span>
-          <p>Proses download dan upload berjalan 100% di cloud runner. Laptop atau HP bisa dimatikan setelah proses dimulai.</p>
+        <div class="speed-info-banner">
+          <div class="speed-badge">⚡ GIGABIT CLOUD SPEED</div>
+          <p>Proses download dan upload berjalan 100% di server cloud runner. Laptop atau HP bisa dimatikan setelah proses dimulai.</p>
         </div>
 
-        <form id="mirrorForm" onsubmit="submitCloudMirror(event)">
-          <div class="form-group">
-            <label>Google Drive File / Folder URL or ID</label>
-            <input type="text" id="mirrorGdriveUrl" placeholder="https://drive.google.com/drive/folders/... or File URL" required />
-            <small>Pastikan share setting link GDrive adalah "Anyone with the link can view".</small>
-          </div>
-          <div class="form-group">
-            <label>Target Folder in Hugging Face (Optional)</label>
-            <input type="text" id="mirrorTargetPath" placeholder="e.g. Movies/2026 or leave empty for root" />
-          </div>
-
-          <div class="form-group pin-group">
-            <label>🔐 Admin Security PIN</label>
-            <input type="password" id="mirrorAdminPin" placeholder="Enter Admin PIN (6-digits)" required />
-            <div class="remember-pin-wrap">
-              <label class="cb-label">
-                <input type="checkbox" id="rememberPinCb" /> Remember PIN on this device
-              </label>
+        <form id="mirrorForm" onsubmit="submitCloudMirror(event)" class="mirror-form">
+          <div class="form-field">
+            <label for="mirrorGdriveUrl">
+              <span>Google Drive File / Folder Link</span>
+              <span class="label-hint">Public / Anyone with link</span>
+            </label>
+            <div class="input-with-icon">
+              <span class="field-icon">🔗</span>
+              <input type="text" id="mirrorGdriveUrl" placeholder="https://drive.google.com/drive/folders/... or File URL" required />
             </div>
           </div>
 
-          <div class="form-actions">
-            <button type="submit" id="startMirrorBtn" class="btn-primary">⚡ Start Cloud Mirror (GitHub Actions)</button>
+          <div class="form-field">
+            <label for="mirrorTargetPath">
+              <span>Target Folder in Hugging Face</span>
+              <span class="label-hint">Optional</span>
+            </label>
+            <div class="input-with-icon">
+              <span class="field-icon">📁</span>
+              <input type="text" id="mirrorTargetPath" placeholder="e.g. Movies/2026 (leave blank for Root)" />
+            </div>
           </div>
+
+          <div class="admin-pin-card">
+            <div class="pin-header">
+              <label for="mirrorAdminPin">🔐 Admin Security PIN</label>
+              <span class="pin-protected-tag">Protected</span>
+            </div>
+            <div class="input-with-icon">
+              <span class="field-icon">🔑</span>
+              <input type="password" id="mirrorAdminPin" placeholder="Enter 6-digit PIN..." required />
+            </div>
+            <label class="remember-pin-label">
+              <input type="checkbox" id="rememberPinCb" />
+              <span>Remember PIN on this device</span>
+            </label>
+          </div>
+
+          <button type="submit" id="startMirrorBtn" class="btn-start-mirror">
+            <span>⚡ Start Cloud Mirror (GitHub Actions)</span>
+          </button>
         </form>
 
-        <div class="divider"><span>ATAU JIKA LIMIT GITHUB HABIS</span></div>
+        <div class="or-divider">
+          <span>ATAU JIKA LIMIT GITHUB HABIS</span>
+        </div>
 
-        <div class="colab-card">
+        <div class="colab-card-modern">
+          <div class="colab-icon-badge">⚡</div>
           <div class="colab-info">
             <strong>Google Colab Runner (Unlimited Backup)</strong>
-            <p>Jalankan script mirror di Google Colab (12 jam runtime gratis, kecepatan gigabit).</p>
+            <p>Jalankan script mirror di Google Colab dengan runtime 12 jam gratis & kecepatan gigabit.</p>
           </div>
-          <a href="https://colab.research.google.com/github/IlhamRomadon297/haru-drive/blob/main/tools/HaruDrive_Colab_Mirror.ipynb" target="_blank" class="btn-colab">
-            ⚡ Open 1-Click Colab
+          <a href="https://colab.research.google.com/github/IlhamRomadon297/haru-drive/blob/main/tools/HaruDrive_Colab_Mirror.ipynb" target="_blank" class="btn-colab-modern">
+            Open Colab ↗
           </a>
         </div>
       </div>
@@ -513,7 +540,7 @@ function mainUI() {
   `;
 }
 
-const EMBEDDED_CLIENT_JS = "\nlet currentPath = '';\nlet allFiles = [];\nlet searchDebounceTimer = null;\nlet isSearching = false;\nlet sakuraClickCount = 0;\nlet sakuraClickTimer = null;\n\n// ==========================================\n// File Listing & Navigation\n// ==========================================\nasync function loadFiles(path) {\n  if (path === undefined || path === null) path = '';\n  currentPath = path;\n  isSearching = false;\n  const listEl = document.getElementById('fileList');\n  if (!listEl) return;\n  listEl.innerHTML = '<div class=\"loading-state\"><div class=\"spinner\"></div><p>Fetching files from Hugging Face Storage...</p></div>';\n  \n  updateBreadcrumbs(path);\n\n  try {\n    const res = await fetch('/api/list?path=' + encodeURIComponent(path));\n    if (!res.ok) {\n      const errData = await res.json().catch(() => ({}));\n      throw new Error(errData.error || 'Failed to fetch directory');\n    }\n    const data = await res.json();\n    allFiles = data.files || [];\n    renderFiles(allFiles);\n  } catch (e) {\n    listEl.innerHTML = '<div class=\"loading-state\" style=\"color:#ef4444;\"><p>\u274c Error: ' + escapeHtml(e.message) + '</p></div>';\n  }\n}\n\nfunction renderFiles(files, isGlobalSearch = false) {\n  const listEl = document.getElementById('fileList');\n  if (!listEl) return;\n  if (!files || files.length === 0) {\n    listEl.innerHTML = '<div class=\"loading-state\"><p>' + (isGlobalSearch ? '\ud83d\udd0d No files matched your search' : '\ud83d\udcc2 Folder is empty') + '</p></div>';\n    return;\n  }\n\n  let html = '';\n  for (let i = 0; i < files.length; i++) {\n    const file = files[i];\n    const isDir = file.mimeType === 'application/vnd.google-apps.folder';\n    const isVideo = (file.mimeType && file.mimeType.startsWith('video/')) || /\\.(mp4|mkv|webm|avi|mov)$/i.test(file.name);\n    const icon = isDir ? '\ud83d\udcc1' : (isVideo ? '\ud83c\udfac' : '\ud83d\udcc4');\n    const fileUrl = '/file/' + file.id + '/' + encodeURIComponent(file.name);\n\n    let actionBtns = '';\n    if (isVideo) {\n      actionBtns += '<button class=\"btn-act play\" data-name=\"' + encodeURIComponent(file.name) + '\" data-url=\"' + encodeURIComponent(fileUrl) + '\" onclick=\"handlePlayClick(this)\">\u25b6 Play</button>';\n    }\n    if (!isDir) {\n      actionBtns += '<a href=\"' + fileUrl + '\" class=\"btn-act\" download>\u2b07</a>';\n      actionBtns += '<button class=\"btn-act\" data-url=\"' + window.location.origin + fileUrl + '\" onclick=\"handleCopyClick(this)\">\ud83d\udd17</button>';\n    }\n\n    let clickAttr = '';\n    if (isDir) {\n      clickAttr = 'data-path=\"' + encodeURIComponent(file.path) + '\" onclick=\"handleFolderClick(this)\"';\n    } else if (isVideo) {\n      clickAttr = 'data-name=\"' + encodeURIComponent(file.name) + '\" data-url=\"' + encodeURIComponent(fileUrl) + '\" onclick=\"handlePlayClick(this)\"';\n    } else {\n      clickAttr = 'data-url=\"' + fileUrl + '\" onclick=\"handleFileClick(this)\"';\n    }\n\n    const folderBadge = (isGlobalSearch && file.parentDir) \n      ? '<span class=\"parent-badge\" data-path=\"' + encodeURIComponent(file.parentDir) + '\" onclick=\"event.stopPropagation(); handleFolderClick(this)\">\ud83d\udcc1 ' + escapeHtml(file.parentDir) + '</span>' \n      : '';\n\n    html += '<div class=\"file-row ' + (isDir ? 'is-folder' : '') + '\">' +\n      '<div class=\"col-cb\">' +\n        (!isDir ? '<input type=\"checkbox\" class=\"item-cb\" value=\"' + window.location.origin + fileUrl + '\" onchange=\"updateBulkToolbar()\" />' : '') +\n      '</div>' +\n      '<div class=\"file-name-cell\" ' + clickAttr + '>' +\n        '<span class=\"file-icon\">' + icon + '</span>' +\n        '<div class=\"file-info-group\">' +\n          '<span class=\"file-title\">' + escapeHtml(file.name) + '</span>' +\n          folderBadge +\n        '</div>' +\n      '</div>' +\n      '<div class=\"file-size-cell\">' + (isDir ? '-' : formatBytes(file.size)) + '</div>' +\n      '<div class=\"file-date-cell\">' + formatDate(file.modifiedTime) + '</div>' +\n      '<div class=\"file-actions-cell\">' + actionBtns + '</div>' +\n    '</div>';\n  }\n  listEl.innerHTML = html;\n}\n\nfunction handleFolderClick(el) {\n  const path = decodeURIComponent(el.dataset.path || '');\n  const searchInput = document.getElementById('searchInput');\n  if (searchInput) searchInput.value = '';\n  navigateTo(path);\n}\n\nfunction handlePlayClick(el) {\n  const name = decodeURIComponent(el.dataset.name || '');\n  const url = decodeURIComponent(el.dataset.url || '');\n  openVideoModal(name, url);\n}\n\nfunction handleFileClick(el) {\n  const url = el.dataset.url || '';\n  if (url) window.open(url, '_blank');\n}\n\nfunction handleCopyClick(el) {\n  const url = el.dataset.url || '';\n  copyLink(url);\n}\n\nfunction navigateTo(path) {\n  window.history.pushState(null, '', path ? '?p=' + encodeURIComponent(path) : '/');\n  loadFiles(path);\n}\n\nfunction updateBreadcrumbs(path) {\n  const bar = document.getElementById('breadcrumbBar');\n  if (!bar) return;\n  if (!path) {\n    bar.innerHTML = '<span class=\"crumb-current\">\ud83c\udfe0 Home</span>';\n    return;\n  }\n  const parts = path.split('/');\n  let html = '<span class=\"crumb\" onclick=\"navigateTo(\\'\\')\">\ud83c\udfe0 Home</span>';\n  let accum = '';\n  for (let idx = 0; idx < parts.length; idx++) {\n    const p = parts[idx];\n    accum += (idx === 0 ? '' : '/') + p;\n    const isLast = idx === parts.length - 1;\n    html += ' <span class=\"crumb-sep\">/</span> ';\n    if (isLast) {\n      html += '<span class=\"crumb-current\">' + escapeHtml(p) + '</span>';\n    } else {\n      html += '<span class=\"crumb\" data-target=\"' + encodeURIComponent(accum) + '\" onclick=\"navigateTo(decodeURIComponent(this.dataset.target))\">' + escapeHtml(p) + '</span>';\n    }\n  }\n  bar.innerHTML = html;\n}\n\n// ==========================================\n// Realtime Global Search (D1 Database)\n// ==========================================\nfunction onSearchInput(input) {\n  const q = input.value.trim();\n  clearTimeout(searchDebounceTimer);\n  \n  if (!q) {\n    if (isSearching) {\n      isSearching = false;\n      updateBreadcrumbs(currentPath);\n      renderFiles(allFiles);\n    }\n    return;\n  }\n\n  searchDebounceTimer = setTimeout(async () => {\n    isSearching = true;\n    const listEl = document.getElementById('fileList');\n    if (listEl) {\n      listEl.innerHTML = '<div class=\"loading-state\"><div class=\"spinner\"></div><p>Searching globally across all folders...</p></div>';\n    }\n    \n    const bar = document.getElementById('breadcrumbBar');\n    if (bar) {\n      bar.innerHTML = '<span class=\"crumb-current\">\ud83d\udd0d Global Search: \"' + escapeHtml(q) + '\"</span> <button class=\"btn-clear-search\" onclick=\"clearSearch()\">\u2715 Clear</button>';\n    }\n\n    try {\n      const res = await fetch('/api/search?q=' + encodeURIComponent(q));\n      if (!res.ok) throw new Error('Search failed');\n      const data = await res.json();\n      renderFiles(data.files || [], true);\n    } catch (e) {\n      if (listEl) {\n        listEl.innerHTML = '<div class=\"loading-state\" style=\"color:#ef4444;\"><p>\u274c Search error: ' + escapeHtml(e.message) + '</p></div>';\n      }\n    }\n  }, 250);\n}\n\nfunction clearSearch() {\n  const input = document.getElementById('searchInput');\n  if (input) input.value = '';\n  isSearching = false;\n  updateBreadcrumbs(currentPath);\n  renderFiles(allFiles);\n}\n\n// ==========================================\n// Bulk Actions Toolbar\n// ==========================================\nfunction updateBulkToolbar() {\n  const checked = document.querySelectorAll('.item-cb:checked');\n  const bar = document.getElementById('bulkToolbar');\n  if (!bar) return;\n  if (checked.length > 0) {\n    bar.style.display = 'flex';\n    const countEl = document.getElementById('bulkCount');\n    if (countEl) countEl.textContent = checked.length + ' selected';\n  } else {\n    bar.style.display = 'none';\n  }\n}\n\nfunction toggleSelectAll(masterCb) {\n  document.querySelectorAll('.item-cb').forEach(cb => { cb.checked = masterCb.checked; });\n  updateBulkToolbar();\n}\n\nfunction deselectAll() {\n  document.querySelectorAll('.item-cb').forEach(cb => { cb.checked = false; });\n  const master = document.getElementById('selectAllCb');\n  if (master) master.checked = false;\n  updateBulkToolbar();\n}\n\nfunction copySelectedLinks() {\n  const selected = Array.from(document.querySelectorAll('.item-cb:checked')).map(cb => cb.value);\n  if (!selected.length) return;\n  navigator.clipboard.writeText(selected.join('\\n')).then(() => {\n    showToast('Copied ' + selected.length + ' links to clipboard! \ud83d\udccb');\n    deselectAll();\n  });\n}\n\nfunction copyLink(url) {\n  navigator.clipboard.writeText(url).then(() => { showToast('Link copied to clipboard! \ud83d\udd17'); });\n}\n\nasync function downloadSelected() {\n  const selected = Array.from(document.querySelectorAll('.item-cb:checked')).map(cb => cb.value);\n  if (!selected.length) return;\n  showToast('Starting batch download...');\n  for (let i = 0; i < selected.length; i++) {\n    const a = document.createElement('a');\n    a.href = selected[i];\n    a.download = '';\n    document.body.appendChild(a);\n    a.click();\n    document.body.removeChild(a);\n    await new Promise(r => setTimeout(r, 600));\n  }\n  deselectAll();\n}\n\n// ==========================================\n// Video Player Modal\n// ==========================================\nfunction openVideoModal(name, url) {\n  const titleEl = document.getElementById('modalTitle');\n  if (titleEl) titleEl.textContent = name;\n  const player = document.getElementById('videoPlayer');\n  if (player) {\n    player.src = url;\n    player.play().catch(() => {});\n  }\n  \n  const fullUrl = window.location.origin + url;\n  const cleanUrl = fullUrl.replace(/^https?:\\/\\//, '');\n  const footer = document.getElementById('modalFooter');\n  if (footer) {\n    footer.innerHTML = \n      '<a href=\"' + url + '\" class=\"btn-player\" download>\u2b07 Download Video</a>' +\n      '<button class=\"btn-player\" data-url=\"' + fullUrl + '\" onclick=\"handleCopyClick(this)\">\ud83d\udd17 Copy Stream Link</button>' +\n      '<a href=\"potplayer://' + fullUrl + '\" class=\"btn-player\">PotPlayer</a>' +\n      '<a href=\"vlc://' + fullUrl + '\" class=\"btn-player\">VLC iOS/Mac</a>' +\n      '<a href=\"iina://weblink?url=' + fullUrl + '\" class=\"btn-player\">IINA (Mac)</a>' +\n      '<a href=\"intent://' + cleanUrl + '#Intent;action=android.intent.action.VIEW;scheme=https;type=video/*;package=org.videolan.vlc;end\" class=\"btn-player\">VLC Android</a>' +\n      '<a href=\"intent://' + cleanUrl + '#Intent;action=android.intent.action.VIEW;scheme=https;type=video/*;package=com.mxtech.videoplayer.ad;end\" class=\"btn-player\">MX Player</a>';\n  }\n\n  const modal = document.getElementById('videoModal');\n  if (modal) modal.style.display = 'flex';\n}\n\nfunction closeModal() {\n  const modal = document.getElementById('videoModal');\n  if (modal) modal.style.display = 'none';\n  const player = document.getElementById('videoPlayer');\n  if (player) {\n    player.pause();\n    player.src = '';\n  }\n}\n\n// ==========================================\n// Stealth Mode & Admin Mirror Modal (PIN 290722 Protected)\n// ==========================================\nfunction triggerSakuraSecret() {\n  sakuraClickCount++;\n  clearTimeout(sakuraClickTimer);\n  sakuraClickTimer = setTimeout(() => { sakuraClickCount = 0; }, 2000);\n\n  if (sakuraClickCount >= 3) {\n    sakuraClickCount = 0;\n    revealAdminMirror();\n  }\n}\n\nfunction revealAdminMirror() {\n  const btn = document.getElementById('mirrorModalBtn');\n  if (btn) {\n    btn.style.display = 'inline-flex';\n  }\n  showToast('\u2728 Admin Mode Activated!');\n  openMirrorModal();\n}\n\n// Secret shortcut: Ctrl + Shift + M\nwindow.addEventListener('keydown', (e) => {\n  if (e.ctrlKey && e.shiftKey && (e.key === 'M' || e.key === 'm')) {\n    e.preventDefault();\n    revealAdminMirror();\n  }\n});\n\nfunction openMirrorModal() {\n  const pinInput = document.getElementById('mirrorAdminPin');\n  const savedPin = localStorage.getItem('harudrive_admin_pin');\n  if (pinInput && savedPin) {\n    pinInput.value = savedPin;\n    const rememberCb = document.getElementById('rememberPinCb');\n    if (rememberCb) rememberCb.checked = true;\n  }\n  const m = document.getElementById('mirrorModal');\n  if (m) m.style.display = 'flex';\n}\n\nfunction closeMirrorModal() {\n  const m = document.getElementById('mirrorModal');\n  if (m) m.style.display = 'none';\n}\n\nasync function submitCloudMirror(e) {\n  e.preventDefault();\n  const gdriveInput = document.getElementById('mirrorGdriveUrl');\n  const targetInput = document.getElementById('mirrorTargetPath');\n  const pinInput = document.getElementById('mirrorAdminPin');\n  const rememberCb = document.getElementById('rememberPinCb');\n\n  const gdrive_url = gdriveInput ? gdriveInput.value.trim() : '';\n  const target_path = targetInput ? targetInput.value.trim() : '';\n  const admin_pin = pinInput ? pinInput.value.trim() : '';\n\n  if (!admin_pin) {\n    alert('\u26a0\ufe0f Harap masukkan Admin PIN untuk memulai mirror.');\n    if (pinInput) pinInput.focus();\n    return;\n  }\n\n  const btn = document.getElementById('startMirrorBtn');\n  if (btn) {\n    btn.disabled = true;\n    btn.textContent = '\ud83d\ude80 Verifying PIN & Dispatching...';\n  }\n\n  try {\n    const res = await fetch('/api/admin/mirror', {\n      method: 'POST',\n      headers: { 'Content-Type': 'application/json' },\n      body: JSON.stringify({ gdrive_url: gdrive_url, target_path: target_path, admin_pin: admin_pin })\n    });\n    const result = await res.json();\n    if (res.ok && result.success) {\n      if (rememberCb && rememberCb.checked) {\n        localStorage.setItem('harudrive_admin_pin', admin_pin);\n      } else {\n        localStorage.removeItem('harudrive_admin_pin');\n      }\n      alert('\u2705 SUCCESS!\\n\\n' + result.message + '\\n\\nProses mirror sedang berjalan di GitHub Actions Cloud.');\n      closeMirrorModal();\n    } else {\n      alert('\u274c Akses Ditolak: ' + (result.error || 'PIN Admin Salah atau gagal dispatch job.'));\n      if (pinInput) {\n        pinInput.focus();\n        pinInput.select();\n      }\n    }\n  } catch (err) {\n    alert('\u274c Error: ' + err.message);\n  } finally {\n    if (btn) {\n      btn.disabled = false;\n      btn.textContent = '\u26a1 Start Cloud Mirror (GitHub Actions)';\n    }\n  }\n}\n\n// ==========================================\n// Utilities & Init\n// ==========================================\nfunction showToast(msg) {\n  const toast = document.getElementById('toastOverlay');\n  if (!toast) return;\n  toast.textContent = msg;\n  toast.style.display = 'block';\n  setTimeout(() => { toast.style.display = 'none'; }, 3000);\n}\n\nfunction toggleDark() {\n  const isLight = document.body.classList.toggle('light');\n  localStorage.setItem('haruTheme', isLight ? 'light' : 'dark');\n  const toggle = document.getElementById('darkToggle');\n  if (toggle) toggle.textContent = isLight ? '\ud83c\udf19' : '\u2600\ufe0f';\n}\n\nfunction formatBytes(bytes) {\n  if (!bytes || bytes === 0) return '0 B';\n  const k = 1024;\n  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];\n  const i = Math.floor(Math.log(bytes) / Math.log(k));\n  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];\n}\n\nfunction formatDate(dateStr) {\n  if (!dateStr) return '-';\n  const d = new Date(dateStr);\n  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });\n}\n\nfunction escapeHtml(str) {\n  return (str || '').replace(/[&<>\"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' }[m]));\n}\n\n// History back/forward navigation\nwindow.addEventListener('popstate', () => {\n  const params = new URLSearchParams(window.location.search);\n  loadFiles(params.get('p') || '');\n});\n\n// Initialization\nfunction initHaruDrive() {\n  if (localStorage.getItem('haruTheme') === 'light') {\n    document.body.classList.add('light');\n    const toggle = document.getElementById('darkToggle');\n    if (toggle) toggle.textContent = '\ud83c\udf19';\n  }\n  if (localStorage.getItem('harudrive_admin_pin')) {\n    const btn = document.getElementById('mirrorModalBtn');\n    if (btn) btn.style.display = 'inline-flex';\n  }\n  const params = new URLSearchParams(window.location.search);\n  loadFiles(params.get('p') || '');\n}\n\nif (document.readyState === 'loading') {\n  document.addEventListener('DOMContentLoaded', initHaruDrive);\n} else {\n  initHaruDrive();\n}\n";
+const EMBEDDED_CLIENT_JS = "\nlet currentPath = '';\nlet allFiles = [];\nlet searchDebounceTimer = null;\nlet isSearching = false;\nlet sakuraClickCount = 0;\nlet sakuraClickTimer = null;\n\n// ==========================================\n// File Listing & Navigation\n// ==========================================\nasync function loadFiles(path) {\n  if (path === undefined || path === null) path = '';\n  currentPath = path;\n  isSearching = false;\n  const listEl = document.getElementById('fileList');\n  if (!listEl) return;\n  listEl.innerHTML = '<div class=\"loading-state\"><div class=\"spinner\"></div><p>Fetching files from Hugging Face Storage...</p></div>';\n  \n  updateBreadcrumbs(path);\n\n  try {\n    const res = await fetch('/api/list?path=' + encodeURIComponent(path));\n    if (!res.ok) {\n      const errData = await res.json().catch(() => ({}));\n      throw new Error(errData.error || 'Failed to fetch directory');\n    }\n    const data = await res.json();\n    allFiles = data.files || [];\n    renderFiles(allFiles);\n  } catch (e) {\n    listEl.innerHTML = '<div class=\"loading-state\" style=\"color:#ef4444;\"><p>\u274c Error: ' + escapeHtml(e.message) + '</p></div>';\n  }\n}\n\nfunction renderFiles(files, isGlobalSearch = false) {\n  const listEl = document.getElementById('fileList');\n  if (!listEl) return;\n  if (!files || files.length === 0) {\n    listEl.innerHTML = '<div class=\"loading-state\"><p>' + (isGlobalSearch ? '\ud83d\udd0d No files matched your search' : '\ud83d\udcc2 Folder is empty') + '</p></div>';\n    return;\n  }\n\n  let html = '';\n  for (let i = 0; i < files.length; i++) {\n    const file = files[i];\n    const isDir = file.mimeType === 'application/vnd.google-apps.folder';\n    const isVideo = (file.mimeType && file.mimeType.startsWith('video/')) || /\\.(mp4|mkv|webm|avi|mov)$/i.test(file.name);\n    const icon = isDir ? '\ud83d\udcc1' : (isVideo ? '\ud83c\udfac' : '\ud83d\udcc4');\n    const fileUrl = '/file/' + file.id + '/' + encodeURIComponent(file.name);\n\n    let actionBtns = '';\n    if (isVideo) {\n      actionBtns += '<button class=\"btn-act play\" data-name=\"' + encodeURIComponent(file.name) + '\" data-url=\"' + encodeURIComponent(fileUrl) + '\" onclick=\"handlePlayClick(this)\">\u25b6 Play</button>';\n    }\n    if (!isDir) {\n      actionBtns += '<a href=\"' + fileUrl + '\" class=\"btn-act\" download>\u2b07</a>';\n      actionBtns += '<button class=\"btn-act\" data-url=\"' + window.location.origin + fileUrl + '\" onclick=\"handleCopyClick(this)\">\ud83d\udd17</button>';\n    }\n\n    let clickAttr = '';\n    if (isDir) {\n      clickAttr = 'data-path=\"' + encodeURIComponent(file.path) + '\" onclick=\"handleFolderClick(this)\"';\n    } else if (isVideo) {\n      clickAttr = 'data-name=\"' + encodeURIComponent(file.name) + '\" data-url=\"' + encodeURIComponent(fileUrl) + '\" onclick=\"handlePlayClick(this)\"';\n    } else {\n      clickAttr = 'data-url=\"' + fileUrl + '\" onclick=\"handleFileClick(this)\"';\n    }\n\n    const folderBadge = (isGlobalSearch && file.parentDir) \n      ? '<span class=\"parent-badge\" data-path=\"' + encodeURIComponent(file.parentDir) + '\" onclick=\"event.stopPropagation(); handleFolderClick(this)\">\ud83d\udcc1 ' + escapeHtml(file.parentDir) + '</span>' \n      : '';\n\n    html += '<div class=\"file-row ' + (isDir ? 'is-folder' : '') + '\">' +\n      '<div class=\"col-cb\">' +\n        (!isDir ? '<input type=\"checkbox\" class=\"item-cb\" value=\"' + window.location.origin + fileUrl + '\" onchange=\"updateBulkToolbar()\" />' : '') +\n      '</div>' +\n      '<div class=\"file-name-cell\" ' + clickAttr + '>' +\n        '<span class=\"file-icon\">' + icon + '</span>' +\n        '<div class=\"file-info-group\">' +\n          '<span class=\"file-title\">' + escapeHtml(file.name) + '</span>' +\n          folderBadge +\n        '</div>' +\n      '</div>' +\n      '<div class=\"file-size-cell\">' + (isDir ? '-' : formatBytes(file.size)) + '</div>' +\n      '<div class=\"file-date-cell\">' + formatDate(file.modifiedTime) + '</div>' +\n      '<div class=\"file-actions-cell\">' + actionBtns + '</div>' +\n    '</div>';\n  }\n  listEl.innerHTML = html;\n}\n\nfunction handleFolderClick(el) {\n  const path = decodeURIComponent(el.dataset.path || '');\n  const searchInput = document.getElementById('searchInput');\n  if (searchInput) searchInput.value = '';\n  navigateTo(path);\n}\n\nfunction handlePlayClick(el) {\n  const name = decodeURIComponent(el.dataset.name || '');\n  const url = decodeURIComponent(el.dataset.url || '');\n  openVideoModal(name, url);\n}\n\nfunction handleFileClick(el) {\n  const url = el.dataset.url || '';\n  if (url) window.open(url, '_blank');\n}\n\nfunction handleCopyClick(el) {\n  const url = el.dataset.url || '';\n  copyLink(url);\n}\n\nfunction navigateTo(path) {\n  window.history.pushState(null, '', path ? '?p=' + encodeURIComponent(path) : '/');\n  loadFiles(path);\n}\n\nfunction updateBreadcrumbs(path) {\n  const bar = document.getElementById('breadcrumbBar');\n  if (!bar) return;\n  if (!path) {\n    bar.innerHTML = '<span class=\"crumb-current\">\ud83c\udfe0 Home</span>';\n    return;\n  }\n  const parts = path.split('/');\n  let html = '<span class=\"crumb\" onclick=\"navigateTo(\\'\\')\">\ud83c\udfe0 Home</span>';\n  let accum = '';\n  for (let idx = 0; idx < parts.length; idx++) {\n    const p = parts[idx];\n    accum += (idx === 0 ? '' : '/') + p;\n    const isLast = idx === parts.length - 1;\n    html += ' <span class=\"crumb-sep\">/</span> ';\n    if (isLast) {\n      html += '<span class=\"crumb-current\">' + escapeHtml(p) + '</span>';\n    } else {\n      html += '<span class=\"crumb\" data-target=\"' + encodeURIComponent(accum) + '\" onclick=\"navigateTo(decodeURIComponent(this.dataset.target))\">' + escapeHtml(p) + '</span>';\n    }\n  }\n  bar.innerHTML = html;\n}\n\n// ==========================================\n// Realtime Global Search (D1 Database)\n// ==========================================\nfunction onSearchInput(input) {\n  const q = input.value.trim();\n  clearTimeout(searchDebounceTimer);\n  \n  if (!q) {\n    if (isSearching) {\n      isSearching = false;\n      updateBreadcrumbs(currentPath);\n      renderFiles(allFiles);\n    }\n    return;\n  }\n\n  searchDebounceTimer = setTimeout(async () => {\n    isSearching = true;\n    const listEl = document.getElementById('fileList');\n    if (listEl) {\n      listEl.innerHTML = '<div class=\"loading-state\"><div class=\"spinner\"></div><p>Searching globally across all folders...</p></div>';\n    }\n    \n    const bar = document.getElementById('breadcrumbBar');\n    if (bar) {\n      bar.innerHTML = '<span class=\"crumb-current\">\ud83d\udd0d Global Search: \"' + escapeHtml(q) + '\"</span> <button class=\"btn-clear-search\" onclick=\"clearSearch()\">\u2715 Clear</button>';\n    }\n\n    try {\n      const res = await fetch('/api/search?q=' + encodeURIComponent(q));\n      if (!res.ok) throw new Error('Search failed');\n      const data = await res.json();\n      renderFiles(data.files || [], true);\n    } catch (e) {\n      if (listEl) {\n        listEl.innerHTML = '<div class=\"loading-state\" style=\"color:#ef4444;\"><p>\u274c Search error: ' + escapeHtml(e.message) + '</p></div>';\n      }\n    }\n  }, 250);\n}\n\nfunction clearSearch() {\n  const input = document.getElementById('searchInput');\n  if (input) input.value = '';\n  isSearching = false;\n  updateBreadcrumbs(currentPath);\n  renderFiles(allFiles);\n}\n\n// ==========================================\n// Bulk Actions Toolbar\n// ==========================================\nfunction updateBulkToolbar() {\n  const checked = document.querySelectorAll('.item-cb:checked');\n  const bar = document.getElementById('bulkToolbar');\n  if (!bar) return;\n  if (checked.length > 0) {\n    bar.style.display = 'flex';\n    const countEl = document.getElementById('bulkCount');\n    if (countEl) countEl.textContent = checked.length + ' selected';\n  } else {\n    bar.style.display = 'none';\n  }\n}\n\nfunction toggleSelectAll(masterCb) {\n  document.querySelectorAll('.item-cb').forEach(cb => { cb.checked = masterCb.checked; });\n  updateBulkToolbar();\n}\n\nfunction deselectAll() {\n  document.querySelectorAll('.item-cb').forEach(cb => { cb.checked = false; });\n  const master = document.getElementById('selectAllCb');\n  if (master) master.checked = false;\n  updateBulkToolbar();\n}\n\nfunction copySelectedLinks() {\n  const selected = Array.from(document.querySelectorAll('.item-cb:checked')).map(cb => cb.value);\n  if (!selected.length) return;\n  navigator.clipboard.writeText(selected.join('\\n')).then(() => {\n    showToast('Copied ' + selected.length + ' links to clipboard! \ud83d\udccb');\n    deselectAll();\n  });\n}\n\nfunction copyLink(url) {\n  navigator.clipboard.writeText(url).then(() => { showToast('Link copied to clipboard! \ud83d\udd17'); });\n}\n\nasync function downloadSelected() {\n  const selected = Array.from(document.querySelectorAll('.item-cb:checked')).map(cb => cb.value);\n  if (!selected.length) return;\n  showToast('Starting batch download...');\n  for (let i = 0; i < selected.length; i++) {\n    const a = document.createElement('a');\n    a.href = selected[i];\n    a.download = '';\n    document.body.appendChild(a);\n    a.click();\n    document.body.removeChild(a);\n    await new Promise(r => setTimeout(r, 600));\n  }\n  deselectAll();\n}\n\n// ==========================================\n// Video Player Modal\n// ==========================================\nfunction openVideoModal(name, url) {\n  const titleEl = document.getElementById('modalTitle');\n  if (titleEl) titleEl.textContent = name;\n  const player = document.getElementById('videoPlayer');\n  if (player) {\n    player.src = url;\n    player.play().catch(() => {});\n  }\n  \n  const fullUrl = window.location.origin + url;\n  const cleanUrl = fullUrl.replace(/^https?:\\/\\//, '');\n  const footer = document.getElementById('modalFooter');\n  if (footer) {\n    footer.innerHTML = \n      '<a href=\"' + url + '\" class=\"btn-player primary\" download>\u2b07 Download Video</a>' +\n      '<button class=\"btn-player\" data-url=\"' + fullUrl + '\" onclick=\"handleCopyClick(this)\">\ud83d\udd17 Copy Stream Link</button>' +\n      '<a href=\"potplayer://' + fullUrl + '\" class=\"btn-player\">PotPlayer</a>' +\n      '<a href=\"vlc://' + fullUrl + '\" class=\"btn-player\">VLC iOS/Mac</a>' +\n      '<a href=\"iina://weblink?url=' + fullUrl + '\" class=\"btn-player\">IINA (Mac)</a>' +\n      '<a href=\"intent://' + cleanUrl + '#Intent;action=android.intent.action.VIEW;scheme=https;type=video/*;package=org.videolan.vlc;end\" class=\"btn-player\">VLC Android</a>' +\n      '<a href=\"intent://' + cleanUrl + '#Intent;action=android.intent.action.VIEW;scheme=https;type=video/*;package=com.mxtech.videoplayer.ad;end\" class=\"btn-player\">MX Player</a>';\n  }\n\n  const modal = document.getElementById('videoModal');\n  if (modal) modal.style.display = 'flex';\n}\n\nfunction closeModal() {\n  const modal = document.getElementById('videoModal');\n  if (modal) modal.style.display = 'none';\n  const player = document.getElementById('videoPlayer');\n  if (player) {\n    player.pause();\n    player.src = '';\n  }\n}\n\n// ==========================================\n// Stealth Mode & Admin Mirror Modal (PIN 290722 Protected)\n// ==========================================\nfunction triggerSakuraSecret() {\n  sakuraClickCount++;\n  clearTimeout(sakuraClickTimer);\n  sakuraClickTimer = setTimeout(() => { sakuraClickCount = 0; }, 2000);\n\n  if (sakuraClickCount >= 3) {\n    sakuraClickCount = 0;\n    revealAdminMirror();\n  }\n}\n\nfunction revealAdminMirror() {\n  const btn = document.getElementById('mirrorModalBtn');\n  if (btn) {\n    btn.style.display = 'inline-flex';\n  }\n  showToast('\u2728 Admin Mode Activated!');\n  openMirrorModal();\n}\n\n// Secret shortcut: Ctrl + Shift + M\nwindow.addEventListener('keydown', (e) => {\n  if (e.ctrlKey && e.shiftKey && (e.key === 'M' || e.key === 'm')) {\n    e.preventDefault();\n    revealAdminMirror();\n  }\n});\n\nfunction openMirrorModal() {\n  const pinInput = document.getElementById('mirrorAdminPin');\n  const savedPin = localStorage.getItem('harudrive_admin_pin');\n  if (pinInput && savedPin) {\n    pinInput.value = savedPin;\n    const rememberCb = document.getElementById('rememberPinCb');\n    if (rememberCb) rememberCb.checked = true;\n  }\n  const m = document.getElementById('mirrorModal');\n  if (m) m.style.display = 'flex';\n}\n\nfunction closeMirrorModal() {\n  const m = document.getElementById('mirrorModal');\n  if (m) m.style.display = 'none';\n}\n\nasync function submitCloudMirror(e) {\n  e.preventDefault();\n  const gdriveInput = document.getElementById('mirrorGdriveUrl');\n  const targetInput = document.getElementById('mirrorTargetPath');\n  const pinInput = document.getElementById('mirrorAdminPin');\n  const rememberCb = document.getElementById('rememberPinCb');\n\n  const gdrive_url = gdriveInput ? gdriveInput.value.trim() : '';\n  const target_path = targetInput ? targetInput.value.trim() : '';\n  const admin_pin = pinInput ? pinInput.value.trim() : '';\n\n  if (!admin_pin) {\n    alert('\u26a0\ufe0f Harap masukkan Admin PIN untuk memulai mirror.');\n    if (pinInput) pinInput.focus();\n    return;\n  }\n\n  const btn = document.getElementById('startMirrorBtn');\n  if (btn) {\n    btn.disabled = true;\n    btn.textContent = '\ud83d\ude80 Verifying PIN & Dispatching...';\n  }\n\n  try {\n    const res = await fetch('/api/admin/mirror', {\n      method: 'POST',\n      headers: { 'Content-Type': 'application/json' },\n      body: JSON.stringify({ gdrive_url: gdrive_url, target_path: target_path, admin_pin: admin_pin })\n    });\n    const result = await res.json();\n    if (res.ok && result.success) {\n      if (rememberCb && rememberCb.checked) {\n        localStorage.setItem('harudrive_admin_pin', admin_pin);\n      } else {\n        localStorage.removeItem('harudrive_admin_pin');\n      }\n      alert('\u2705 SUCCESS!\\n\\n' + result.message + '\\n\\nProses mirror sedang berjalan di GitHub Actions Cloud.');\n      closeMirrorModal();\n    } else {\n      alert('\u274c Akses Ditolak: ' + (result.error || 'PIN Admin Salah atau gagal dispatch job.'));\n      if (pinInput) {\n        pinInput.focus();\n        pinInput.select();\n      }\n    }\n  } catch (err) {\n    alert('\u274c Error: ' + err.message);\n  } finally {\n    if (btn) {\n      btn.disabled = false;\n      btn.textContent = '\u26a1 Start Cloud Mirror (GitHub Actions)';\n    }\n  }\n}\n\n// ==========================================\n// Utilities & Init\n// ==========================================\nfunction showToast(msg) {\n  const toast = document.getElementById('toastOverlay');\n  if (!toast) return;\n  toast.textContent = msg;\n  toast.style.display = 'block';\n  setTimeout(() => { toast.style.display = 'none'; }, 3000);\n}\n\nfunction toggleDark() {\n  const isLight = document.body.classList.toggle('light');\n  localStorage.setItem('haruTheme', isLight ? 'light' : 'dark');\n  const toggle = document.getElementById('darkToggle');\n  if (toggle) toggle.textContent = isLight ? '\ud83c\udf19' : '\u2600\ufe0f';\n}\n\nfunction formatBytes(bytes) {\n  if (!bytes || bytes === 0) return '0 B';\n  const k = 1024;\n  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];\n  const i = Math.floor(Math.log(bytes) / Math.log(k));\n  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];\n}\n\nfunction formatDate(dateStr) {\n  if (!dateStr) return '-';\n  const d = new Date(dateStr);\n  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });\n}\n\nfunction escapeHtml(str) {\n  return (str || '').replace(/[&<>\"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' }[m]));\n}\n\n// History back/forward navigation\nwindow.addEventListener('popstate', () => {\n  const params = new URLSearchParams(window.location.search);\n  loadFiles(params.get('p') || '');\n});\n\n// Initialization\nfunction initHaruDrive() {\n  if (localStorage.getItem('haruTheme') === 'light') {\n    document.body.classList.add('light');\n    const toggle = document.getElementById('darkToggle');\n    if (toggle) toggle.textContent = '\ud83c\udf19';\n  }\n  if (localStorage.getItem('harudrive_admin_pin')) {\n    const btn = document.getElementById('mirrorModalBtn');\n    if (btn) btn.style.display = 'inline-flex';\n  }\n  const params = new URLSearchParams(window.location.search);\n  loadFiles(params.get('p') || '');\n}\n\nif (document.readyState === 'loading') {\n  document.addEventListener('DOMContentLoaded', initHaruDrive);\n} else {\n  initHaruDrive();\n}\n";
 
 function htmlPage(content, env) {
   return `<!DOCTYPE html>
@@ -833,41 +860,328 @@ function htmlPage(content, env) {
     }
     .btn-bulk.primary { background: var(--primary); color: white; }
 
+    /* ==========================================
+       MODAL SYSTEM OVERHAUL (Sleek Glassmorphism)
+       ========================================== */
     .modal-backdrop {
       position: fixed;
-      top: 0; left: 0; right: 0; bottom: 0;
-      background: rgba(0, 0, 0, 0.75);
-      backdrop-filter: blur(8px);
-      z-index: 200;
+      inset: 0;
+      background: rgba(5, 8, 16, 0.82);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      z-index: 2000;
       display: flex;
       align-items: center;
       justify-content: center;
-      padding: 20px;
+      padding: 24px;
+      overflow-y: auto;
     }
     .modal-card {
       width: 100%;
-      max-width: 650px;
-      border-radius: var(--radius);
-      background: var(--bg-card);
+      max-width: 600px;
+      max-height: calc(100vh - 48px);
+      display: flex;
+      flex-direction: column;
+      border-radius: 20px;
+      background: #111827;
+      background: linear-gradient(180deg, rgba(26, 34, 52, 0.95) 0%, rgba(17, 24, 39, 0.98) 100%);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      box-shadow: 0 25px 60px -15px rgba(0, 0, 0, 0.8), 0 0 40px rgba(236, 72, 153, 0.12);
       overflow: hidden;
-      box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+      animation: modalPop 0.25s cubic-bezier(0.16, 1, 0.3, 1);
     }
-    .video-card { max-width: 850px; }
+    @keyframes modalPop {
+      0% { opacity: 0; transform: scale(0.94) translateY(10px); }
+      100% { opacity: 1; transform: scale(1) translateY(0); }
+    }
+    .video-card { max-width: 860px; }
+
     .modal-header {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding: 18px 24px;
-      border-bottom: 1px solid var(--border);
+      padding: 20px 24px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(255, 255, 255, 0.02);
     }
-    .btn-close {
-      background: transparent;
-      border: none;
+    .modal-title-group {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+    .modal-badge-icon {
+      width: 44px;
+      height: 44px;
+      border-radius: 14px;
+      background: rgba(236, 72, 153, 0.15);
+      border: 1px solid rgba(236, 72, 153, 0.3);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.4rem;
+      flex-shrink: 0;
+    }
+    .modal-header-icon { font-size: 1.5rem; }
+    .title-with-badge {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .modal-title {
+      font-size: 1.18rem;
+      font-weight: 800;
+      color: #fff;
+      letter-spacing: -0.3px;
+    }
+    .badge-admin {
+      font-size: 0.7rem;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 12px;
+      background: rgba(236, 72, 153, 0.2);
+      border: 1px solid rgba(236, 72, 153, 0.4);
+      color: #f43f5e;
+    }
+    .modal-subtitle {
+      font-size: 0.8rem;
       color: var(--text-muted);
-      font-size: 1.2rem;
+      margin-top: 2px;
+    }
+    .btn-close-circle {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text-muted);
+      font-size: 0.95rem;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s;
+    }
+    .btn-close-circle:hover {
+      background: rgba(239, 68, 68, 0.2);
+      border-color: rgba(239, 68, 68, 0.4);
+      color: #ef4444;
+      transform: rotate(90deg);
+    }
+
+    .modal-body {
+      padding: 24px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+    .modal-body::-webkit-scrollbar { width: 6px; }
+    .modal-body::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 6px; }
+
+    .speed-info-banner {
+      background: linear-gradient(135deg, rgba(99, 102, 241, 0.12) 0%, rgba(236, 72, 153, 0.08) 100%);
+      border: 1px solid rgba(99, 102, 241, 0.25);
+      padding: 14px 16px;
+      border-radius: 12px;
+    }
+    .speed-badge {
+      display: inline-block;
+      font-size: 0.7rem;
+      font-weight: 800;
+      padding: 3px 8px;
+      background: var(--primary);
+      color: #fff;
+      border-radius: 6px;
+      margin-bottom: 6px;
+      letter-spacing: 0.4px;
+    }
+    .speed-info-banner p {
+      font-size: 0.82rem;
+      color: var(--text-muted);
+      line-height: 1.45;
+    }
+
+    .mirror-form {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .form-field {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .form-field label {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.84rem;
+      font-weight: 600;
+      color: #cbd5e1;
+    }
+    .label-hint {
+      font-size: 0.74rem;
+      font-weight: 500;
+      color: var(--text-dim);
+    }
+    .input-with-icon {
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+    .field-icon {
+      position: absolute;
+      left: 14px;
+      font-size: 1rem;
+      color: var(--text-dim);
+      pointer-events: none;
+    }
+    .input-with-icon input {
+      width: 100%;
+      padding: 12px 14px 12px 42px;
+      border-radius: 12px;
+      background: rgba(15, 23, 42, 0.65);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: #f8fafc;
+      font-family: inherit;
+      font-size: 0.92rem;
+      outline: none;
+      transition: all 0.2s;
+    }
+    .input-with-icon input:focus {
+      border-color: var(--accent);
+      background: rgba(15, 23, 42, 0.9);
+      box-shadow: 0 0 0 3px rgba(236, 72, 153, 0.2);
+    }
+
+    .admin-pin-card {
+      background: rgba(236, 72, 153, 0.06);
+      border: 1px solid rgba(236, 72, 153, 0.2);
+      padding: 16px;
+      border-radius: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .pin-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .pin-header label {
+      font-size: 0.86rem;
+      font-weight: 700;
+      color: #f43f5e;
+    }
+    .pin-protected-tag {
+      font-size: 0.7rem;
+      font-weight: 700;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .remember-pin-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.82rem;
+      color: var(--text-muted);
+      cursor: pointer;
+      user-select: none;
+      margin-top: 2px;
+    }
+    .remember-pin-label input[type="checkbox"] {
+      accent-color: var(--accent);
+      width: 15px;
+      height: 15px;
       cursor: pointer;
     }
-    .modal-body { padding: 24px; }
+
+    .btn-start-mirror {
+      width: 100%;
+      padding: 14px;
+      border-radius: 12px;
+      border: none;
+      background: var(--accent-gradient);
+      color: #fff;
+      font-weight: 800;
+      font-size: 0.98rem;
+      letter-spacing: 0.2px;
+      cursor: pointer;
+      box-shadow: 0 8px 24px rgba(236, 72, 153, 0.35);
+      transition: all 0.2s;
+    }
+    .btn-start-mirror:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 10px 28px rgba(236, 72, 153, 0.45);
+      opacity: 0.95;
+    }
+    .btn-start-mirror:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .or-divider {
+      text-align: center;
+      position: relative;
+      margin: 4px 0;
+    }
+    .or-divider::before {
+      content: '';
+      position: absolute;
+      left: 0; top: 50%;
+      width: 100%; height: 1px;
+      background: rgba(255, 255, 255, 0.08);
+    }
+    .or-divider span {
+      position: relative;
+      background: #111827;
+      padding: 0 12px;
+      font-size: 0.7rem;
+      font-weight: 700;
+      color: var(--text-dim);
+      letter-spacing: 0.5px;
+    }
+
+    .colab-card-modern {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 14px 18px;
+      border-radius: 14px;
+      border: 1px solid rgba(245, 158, 11, 0.25);
+      background: rgba(245, 158, 11, 0.05);
+    }
+    .colab-icon-badge {
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
+      background: rgba(245, 158, 11, 0.15);
+      border: 1px solid rgba(245, 158, 11, 0.3);
+      color: #f59e0b;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.1rem;
+      flex-shrink: 0;
+    }
+    .colab-info { flex: 1; min-width: 0; }
+    .colab-info strong { font-size: 0.88rem; color: #fbbf24; display: block; }
+    .colab-info p { font-size: 0.76rem; color: var(--text-muted); margin-top: 2px; line-height: 1.35; }
+    .btn-colab-modern {
+      padding: 8px 14px;
+      border-radius: 10px;
+      background: #f59e0b;
+      color: #000;
+      font-weight: 700;
+      font-size: 0.82rem;
+      text-decoration: none;
+      white-space: nowrap;
+      transition: all 0.2s;
+    }
+    .btn-colab-modern:hover { background: #fbbf24; transform: translateY(-1px); }
+
     #videoPlayer {
       width: 100%;
       border-radius: var(--radius-sm);
@@ -879,141 +1193,30 @@ function htmlPage(content, env) {
       display: flex;
       flex-wrap: wrap;
       gap: 8px;
-      border-top: 1px solid var(--border);
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(255, 255, 255, 0.02);
     }
     .btn-player {
       padding: 8px 14px;
       border-radius: var(--radius-sm);
-      background: var(--bg-surface);
+      background: var(--bg-card);
       border: 1px solid var(--border);
       color: var(--text);
       text-decoration: none;
       font-size: 0.82rem;
       font-weight: 600;
       transition: all 0.2s;
+      cursor: pointer;
     }
     .btn-player:hover {
       border-color: var(--primary-light);
       background: var(--primary);
       color: white;
     }
-
-    .form-group { margin-bottom: 16px; }
-    .form-group label {
-      display: block;
-      font-size: 0.85rem;
-      font-weight: 600;
-      margin-bottom: 6px;
-      color: var(--text-muted);
-    }
-    .form-group input {
-      width: 100%;
-      padding: 10px 14px;
-      border-radius: var(--radius-sm);
-      background: var(--bg-surface);
-      border: 1px solid var(--border);
-      color: var(--text);
-      font-family: inherit;
-      font-size: 0.9rem;
-      outline: none;
-    }
-    .form-group input:focus { border-color: var(--primary); }
-    .form-group small { display: block; margin-top: 4px; font-size: 0.75rem; color: var(--text-dim); }
-
-    .pin-group {
-      background: rgba(236, 72, 153, 0.08);
-      border: 1px solid rgba(236, 72, 153, 0.2);
-      padding: 14px;
-      border-radius: var(--radius-sm);
-    }
-    .remember-pin-wrap {
-      margin-top: 8px;
-      display: flex;
-      align-items: center;
-    }
-    .cb-label {
-      font-size: 0.8rem;
-      color: var(--text-muted);
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      cursor: pointer;
-    }
-
-    .btn-primary {
-      width: 100%;
-      padding: 12px;
-      border-radius: var(--radius-sm);
-      border: none;
+    .btn-player.primary {
       background: var(--accent-gradient);
       color: white;
-      font-weight: 700;
-      font-size: 0.95rem;
-      cursor: pointer;
-      transition: opacity 0.2s;
-    }
-    .btn-primary:hover { opacity: 0.9; }
-
-    .info-card {
-      background: rgba(99, 102, 241, 0.1);
-      border: 1px solid rgba(99, 102, 241, 0.2);
-      padding: 12px 16px;
-      border-radius: var(--radius-sm);
-      margin-bottom: 18px;
-    }
-    .info-badge {
-      display: inline-block;
-      font-size: 0.72rem;
-      font-weight: 800;
-      text-transform: uppercase;
-      padding: 2px 6px;
-      background: var(--primary);
-      color: white;
-      border-radius: 4px;
-      margin-bottom: 4px;
-    }
-    .info-card p { font-size: 0.82rem; color: var(--text-muted); line-height: 1.4; }
-
-    .divider {
-      text-align: center;
-      position: relative;
-      margin: 20px 0;
-    }
-    .divider::before {
-      content: '';
-      position: absolute;
-      left: 0; top: 50%;
-      width: 100%; height: 1px;
-      background: var(--border);
-    }
-    .divider span {
-      position: relative;
-      background: var(--bg-card);
-      padding: 0 10px;
-      font-size: 0.7rem;
-      font-weight: 700;
-      color: var(--text-dim);
-    }
-
-    .colab-card {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 14px 18px;
-      border-radius: var(--radius-sm);
-      border: 1px solid var(--border);
-      background: var(--bg-surface);
-    }
-    .colab-info p { font-size: 0.78rem; color: var(--text-dim); }
-    .btn-colab {
-      padding: 8px 14px;
-      border-radius: var(--radius-sm);
-      background: #f59e0b;
-      color: #000;
-      font-weight: 700;
-      font-size: 0.85rem;
-      text-decoration: none;
-      white-space: nowrap;
+      border: none;
     }
 
     .login-wrapper {
@@ -1062,7 +1265,8 @@ function htmlPage(content, env) {
       font-weight: 600;
       font-size: 0.9rem;
       box-shadow: 0 10px 25px rgba(0,0,0,0.3);
-      z-index: 300;
+      z-index: 3000;
+      animation: modalPop 0.2s ease-out;
     }
 
     .spinner {
