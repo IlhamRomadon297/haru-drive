@@ -54,6 +54,55 @@ export default {
     }
 
     // ==========================================
+    // API: Realtime Global Search (D1 Database)
+    // ==========================================
+    if (url.pathname === '/api/search') {
+      try {
+        const q = (url.searchParams.get('q') || '').trim();
+        if (!q) {
+          return new Response(JSON.stringify({ query: '', files: [] }), {
+            headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+          });
+        }
+
+        if (!env.harudrive_db) {
+          return new Response(JSON.stringify({ error: 'D1 database not bound' }), { status: 500 });
+        }
+
+        const stmt = env.harudrive_db.prepare(
+          'SELECT short_id, file_path, name, type, size FROM shortlinks WHERE name LIKE ? ORDER BY name ASC LIMIT 60'
+        );
+        const { results } = await stmt.bind(`%${q}%`).all();
+
+        const formattedResults = (results || []).map(row => {
+          const isDir = row.type === 'folder';
+          const pathParts = (row.file_path || '').split('/');
+          pathParts.pop();
+          const parentDir = pathParts.join('/');
+
+          return {
+            id: row.short_id,
+            path: row.file_path,
+            name: row.name,
+            mimeType: isDir ? 'application/vnd.google-apps.folder' : getMimeType(row.name),
+            size: row.size || 0,
+            modifiedTime: new Date().toISOString(),
+            parentDir: parentDir
+          };
+        });
+
+        return new Response(JSON.stringify({ query: q, files: formattedResults }), {
+          headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+        });
+      } catch (err) {
+        return new Response(JSON.stringify({ error: err.message }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+    }
+
+    // ==========================================
     // API: List Folder Files from Hugging Face
     // ==========================================
     if (url.pathname === '/api/list') {
@@ -146,7 +195,7 @@ export default {
     }
 
     // ==========================================
-    // API: Admin Trigger Cloud Mirror (GitHub Actions)
+    // API: Admin Trigger Cloud Mirror (Protected by ADMIN_PIN)
     // ==========================================
     if (url.pathname === '/api/admin/mirror' && request.method === 'POST') {
       if (!isLoggedIn) {
@@ -155,7 +204,15 @@ export default {
 
       try {
         const body = await request.json();
-        const { gdrive_url, target_path } = body;
+        const { gdrive_url, target_path, admin_pin } = body;
+
+        // Verify Secret Admin PIN
+        const expectedPin = env.ADMIN_PIN || '290722';
+        if (!admin_pin || admin_pin.trim() !== expectedPin.trim()) {
+          return new Response(JSON.stringify({
+            error: 'PIN Admin Salah! Akses mirror ditolak demi keamanan.'
+          }), { status: 403, headers: { 'Content-Type': 'application/json' } });
+        }
 
         if (!gdrive_url) {
           return new Response(JSON.stringify({ error: 'Google Drive URL is required.' }), { status: 400 });
@@ -336,18 +393,18 @@ function mainUI() {
   return `
   <header class="navbar glass">
     <div class="nav-left">
-      <a href="/" class="brand-logo" onclick="event.preventDefault(); navigateTo('');">
+      <div class="brand-logo" onclick="triggerSakuraSecret()" style="cursor:pointer;" title="Click Sakura 3x for Admin Mode">
         <span class="logo-icon">🌸</span>
         <span class="brand-title">HaruDrive</span>
-      </a>
+      </div>
       <div class="badge-hf">HF Storage 8TB</div>
     </div>
     <div class="nav-right">
       <div class="search-box glass">
         <span class="search-icon">🔍</span>
-        <input type="text" id="searchInput" placeholder="Search in active folder..." oninput="filterFiles()" />
+        <input type="text" id="searchInput" placeholder="Global search across all files..." oninput="onSearchInput(this)" />
       </div>
-      <button class="btn-icon glass" id="mirrorModalBtn" onclick="openMirrorModal()" title="Cloud Mirror (GDrive -> HF)">
+      <button class="btn-icon glass btn-mirror-stealth" id="mirrorModalBtn" onclick="openMirrorModal()" title="Cloud Mirror (Admin Only)" style="display:none;">
         🚀 <span class="btn-text">Cloud Mirror</span>
       </button>
       <button class="btn-icon glass" id="darkToggle" onclick="toggleDark()" title="Toggle Dark / Light Mode">🌙</button>
@@ -363,9 +420,9 @@ function mainUI() {
     <div class="file-table-wrapper glass">
       <div class="table-header">
         <div class="col-cb"><input type="checkbox" id="selectAllCb" onchange="toggleSelectAll(this)" /></div>
-        <div class="col-name" onclick="sortFiles('name')">Name ⬍</div>
-        <div class="col-size" onclick="sortFiles('size')">Size ⬍</div>
-        <div class="col-date" onclick="sortFiles('date')">Modified ⬍</div>
+        <div class="col-name">Name</div>
+        <div class="col-size">Size</div>
+        <div class="col-date">Modified</div>
         <div class="col-actions">Actions</div>
       </div>
       <div id="fileList" class="file-list">
@@ -405,7 +462,7 @@ function mainUI() {
         <div class="mirror-header-title">
           <span style="font-size:1.5rem;">🚀</span>
           <div>
-            <h3>Cloud-to-Cloud Mirror</h3>
+            <h3>Cloud-to-Cloud Mirror (Admin Only)</h3>
             <p class="subtitle">Sync Google Drive Folder/File to Hugging Face Dataset with 0% local bandwidth!</p>
           </div>
         </div>
@@ -426,6 +483,16 @@ function mainUI() {
           <div class="form-group">
             <label>Target Folder in Hugging Face (Optional)</label>
             <input type="text" id="mirrorTargetPath" placeholder="e.g. Movies/2026 or leave empty for root" />
+          </div>
+
+          <div class="form-group pin-group">
+            <label>🔐 Admin Security PIN</label>
+            <input type="password" id="mirrorAdminPin" placeholder="Enter Admin PIN (6-digits)" required />
+            <div class="remember-pin-wrap">
+              <label class="cb-label">
+                <input type="checkbox" id="rememberPinCb" /> Remember PIN on this device
+              </label>
+            </div>
           </div>
 
           <div class="form-actions">
@@ -452,7 +519,7 @@ function mainUI() {
   `;
 }
 
-const EMBEDDED_CLIENT_JS = "\nlet currentPath = '';\nlet allFiles = [];\n\nasync function loadFiles(path) {\n  if (path === undefined || path === null) path = '';\n  currentPath = path;\n  const listEl = document.getElementById('fileList');\n  if (!listEl) return;\n  listEl.innerHTML = '<div class=\"loading-state\"><div class=\"spinner\"></div><p>Fetching files from Hugging Face Storage...</p></div>';\n  \n  updateBreadcrumbs(path);\n\n  try {\n    const res = await fetch('/api/list?path=' + encodeURIComponent(path));\n    if (!res.ok) {\n      const errData = await res.json().catch(() => ({}));\n      throw new Error(errData.error || 'Failed to fetch directory');\n    }\n    const data = await res.json();\n    allFiles = data.files || [];\n    renderFiles(allFiles);\n  } catch (e) {\n    listEl.innerHTML = '<div class=\"loading-state\" style=\"color:#ef4444;\"><p>\u274c Error: ' + escapeHtml(e.message) + '</p></div>';\n  }\n}\n\nfunction renderFiles(files) {\n  const listEl = document.getElementById('fileList');\n  if (!listEl) return;\n  if (!files || files.length === 0) {\n    listEl.innerHTML = '<div class=\"loading-state\"><p>\ud83d\udcc2 Folder is empty</p></div>';\n    return;\n  }\n\n  let html = '';\n  for (let i = 0; i < files.length; i++) {\n    const file = files[i];\n    const isDir = file.mimeType === 'application/vnd.google-apps.folder';\n    const isVideo = (file.mimeType && file.mimeType.startsWith('video/')) || /\\.(mp4|mkv|webm|avi|mov)$/i.test(file.name);\n    const icon = isDir ? '\ud83d\udcc1' : (isVideo ? '\ud83c\udfac' : '\ud83d\udcc4');\n    const fileUrl = '/file/' + file.id + '/' + encodeURIComponent(file.name);\n\n    let actionBtns = '';\n    if (isVideo) {\n      actionBtns += '<button class=\"btn-act play\" data-name=\"' + encodeURIComponent(file.name) + '\" data-url=\"' + encodeURIComponent(fileUrl) + '\" onclick=\"handlePlayClick(this)\">\u25b6 Play</button>';\n    }\n    if (!isDir) {\n      actionBtns += '<a href=\"' + fileUrl + '\" class=\"btn-act\" download>\u2b07</a>';\n      actionBtns += '<button class=\"btn-act\" data-url=\"' + window.location.origin + fileUrl + '\" onclick=\"handleCopyClick(this)\">\ud83d\udd17</button>';\n    }\n\n    let clickAttr = '';\n    if (isDir) {\n      clickAttr = 'data-path=\"' + encodeURIComponent(file.path) + '\" onclick=\"handleFolderClick(this)\"';\n    } else if (isVideo) {\n      clickAttr = 'data-name=\"' + encodeURIComponent(file.name) + '\" data-url=\"' + encodeURIComponent(fileUrl) + '\" onclick=\"handlePlayClick(this)\"';\n    } else {\n      clickAttr = 'data-url=\"' + fileUrl + '\" onclick=\"handleFileClick(this)\"';\n    }\n\n    html += '<div class=\"file-row ' + (isDir ? 'is-folder' : '') + '\">' +\n      '<div class=\"col-cb\">' +\n        (!isDir ? '<input type=\"checkbox\" class=\"item-cb\" value=\"' + window.location.origin + fileUrl + '\" onchange=\"updateBulkToolbar()\" />' : '') +\n      '</div>' +\n      '<div class=\"file-name-cell\" ' + clickAttr + '>' +\n        '<span class=\"file-icon\">' + icon + '</span>' +\n        '<span class=\"file-title\">' + escapeHtml(file.name) + '</span>' +\n      '</div>' +\n      '<div class=\"file-size-cell\">' + (isDir ? '-' : formatBytes(file.size)) + '</div>' +\n      '<div class=\"file-date-cell\">' + formatDate(file.modifiedTime) + '</div>' +\n      '<div class=\"file-actions-cell\">' + actionBtns + '</div>' +\n    '</div>';\n  }\n  listEl.innerHTML = html;\n}\n\nfunction handleFolderClick(el) {\n  const path = decodeURIComponent(el.dataset.path || '');\n  navigateTo(path);\n}\n\nfunction handlePlayClick(el) {\n  const name = decodeURIComponent(el.dataset.name || '');\n  const url = decodeURIComponent(el.dataset.url || '');\n  openVideoModal(name, url);\n}\n\nfunction handleFileClick(el) {\n  const url = el.dataset.url || '';\n  if (url) window.open(url, '_blank');\n}\n\nfunction handleCopyClick(el) {\n  const url = el.dataset.url || '';\n  copyLink(url);\n}\n\nfunction navigateTo(path) {\n  window.history.pushState(null, '', path ? '?p=' + encodeURIComponent(path) : '/');\n  loadFiles(path);\n}\n\nfunction updateBreadcrumbs(path) {\n  const bar = document.getElementById('breadcrumbBar');\n  if (!bar) return;\n  if (!path) {\n    bar.innerHTML = '<span class=\"crumb-current\">\ud83c\udfe0 Home</span>';\n    return;\n  }\n  const parts = path.split('/');\n  let html = '<span class=\"crumb\" onclick=\"navigateTo(\\'\\')\">\ud83c\udfe0 Home</span>';\n  let accum = '';\n  for (let idx = 0; idx < parts.length; idx++) {\n    const p = parts[idx];\n    accum += (idx === 0 ? '' : '/') + p;\n    const isLast = idx === parts.length - 1;\n    html += ' <span class=\"crumb-sep\">/</span> ';\n    if (isLast) {\n      html += '<span class=\"crumb-current\">' + escapeHtml(p) + '</span>';\n    } else {\n      html += '<span class=\"crumb\" data-target=\"' + encodeURIComponent(accum) + '\" onclick=\"navigateTo(decodeURIComponent(this.dataset.target))\">' + escapeHtml(p) + '</span>';\n    }\n  }\n  bar.innerHTML = html;\n}\n\nfunction filterFiles() {\n  const input = document.getElementById('searchInput');\n  if (!input) return;\n  const q = input.value.toLowerCase();\n  const filtered = allFiles.filter(f => f.name.toLowerCase().includes(q));\n  renderFiles(filtered);\n}\n\nfunction updateBulkToolbar() {\n  const checked = document.querySelectorAll('.item-cb:checked');\n  const bar = document.getElementById('bulkToolbar');\n  if (!bar) return;\n  if (checked.length > 0) {\n    bar.style.display = 'flex';\n    const countEl = document.getElementById('bulkCount');\n    if (countEl) countEl.textContent = checked.length + ' selected';\n  } else {\n    bar.style.display = 'none';\n  }\n}\n\nfunction toggleSelectAll(masterCb) {\n  document.querySelectorAll('.item-cb').forEach(cb => { cb.checked = masterCb.checked; });\n  updateBulkToolbar();\n}\n\nfunction deselectAll() {\n  document.querySelectorAll('.item-cb').forEach(cb => { cb.checked = false; });\n  const master = document.getElementById('selectAllCb');\n  if (master) master.checked = false;\n  updateBulkToolbar();\n}\n\nfunction copySelectedLinks() {\n  const selected = Array.from(document.querySelectorAll('.item-cb:checked')).map(cb => cb.value);\n  if (!selected.length) return;\n  navigator.clipboard.writeText(selected.join('\\n')).then(() => {\n    showToast('Copied ' + selected.length + ' links to clipboard! \ud83d\udccb');\n    deselectAll();\n  });\n}\n\nfunction copyLink(url) {\n  navigator.clipboard.writeText(url).then(() => { showToast('Link copied to clipboard! \ud83d\udd17'); });\n}\n\nasync function downloadSelected() {\n  const selected = Array.from(document.querySelectorAll('.item-cb:checked')).map(cb => cb.value);\n  if (!selected.length) return;\n  showToast('Starting batch download...');\n  for (let i = 0; i < selected.length; i++) {\n    const a = document.createElement('a');\n    a.href = selected[i];\n    a.download = '';\n    document.body.appendChild(a);\n    a.click();\n    document.body.removeChild(a);\n    await new Promise(r => setTimeout(r, 600));\n  }\n  deselectAll();\n}\n\nfunction openVideoModal(name, url) {\n  const titleEl = document.getElementById('modalTitle');\n  if (titleEl) titleEl.textContent = name;\n  const player = document.getElementById('videoPlayer');\n  if (player) {\n    player.src = url;\n    player.play().catch(() => {});\n  }\n  \n  const fullUrl = window.location.origin + url;\n  const cleanUrl = fullUrl.replace(/^https?:\\/\\//, '');\n  const footer = document.getElementById('modalFooter');\n  if (footer) {\n    footer.innerHTML = \n      '<a href=\"' + url + '\" class=\"btn-player\" download>\u2b07 Download Video</a>' +\n      '<button class=\"btn-player\" data-url=\"' + fullUrl + '\" onclick=\"handleCopyClick(this)\">\ud83d\udd17 Copy Stream Link</button>' +\n      '<a href=\"potplayer://' + fullUrl + '\" class=\"btn-player\">PotPlayer</a>' +\n      '<a href=\"vlc://' + fullUrl + '\" class=\"btn-player\">VLC iOS/Mac</a>' +\n      '<a href=\"iina://weblink?url=' + fullUrl + '\" class=\"btn-player\">IINA (Mac)</a>' +\n      '<a href=\"intent://' + cleanUrl + '#Intent;action=android.intent.action.VIEW;scheme=https;type=video/*;package=org.videolan.vlc;end\" class=\"btn-player\">VLC Android</a>' +\n      '<a href=\"intent://' + cleanUrl + '#Intent;action=android.intent.action.VIEW;scheme=https;type=video/*;package=com.mxtech.videoplayer.ad;end\" class=\"btn-player\">MX Player</a>';\n  }\n\n  const modal = document.getElementById('videoModal');\n  if (modal) modal.style.display = 'flex';\n}\n\nfunction closeModal() {\n  const modal = document.getElementById('videoModal');\n  if (modal) modal.style.display = 'none';\n  const player = document.getElementById('videoPlayer');\n  if (player) {\n    player.pause();\n    player.src = '';\n  }\n}\n\nfunction openMirrorModal() {\n  const m = document.getElementById('mirrorModal');\n  if (m) m.style.display = 'flex';\n}\nfunction closeMirrorModal() {\n  const m = document.getElementById('mirrorModal');\n  if (m) m.style.display = 'none';\n}\n\nasync function submitCloudMirror(e) {\n  e.preventDefault();\n  const gdriveInput = document.getElementById('mirrorGdriveUrl');\n  const targetInput = document.getElementById('mirrorTargetPath');\n  const gdrive_url = gdriveInput ? gdriveInput.value.trim() : '';\n  const target_path = targetInput ? targetInput.value.trim() : '';\n  const btn = document.getElementById('startMirrorBtn');\n\n  if (btn) {\n    btn.disabled = true;\n    btn.textContent = '\ud83d\ude80 Dispatching Cloud Job...';\n  }\n\n  try {\n    const res = await fetch('/api/admin/mirror', {\n      method: 'POST',\n      headers: { 'Content-Type': 'application/json' },\n      body: JSON.stringify({ gdrive_url: gdrive_url, target_path: target_path })\n    });\n    const result = await res.json();\n    if (res.ok && result.success) {\n      alert('\u2705 SUCCESS!\\n\\n' + result.message + '\\n\\nProses mirror sedang berjalan di GitHub Actions Cloud.');\n      closeMirrorModal();\n    } else {\n      alert('\u274c Error: ' + (result.error || 'Failed to dispatch mirror job.'));\n    }\n  } catch (err) {\n    alert('\u274c Error: ' + err.message);\n  } finally {\n    if (btn) {\n      btn.disabled = false;\n      btn.textContent = '\u26a1 Start Cloud Mirror (GitHub Actions)';\n    }\n  }\n}\n\nfunction showToast(msg) {\n  const toast = document.getElementById('toastOverlay');\n  if (!toast) return;\n  toast.textContent = msg;\n  toast.style.display = 'block';\n  setTimeout(() => { toast.style.display = 'none'; }, 3000);\n}\n\nfunction toggleDark() {\n  const isLight = document.body.classList.toggle('light');\n  localStorage.setItem('haruTheme', isLight ? 'light' : 'dark');\n  const toggle = document.getElementById('darkToggle');\n  if (toggle) toggle.textContent = isLight ? '\ud83c\udf19' : '\u2600\ufe0f';\n}\n\nfunction formatBytes(bytes) {\n  if (!bytes || bytes === 0) return '0 B';\n  const k = 1024;\n  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];\n  const i = Math.floor(Math.log(bytes) / Math.log(k));\n  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];\n}\n\nfunction formatDate(dateStr) {\n  if (!dateStr) return '-';\n  const d = new Date(dateStr);\n  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });\n}\n\nfunction escapeHtml(str) {\n  return (str || '').replace(/[&<>\"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' }[m]));\n}\n\n// History back/forward navigation\nwindow.addEventListener('popstate', () => {\n  const params = new URLSearchParams(window.location.search);\n  loadFiles(params.get('p') || '');\n});\n\n// Initialization\nfunction initHaruDrive() {\n  if (localStorage.getItem('haruTheme') === 'light') {\n    document.body.classList.add('light');\n    const toggle = document.getElementById('darkToggle');\n    if (toggle) toggle.textContent = '\ud83c\udf19';\n  }\n  const params = new URLSearchParams(window.location.search);\n  loadFiles(params.get('p') || '');\n}\n\nif (document.readyState === 'loading') {\n  document.addEventListener('DOMContentLoaded', initHaruDrive);\n} else {\n  initHaruDrive();\n}\n";
+const EMBEDDED_CLIENT_JS = "\nlet currentPath = '';\nlet allFiles = [];\nlet searchDebounceTimer = null;\nlet isSearching = false;\nlet sakuraClickCount = 0;\nlet sakuraClickTimer = null;\n\n// ==========================================\n// File Listing & Navigation\n// ==========================================\nasync function loadFiles(path) {\n  if (path === undefined || path === null) path = '';\n  currentPath = path;\n  isSearching = false;\n  const listEl = document.getElementById('fileList');\n  if (!listEl) return;\n  listEl.innerHTML = '<div class=\"loading-state\"><div class=\"spinner\"></div><p>Fetching files from Hugging Face Storage...</p></div>';\n  \n  updateBreadcrumbs(path);\n\n  try {\n    const res = await fetch('/api/list?path=' + encodeURIComponent(path));\n    if (!res.ok) {\n      const errData = await res.json().catch(() => ({}));\n      throw new Error(errData.error || 'Failed to fetch directory');\n    }\n    const data = await res.json();\n    allFiles = data.files || [];\n    renderFiles(allFiles);\n  } catch (e) {\n    listEl.innerHTML = '<div class=\"loading-state\" style=\"color:#ef4444;\"><p>\u274c Error: ' + escapeHtml(e.message) + '</p></div>';\n  }\n}\n\nfunction renderFiles(files, isGlobalSearch = false) {\n  const listEl = document.getElementById('fileList');\n  if (!listEl) return;\n  if (!files || files.length === 0) {\n    listEl.innerHTML = '<div class=\"loading-state\"><p>' + (isGlobalSearch ? '\ud83d\udd0d No files matched your search' : '\ud83d\udcc2 Folder is empty') + '</p></div>';\n    return;\n  }\n\n  let html = '';\n  for (let i = 0; i < files.length; i++) {\n    const file = files[i];\n    const isDir = file.mimeType === 'application/vnd.google-apps.folder';\n    const isVideo = (file.mimeType && file.mimeType.startsWith('video/')) || /\\.(mp4|mkv|webm|avi|mov)$/i.test(file.name);\n    const icon = isDir ? '\ud83d\udcc1' : (isVideo ? '\ud83c\udfac' : '\ud83d\udcc4');\n    const fileUrl = '/file/' + file.id + '/' + encodeURIComponent(file.name);\n\n    let actionBtns = '';\n    if (isVideo) {\n      actionBtns += '<button class=\"btn-act play\" data-name=\"' + encodeURIComponent(file.name) + '\" data-url=\"' + encodeURIComponent(fileUrl) + '\" onclick=\"handlePlayClick(this)\">\u25b6 Play</button>';\n    }\n    if (!isDir) {\n      actionBtns += '<a href=\"' + fileUrl + '\" class=\"btn-act\" download>\u2b07</a>';\n      actionBtns += '<button class=\"btn-act\" data-url=\"' + window.location.origin + fileUrl + '\" onclick=\"handleCopyClick(this)\">\ud83d\udd17</button>';\n    }\n\n    let clickAttr = '';\n    if (isDir) {\n      clickAttr = 'data-path=\"' + encodeURIComponent(file.path) + '\" onclick=\"handleFolderClick(this)\"';\n    } else if (isVideo) {\n      clickAttr = 'data-name=\"' + encodeURIComponent(file.name) + '\" data-url=\"' + encodeURIComponent(fileUrl) + '\" onclick=\"handlePlayClick(this)\"';\n    } else {\n      clickAttr = 'data-url=\"' + fileUrl + '\" onclick=\"handleFileClick(this)\"';\n    }\n\n    const folderBadge = (isGlobalSearch && file.parentDir) \n      ? '<span class=\"parent-badge\" data-path=\"' + encodeURIComponent(file.parentDir) + '\" onclick=\"event.stopPropagation(); handleFolderClick(this)\">\ud83d\udcc1 ' + escapeHtml(file.parentDir) + '</span>' \n      : '';\n\n    html += '<div class=\"file-row ' + (isDir ? 'is-folder' : '') + '\">' +\n      '<div class=\"col-cb\">' +\n        (!isDir ? '<input type=\"checkbox\" class=\"item-cb\" value=\"' + window.location.origin + fileUrl + '\" onchange=\"updateBulkToolbar()\" />' : '') +\n      '</div>' +\n      '<div class=\"file-name-cell\" ' + clickAttr + '>' +\n        '<span class=\"file-icon\">' + icon + '</span>' +\n        '<div class=\"file-info-group\">' +\n          '<span class=\"file-title\">' + escapeHtml(file.name) + '</span>' +\n          folderBadge +\n        '</div>' +\n      '</div>' +\n      '<div class=\"file-size-cell\">' + (isDir ? '-' : formatBytes(file.size)) + '</div>' +\n      '<div class=\"file-date-cell\">' + formatDate(file.modifiedTime) + '</div>' +\n      '<div class=\"file-actions-cell\">' + actionBtns + '</div>' +\n    '</div>';\n  }\n  listEl.innerHTML = html;\n}\n\nfunction handleFolderClick(el) {\n  const path = decodeURIComponent(el.dataset.path || '');\n  const searchInput = document.getElementById('searchInput');\n  if (searchInput) searchInput.value = '';\n  navigateTo(path);\n}\n\nfunction handlePlayClick(el) {\n  const name = decodeURIComponent(el.dataset.name || '');\n  const url = decodeURIComponent(el.dataset.url || '');\n  openVideoModal(name, url);\n}\n\nfunction handleFileClick(el) {\n  const url = el.dataset.url || '';\n  if (url) window.open(url, '_blank');\n}\n\nfunction handleCopyClick(el) {\n  const url = el.dataset.url || '';\n  copyLink(url);\n}\n\nfunction navigateTo(path) {\n  window.history.pushState(null, '', path ? '?p=' + encodeURIComponent(path) : '/');\n  loadFiles(path);\n}\n\nfunction updateBreadcrumbs(path) {\n  const bar = document.getElementById('breadcrumbBar');\n  if (!bar) return;\n  if (!path) {\n    bar.innerHTML = '<span class=\"crumb-current\">\ud83c\udfe0 Home</span>';\n    return;\n  }\n  const parts = path.split('/');\n  let html = '<span class=\"crumb\" onclick=\"navigateTo(\\'\\')\">\ud83c\udfe0 Home</span>';\n  let accum = '';\n  for (let idx = 0; idx < parts.length; idx++) {\n    const p = parts[idx];\n    accum += (idx === 0 ? '' : '/') + p;\n    const isLast = idx === parts.length - 1;\n    html += ' <span class=\"crumb-sep\">/</span> ';\n    if (isLast) {\n      html += '<span class=\"crumb-current\">' + escapeHtml(p) + '</span>';\n    } else {\n      html += '<span class=\"crumb\" data-target=\"' + encodeURIComponent(accum) + '\" onclick=\"navigateTo(decodeURIComponent(this.dataset.target))\">' + escapeHtml(p) + '</span>';\n    }\n  }\n  bar.innerHTML = html;\n}\n\n// ==========================================\n// Realtime Global Search (D1 Database)\n// ==========================================\nfunction onSearchInput(input) {\n  const q = input.value.trim();\n  clearTimeout(searchDebounceTimer);\n  \n  if (!q) {\n    if (isSearching) {\n      isSearching = false;\n      updateBreadcrumbs(currentPath);\n      renderFiles(allFiles);\n    }\n    return;\n  }\n\n  searchDebounceTimer = setTimeout(async () => {\n    isSearching = true;\n    const listEl = document.getElementById('fileList');\n    if (listEl) {\n      listEl.innerHTML = '<div class=\"loading-state\"><div class=\"spinner\"></div><p>Searching globally across all folders...</p></div>';\n    }\n    \n    const bar = document.getElementById('breadcrumbBar');\n    if (bar) {\n      bar.innerHTML = '<span class=\"crumb-current\">\ud83d\udd0d Global Search: \"' + escapeHtml(q) + '\"</span> <button class=\"btn-clear-search\" onclick=\"clearSearch()\">\u2715 Clear</button>';\n    }\n\n    try {\n      const res = await fetch('/api/search?q=' + encodeURIComponent(q));\n      if (!res.ok) throw new Error('Search failed');\n      const data = await res.json();\n      renderFiles(data.files || [], true);\n    } catch (e) {\n      if (listEl) {\n        listEl.innerHTML = '<div class=\"loading-state\" style=\"color:#ef4444;\"><p>\u274c Search error: ' + escapeHtml(e.message) + '</p></div>';\n      }\n    }\n  }, 250);\n}\n\nfunction clearSearch() {\n  const input = document.getElementById('searchInput');\n  if (input) input.value = '';\n  isSearching = false;\n  updateBreadcrumbs(currentPath);\n  renderFiles(allFiles);\n}\n\n// ==========================================\n// Bulk Actions Toolbar\n// ==========================================\nfunction updateBulkToolbar() {\n  const checked = document.querySelectorAll('.item-cb:checked');\n  const bar = document.getElementById('bulkToolbar');\n  if (!bar) return;\n  if (checked.length > 0) {\n    bar.style.display = 'flex';\n    const countEl = document.getElementById('bulkCount');\n    if (countEl) countEl.textContent = checked.length + ' selected';\n  } else {\n    bar.style.display = 'none';\n  }\n}\n\nfunction toggleSelectAll(masterCb) {\n  document.querySelectorAll('.item-cb').forEach(cb => { cb.checked = masterCb.checked; });\n  updateBulkToolbar();\n}\n\nfunction deselectAll() {\n  document.querySelectorAll('.item-cb').forEach(cb => { cb.checked = false; });\n  const master = document.getElementById('selectAllCb');\n  if (master) master.checked = false;\n  updateBulkToolbar();\n}\n\nfunction copySelectedLinks() {\n  const selected = Array.from(document.querySelectorAll('.item-cb:checked')).map(cb => cb.value);\n  if (!selected.length) return;\n  navigator.clipboard.writeText(selected.join('\\n')).then(() => {\n    showToast('Copied ' + selected.length + ' links to clipboard! \ud83d\udccb');\n    deselectAll();\n  });\n}\n\nfunction copyLink(url) {\n  navigator.clipboard.writeText(url).then(() => { showToast('Link copied to clipboard! \ud83d\udd17'); });\n}\n\nasync function downloadSelected() {\n  const selected = Array.from(document.querySelectorAll('.item-cb:checked')).map(cb => cb.value);\n  if (!selected.length) return;\n  showToast('Starting batch download...');\n  for (let i = 0; i < selected.length; i++) {\n    const a = document.createElement('a');\n    a.href = selected[i];\n    a.download = '';\n    document.body.appendChild(a);\n    a.click();\n    document.body.removeChild(a);\n    await new Promise(r => setTimeout(r, 600));\n  }\n  deselectAll();\n}\n\n// ==========================================\n// Video Player Modal\n// ==========================================\nfunction openVideoModal(name, url) {\n  const titleEl = document.getElementById('modalTitle');\n  if (titleEl) titleEl.textContent = name;\n  const player = document.getElementById('videoPlayer');\n  if (player) {\n    player.src = url;\n    player.play().catch(() => {});\n  }\n  \n  const fullUrl = window.location.origin + url;\n  const cleanUrl = fullUrl.replace(/^https?:\\/\\//, '');\n  const footer = document.getElementById('modalFooter');\n  if (footer) {\n    footer.innerHTML = \n      '<a href=\"' + url + '\" class=\"btn-player\" download>\u2b07 Download Video</a>' +\n      '<button class=\"btn-player\" data-url=\"' + fullUrl + '\" onclick=\"handleCopyClick(this)\">\ud83d\udd17 Copy Stream Link</button>' +\n      '<a href=\"potplayer://' + fullUrl + '\" class=\"btn-player\">PotPlayer</a>' +\n      '<a href=\"vlc://' + fullUrl + '\" class=\"btn-player\">VLC iOS/Mac</a>' +\n      '<a href=\"iina://weblink?url=' + fullUrl + '\" class=\"btn-player\">IINA (Mac)</a>' +\n      '<a href=\"intent://' + cleanUrl + '#Intent;action=android.intent.action.VIEW;scheme=https;type=video/*;package=org.videolan.vlc;end\" class=\"btn-player\">VLC Android</a>' +\n      '<a href=\"intent://' + cleanUrl + '#Intent;action=android.intent.action.VIEW;scheme=https;type=video/*;package=com.mxtech.videoplayer.ad;end\" class=\"btn-player\">MX Player</a>';\n  }\n\n  const modal = document.getElementById('videoModal');\n  if (modal) modal.style.display = 'flex';\n}\n\nfunction closeModal() {\n  const modal = document.getElementById('videoModal');\n  if (modal) modal.style.display = 'none';\n  const player = document.getElementById('videoPlayer');\n  if (player) {\n    player.pause();\n    player.src = '';\n  }\n}\n\n// ==========================================\n// Stealth Mode & Admin Mirror Modal (PIN 290722 Protected)\n// ==========================================\nfunction triggerSakuraSecret() {\n  sakuraClickCount++;\n  clearTimeout(sakuraClickTimer);\n  sakuraClickTimer = setTimeout(() => { sakuraClickCount = 0; }, 2000);\n\n  if (sakuraClickCount >= 3) {\n    sakuraClickCount = 0;\n    revealAdminMirror();\n  }\n}\n\nfunction revealAdminMirror() {\n  const btn = document.getElementById('mirrorModalBtn');\n  if (btn) {\n    btn.style.display = 'inline-flex';\n  }\n  showToast('\u2728 Admin Mode Activated!');\n  openMirrorModal();\n}\n\n// Secret shortcut: Ctrl + Shift + M\nwindow.addEventListener('keydown', (e) => {\n  if (e.ctrlKey && e.shiftKey && (e.key === 'M' || e.key === 'm')) {\n    e.preventDefault();\n    revealAdminMirror();\n  }\n});\n\nfunction openMirrorModal() {\n  const pinInput = document.getElementById('mirrorAdminPin');\n  const savedPin = localStorage.getItem('harudrive_admin_pin');\n  if (pinInput && savedPin) {\n    pinInput.value = savedPin;\n    const rememberCb = document.getElementById('rememberPinCb');\n    if (rememberCb) rememberCb.checked = true;\n  }\n  const m = document.getElementById('mirrorModal');\n  if (m) m.style.display = 'flex';\n}\n\nfunction closeMirrorModal() {\n  const m = document.getElementById('mirrorModal');\n  if (m) m.style.display = 'none';\n}\n\nasync function submitCloudMirror(e) {\n  e.preventDefault();\n  const gdriveInput = document.getElementById('mirrorGdriveUrl');\n  const targetInput = document.getElementById('mirrorTargetPath');\n  const pinInput = document.getElementById('mirrorAdminPin');\n  const rememberCb = document.getElementById('rememberPinCb');\n\n  const gdrive_url = gdriveInput ? gdriveInput.value.trim() : '';\n  const target_path = targetInput ? targetInput.value.trim() : '';\n  const admin_pin = pinInput ? pinInput.value.trim() : '';\n\n  if (!admin_pin) {\n    alert('\u26a0\ufe0f Harap masukkan Admin PIN untuk memulai mirror.');\n    if (pinInput) pinInput.focus();\n    return;\n  }\n\n  const btn = document.getElementById('startMirrorBtn');\n  if (btn) {\n    btn.disabled = true;\n    btn.textContent = '\ud83d\ude80 Verifying PIN & Dispatching...';\n  }\n\n  try {\n    const res = await fetch('/api/admin/mirror', {\n      method: 'POST',\n      headers: { 'Content-Type': 'application/json' },\n      body: JSON.stringify({ gdrive_url: gdrive_url, target_path: target_path, admin_pin: admin_pin })\n    });\n    const result = await res.json();\n    if (res.ok && result.success) {\n      if (rememberCb && rememberCb.checked) {\n        localStorage.setItem('harudrive_admin_pin', admin_pin);\n      } else {\n        localStorage.removeItem('harudrive_admin_pin');\n      }\n      alert('\u2705 SUCCESS!\\n\\n' + result.message + '\\n\\nProses mirror sedang berjalan di GitHub Actions Cloud.');\n      closeMirrorModal();\n    } else {\n      alert('\u274c Akses Ditolak: ' + (result.error || 'PIN Admin Salah atau gagal dispatch job.'));\n      if (pinInput) {\n        pinInput.focus();\n        pinInput.select();\n      }\n    }\n  } catch (err) {\n    alert('\u274c Error: ' + err.message);\n  } finally {\n    if (btn) {\n      btn.disabled = false;\n      btn.textContent = '\u26a1 Start Cloud Mirror (GitHub Actions)';\n    }\n  }\n}\n\n// ==========================================\n// Utilities & Init\n// ==========================================\nfunction showToast(msg) {\n  const toast = document.getElementById('toastOverlay');\n  if (!toast) return;\n  toast.textContent = msg;\n  toast.style.display = 'block';\n  setTimeout(() => { toast.style.display = 'none'; }, 3000);\n}\n\nfunction toggleDark() {\n  const isLight = document.body.classList.toggle('light');\n  localStorage.setItem('haruTheme', isLight ? 'light' : 'dark');\n  const toggle = document.getElementById('darkToggle');\n  if (toggle) toggle.textContent = isLight ? '\ud83c\udf19' : '\u2600\ufe0f';\n}\n\nfunction formatBytes(bytes) {\n  if (!bytes || bytes === 0) return '0 B';\n  const k = 1024;\n  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];\n  const i = Math.floor(Math.log(bytes) / Math.log(k));\n  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];\n}\n\nfunction formatDate(dateStr) {\n  if (!dateStr) return '-';\n  const d = new Date(dateStr);\n  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });\n}\n\nfunction escapeHtml(str) {\n  return (str || '').replace(/[&<>\"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' }[m]));\n}\n\n// History back/forward navigation\nwindow.addEventListener('popstate', () => {\n  const params = new URLSearchParams(window.location.search);\n  loadFiles(params.get('p') || '');\n});\n\n// Initialization\nfunction initHaruDrive() {\n  if (localStorage.getItem('haruTheme') === 'light') {\n    document.body.classList.add('light');\n    const toggle = document.getElementById('darkToggle');\n    if (toggle) toggle.textContent = '\ud83c\udf19';\n  }\n  // Check if admin is saved, if so keep mirror button visible\n  if (localStorage.getItem('harudrive_admin_pin')) {\n    const btn = document.getElementById('mirrorModalBtn');\n    if (btn) btn.style.display = 'inline-flex';\n  }\n  const params = new URLSearchParams(window.location.search);\n  loadFiles(params.get('p') || '');\n}\n\nif (document.readyState === 'loading') {\n  document.addEventListener('DOMContentLoaded', initHaruDrive);\n} else {\n  initHaruDrive();\n}\n";
 
 function htmlPage(content, env) {
   return `<!DOCTYPE html>
@@ -532,10 +599,10 @@ function htmlPage(content, env) {
       display: flex;
       align-items: center;
       gap: 10px;
-      text-decoration: none;
-      color: inherit;
+      user-select: none;
     }
-    .logo-icon { font-size: 1.6rem; }
+    .logo-icon { font-size: 1.6rem; transition: transform 0.2s; }
+    .brand-logo:hover .logo-icon { transform: scale(1.15) rotate(15deg); }
     .brand-title {
       font-size: 1.35rem;
       font-weight: 800;
@@ -560,7 +627,7 @@ function htmlPage(content, env) {
       gap: 8px;
       padding: 8px 14px;
       border-radius: 24px;
-      width: 260px;
+      width: 280px;
     }
     .search-box input {
       background: transparent;
@@ -590,6 +657,11 @@ function htmlPage(content, env) {
       border-color: var(--primary-light);
       background: rgba(99, 102, 241, 0.15);
     }
+    .btn-mirror-stealth {
+      background: rgba(236, 72, 153, 0.12);
+      border-color: rgba(236, 72, 153, 0.3);
+      color: #f43f5e;
+    }
 
     .container {
       max-width: 1200px;
@@ -618,6 +690,18 @@ function htmlPage(content, env) {
     .crumb:hover { opacity: 0.8; text-decoration: underline; }
     .crumb-sep { color: var(--text-dim); }
     .crumb-current { color: var(--text); font-weight: 700; }
+    .btn-clear-search {
+      margin-left: auto;
+      padding: 4px 10px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: var(--bg-card);
+      color: var(--text-muted);
+      font-size: 0.75rem;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .btn-clear-search:hover { color: var(--text); background: var(--hover-row); }
 
     .file-table-wrapper {
       border-radius: var(--radius);
@@ -637,9 +721,9 @@ function htmlPage(content, env) {
       user-select: none;
     }
     .col-cb { width: 36px; display: flex; align-items: center; }
-    .col-name { flex: 1; cursor: pointer; display: flex; align-items: center; gap: 6px; }
-    .col-size { width: 120px; cursor: pointer; text-align: right; }
-    .col-date { width: 150px; cursor: pointer; text-align: right; }
+    .col-name { flex: 1; }
+    .col-size { width: 120px; text-align: right; }
+    .col-date { width: 150px; text-align: right; }
     .col-actions { width: 180px; text-align: right; }
 
     .file-row {
@@ -661,6 +745,12 @@ function htmlPage(content, env) {
       min-width: 0;
     }
     .file-icon { font-size: 1.25rem; flex-shrink: 0; }
+    .file-info-group {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      gap: 2px;
+    }
     .file-title {
       font-size: 0.92rem;
       font-weight: 600;
@@ -670,6 +760,15 @@ function htmlPage(content, env) {
       text-overflow: ellipsis;
     }
     .file-row.is-folder .file-title { color: var(--primary-light); }
+    .parent-badge {
+      font-size: 0.72rem;
+      color: var(--text-dim);
+      background: rgba(255,255,255,0.05);
+      padding: 2px 6px;
+      border-radius: 4px;
+      align-self: flex-start;
+    }
+    .parent-badge:hover { color: var(--primary-light); text-decoration: underline; }
 
     .file-size-cell, .file-date-cell {
       font-size: 0.82rem;
@@ -826,6 +925,26 @@ function htmlPage(content, env) {
     }
     .form-group input:focus { border-color: var(--primary); }
     .form-group small { display: block; margin-top: 4px; font-size: 0.75rem; color: var(--text-dim); }
+
+    .pin-group {
+      background: rgba(236, 72, 153, 0.08);
+      border: 1px solid rgba(236, 72, 153, 0.2);
+      padding: 14px;
+      border-radius: var(--radius-sm);
+    }
+    .remember-pin-wrap {
+      margin-top: 8px;
+      display: flex;
+      align-items: center;
+    }
+    .cb-label {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+    }
 
     .btn-primary {
       width: 100%;
