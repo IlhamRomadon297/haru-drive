@@ -27,7 +27,7 @@ export default {
           }
         });
       } else {
-        return new Response(htmlPage(loginUI('Password salah. Silakan coba lagi.'), env), {
+        return new Response(htmlPage(loginUI('Password salah. Silakan coba lagi.'), env, 'login'), {
           headers: { 'Content-Type': 'text/html;charset=UTF-8' }
         });
       }
@@ -47,7 +47,7 @@ export default {
           headers: { 'Content-Type': 'application/json' }
         });
       }
-      return new Response(htmlPage(loginUI(), env), {
+      return new Response(htmlPage(loginUI(), env, 'login'), {
         headers: { 'Content-Type': 'text/html;charset=UTF-8' }
       });
     }
@@ -120,7 +120,6 @@ export default {
         let reqPath = url.searchParams.get('path') || '';
         const folderId = url.searchParams.get('id') || '';
 
-        // Resolve Short ID if passed
         if (folderId && env.harudrive_db) {
           const row = await env.harudrive_db.prepare('SELECT file_path FROM shortlinks WHERE short_id = ?').bind(folderId).first();
           if (row && row.file_path) {
@@ -197,7 +196,6 @@ export default {
           }
         }
 
-        // Get current folder ID
         let currentFolderId = '';
         if (reqPath) {
           currentFolderId = await generateShortId(reqPath);
@@ -211,6 +209,57 @@ export default {
           status: 500,
           headers: { 'Content-Type': 'application/json' }
         });
+      }
+    }
+
+    // ==========================================================
+    // API: Admin Manual File Upload (Direct to HF)
+    // ==========================================================
+    if (url.pathname === '/api/admin/upload' && request.method === 'POST') {
+      try {
+        const formData = await request.formData();
+        const pin = formData.get('admin_pin');
+        if (pin !== ADMIN_PIN) {
+          return new Response(JSON.stringify({ error: 'PIN Admin Salah!' }), { status: 403 });
+        }
+
+        const file = formData.get('file');
+        const targetDir = (formData.get('target_dir') || '').replace(/^\/+|\/+$/g, '');
+        if (!file || typeof file === 'string') {
+          return new Response(JSON.stringify({ error: 'Tidak ada file yang diunggah.' }), { status: 400 });
+        }
+
+        const filename = file.name;
+        const fullPath = targetDir ? `${targetDir}/${filename}` : filename;
+        const uploadUrl = `https://huggingface.co/api/datasets/${HF_REPO_ID}/raw/main/${encodeURI(fullPath)}`;
+
+        const hfRes = await fetch(uploadUrl, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${HF_TOKEN}`,
+            'Content-Type': file.type || 'application/octet-stream'
+          },
+          body: file
+        });
+
+        if (!hfRes.ok && hfRes.status !== 201 && hfRes.status !== 200) {
+          const errText = await hfRes.text();
+          return new Response(JSON.stringify({ error: `Gagal upload ke HF: ${errText}` }), { status: hfRes.status });
+        }
+
+        // Save to D1
+        const shortId = await generateShortId(fullPath);
+        if (env.harudrive_db) {
+          await env.harudrive_db.prepare(
+            'INSERT OR REPLACE INTO shortlinks (short_id, file_path, name, type, size) VALUES (?, ?, ?, ?, ?)'
+          ).bind(shortId, fullPath, filename, 'file', file.size || 0).run();
+        }
+
+        return new Response(JSON.stringify({ success: true, path: fullPath, shortId }), {
+          headers: { 'Content-Type': 'application/json' }
+        });
+      } catch (err) {
+        return new Response(JSON.stringify({ error: err.message }), { status: 500 });
       }
     }
 
@@ -297,7 +346,6 @@ export default {
           return new Response(JSON.stringify({ error: `Gagal membuat folder di HF: ${errText}` }), { status: hfRes.status });
         }
 
-        // Save folder to D1
         const shortId = await generateShortId(folderPath);
         if (env.harudrive_db) {
           const folderName = folderPath.split('/').pop();
@@ -307,6 +355,130 @@ export default {
         }
 
         return new Response(JSON.stringify({ success: true, folderId: shortId, folderPath }), {
+          headers: { 'Content-Type': 'application/json' }
+        });
+      } catch (err) {
+        return new Response(JSON.stringify({ error: err.message }), { status: 500 });
+      }
+    }
+
+    // ==========================================================
+    // API: Admin File Manager (Rename File / Folder)
+    // ==========================================================
+    if (url.pathname === '/api/admin/rename' && request.method === 'POST') {
+      try {
+        const body = await request.json();
+        if (body.admin_pin !== ADMIN_PIN) {
+          return new Response(JSON.stringify({ error: 'PIN Admin Salah!' }), { status: 403 });
+        }
+
+        const oldPath = (body.old_path || '').replace(/^\/+|\/+$/g, '');
+        const newPath = (body.new_path || '').replace(/^\/+|\/+$/g, '');
+        if (!oldPath || !newPath) {
+          return new Response(JSON.stringify({ error: 'Path lama dan baru wajib diisi.' }), { status: 400 });
+        }
+
+        const commitUrl = `https://huggingface.co/api/datasets/${HF_REPO_ID}/commit/main`;
+        const commitPayload = {
+          summary: `Rename ${oldPath} to ${newPath} via HaruDrive`,
+          operations: [
+            { key: 'deleted', value: { path: oldPath } },
+            { key: 'copied', value: { src_path: oldPath, path: newPath } }
+          ]
+        };
+
+        const hfRes = await fetch(commitUrl, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${HF_TOKEN}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(commitPayload)
+        });
+
+        if (!hfRes.ok) {
+          const errText = await hfRes.text();
+          return new Response(JSON.stringify({ error: `Gagal rename di HF: ${errText}` }), { status: hfRes.status });
+        }
+
+        if (env.harudrive_db) {
+          const newName = newPath.split('/').pop();
+          const newShortId = await generateShortId(newPath);
+          await env.harudrive_db.prepare('DELETE FROM shortlinks WHERE file_path = ?').bind(oldPath).run();
+          await env.harudrive_db.prepare(
+            'INSERT OR REPLACE INTO shortlinks (short_id, file_path, name, type, size) VALUES (?, ?, ?, ?, ?)'
+          ).bind(newShortId, newPath, newName, 'file', 0).run();
+        }
+
+        return new Response(JSON.stringify({ success: true, oldPath, newPath }), {
+          headers: { 'Content-Type': 'application/json' }
+        });
+      } catch (err) {
+        return new Response(JSON.stringify({ error: err.message }), { status: 500 });
+      }
+    }
+
+    // ==========================================================
+    // API: Admin File Manager (Move Files to Target Folder)
+    // ==========================================================
+    if (url.pathname === '/api/admin/move' && request.method === 'POST') {
+      try {
+        const body = await request.json();
+        if (body.admin_pin !== ADMIN_PIN) {
+          return new Response(JSON.stringify({ error: 'PIN Admin Salah!' }), { status: 403 });
+        }
+
+        const paths = body.paths || (body.path ? [body.path] : []);
+        const targetFolder = (body.target_folder || '').replace(/^\/+|\/+$/g, '');
+        if (!paths.length) {
+          return new Response(JSON.stringify({ error: 'Tidak ada file yang dipilih untuk dipindahkan.' }), { status: 400 });
+        }
+
+        const operations = [];
+        for (const p of paths) {
+          const cleanP = p.replace(/^\/+|\/+$/g, '');
+          const filename = cleanP.split('/').pop();
+          const newPath = targetFolder ? `${targetFolder}/${filename}` : filename;
+          if (cleanP !== newPath) {
+            operations.push({ key: 'deleted', value: { path: cleanP } });
+            operations.push({ key: 'copied', value: { src_path: cleanP, path: newPath } });
+          }
+        }
+
+        if (operations.length > 0) {
+          const commitUrl = `https://huggingface.co/api/datasets/${HF_REPO_ID}/commit/main`;
+          const hfRes = await fetch(commitUrl, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${HF_TOKEN}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              summary: `Move ${paths.length} file(s) to /${targetFolder} via HaruDrive`,
+              operations: operations
+            })
+          });
+
+          if (!hfRes.ok) {
+            const errText = await hfRes.text();
+            return new Response(JSON.stringify({ error: `Gagal memindahkan file: ${errText}` }), { status: hfRes.status });
+          }
+
+          if (env.harudrive_db) {
+            for (const p of paths) {
+              const cleanP = p.replace(/^\/+|\/+$/g, '');
+              const filename = cleanP.split('/').pop();
+              const newPath = targetFolder ? `${targetFolder}/${filename}` : filename;
+              const newShortId = await generateShortId(newPath);
+              await env.harudrive_db.prepare('DELETE FROM shortlinks WHERE file_path = ?').bind(cleanP).run();
+              await env.harudrive_db.prepare(
+                'INSERT OR REPLACE INTO shortlinks (short_id, file_path, name, type, size) VALUES (?, ?, ?, ?, ?)'
+              ).bind(newShortId, newPath, filename, 'file', 0).run();
+            }
+          }
+        }
+
+        return new Response(JSON.stringify({ success: true, movedCount: paths.length }), {
           headers: { 'Content-Type': 'application/json' }
         });
       } catch (err) {
@@ -381,7 +553,6 @@ export default {
         }
       }
 
-      // Fallback: direct path if not resolved by short ID
       if (!filePath) {
         filePath = decodeURIComponent(pathAfterPrefix);
         fileName = filePath.split('/').pop() || 'file';
@@ -391,7 +562,6 @@ export default {
       const hfHeaders = new Headers();
       if (HF_TOKEN) hfHeaders.set('Authorization', `Bearer ${HF_TOKEN}`);
 
-      // Pass Range Header for video seek
       const range = request.headers.get('Range');
       if (range) hfHeaders.set('Range', range);
 
@@ -416,16 +586,25 @@ export default {
     }
 
     // ==========================================================
-    // Render Application Single-Page UI
+    // Dedicated Admin Console Page (/admin)
     // ==========================================================
-    if (url.pathname === '/' || url.pathname.startsWith('/folder/')) {
-      return new Response(htmlPage(mainUI(), env), {
+    if (url.pathname === '/admin') {
+      return new Response(htmlPage(adminConsoleUI(), env, 'admin'), {
         headers: { 'Content-Type': 'text/html;charset=UTF-8' }
       });
     }
 
-    // Fallback static assets or redirect
-    return new Response(htmlPage(mainUI(), env), {
+    // ==========================================================
+    // Public UI (/ and /folder/:id)
+    // ==========================================================
+    if (url.pathname === '/' || url.pathname.startsWith('/folder/')) {
+      return new Response(htmlPage(publicUI(), env, 'public'), {
+        headers: { 'Content-Type': 'text/html;charset=UTF-8' }
+      });
+    }
+
+    // Fallback
+    return new Response(htmlPage(publicUI(), env, 'public'), {
       headers: { 'Content-Type': 'text/html;charset=UTF-8' }
     });
   }
@@ -485,22 +664,19 @@ function getMimeType(filename) {
 // ==========================================================
 // HTML Page Generator with Cyber-Sakura Visuals
 // ==========================================================
-function htmlPage(content, env) {
+function htmlPage(content, env, pageMode = 'public') {
   return `<!DOCTYPE html>
 <html lang="id">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>HaruDrive - High-Speed Cloud Storage Index</title>
+  <title>${pageMode === 'admin' ? 'HaruDrive Admin Console' : 'HaruDrive - High-Speed Cloud Index'}</title>
   
-  <!-- Favicon Sakura SVG -->
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22%23ec4899%22><path d=%22M12 2a4 4 0 0 0-3.5 6 4 4 0 0 0-6 3.5 4 4 0 0 0 3.5 6 4 4 0 0 0 6 3.5 4 4 0 0 0 6-3.5 4 4 0 0 0 3.5-6 4 4 0 0 0-3.5-6 4 4 0 0 0-6-3.5z%22/><circle cx=%2212%22 cy=%2212%22 r=%222.5%22 fill=%22%23ffffff%22/></svg>">
-  
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
   
-  <!-- Plyr.js Video Player CSS & JS -->
   <link rel="stylesheet" href="https://cdn.plyr.io/3.7.8/plyr.css" />
   <script src="https://cdn.plyr.io/3.7.8/plyr.polyfilled.js"></script>
 
@@ -524,7 +700,6 @@ function htmlPage(content, env) {
       --font: 'Plus Jakarta Sans', -apple-system, sans-serif;
     }
 
-    /* PURE FLAWLESS LIGHT THEME */
     body.light {
       --bg: #f8fafc;
       --bg-surface: rgba(255, 255, 255, 0.94);
@@ -551,10 +726,7 @@ function htmlPage(content, env) {
       transition: background 0.25s, color 0.25s;
     }
 
-    body.modal-open {
-      overflow: hidden !important;
-    }
-
+    body.modal-open { overflow: hidden !important; }
     .glass {
       background: var(--bg-surface);
       backdrop-filter: blur(16px);
@@ -562,7 +734,6 @@ function htmlPage(content, env) {
       border: 1px solid var(--border);
     }
 
-    /* SVG Icon Helpers */
     .icon {
       width: 17px;
       height: 17px;
@@ -576,7 +747,6 @@ function htmlPage(content, env) {
     .icon-sm { width: 14px; height: 14px; }
     .icon-lg { width: 22px; height: 22px; }
 
-    /* SAKURA BLOSSOM LOGO */
     .sakura-icon-svg {
       width: 22px;
       height: 22px;
@@ -585,7 +755,6 @@ function htmlPage(content, env) {
       flex-shrink: 0;
     }
 
-    /* NAVBAR */
     .navbar-cyber {
       position: sticky;
       top: 0;
@@ -678,13 +847,8 @@ function htmlPage(content, env) {
       50% { opacity: 0.4; transform: scale(0.85); }
       100% { opacity: 1; transform: scale(1); }
     }
-    .status-text {
-      font-size: 0.72rem;
-      font-weight: 700;
-      color: #10b981;
-    }
+    .status-text { font-size: 0.72rem; font-weight: 700; color: #10b981; }
 
-    /* SEARCH SPOTLIGHT */
     .spotlight-search {
       width: 100%;
       display: flex;
@@ -696,10 +860,7 @@ function htmlPage(content, env) {
       border: 1px solid var(--border);
       transition: all 0.2s;
     }
-    body.light .spotlight-search {
-      background: #f1f5f9;
-      border-color: #cbd5e1;
-    }
+    body.light .spotlight-search { background: #f1f5f9; border-color: #cbd5e1; }
     .spotlight-search:focus-within {
       border-color: var(--accent);
       background: var(--bg-card);
@@ -729,7 +890,6 @@ function htmlPage(content, env) {
     }
     body.light .shortcut-badge { background: #e2e8f0; color: #475569; }
 
-    /* BUTTONS */
     .nav-btn {
       display: inline-flex;
       align-items: center;
@@ -750,28 +910,19 @@ function htmlPage(content, env) {
       background: rgba(99, 102, 241, 0.12);
       transform: translateY(-1px);
     }
-    .btn-mirror-stealth {
-      background: rgba(236, 72, 153, 0.15);
-      border-color: rgba(236, 72, 153, 0.4);
-      color: #ec4899;
-      display: none; /* ONLY VISIBLE WHEN ADMIN IS ON */
-    }
-    .btn-admin-badge {
-      background: rgba(16, 185, 129, 0.15);
-      border-color: rgba(16, 185, 129, 0.4);
-      color: #10b981;
+    .btn-admin-nav {
+      background: rgba(99, 102, 241, 0.12);
+      border-color: rgba(99, 102, 241, 0.3);
+      color: var(--primary-light);
     }
 
-    /* FILTER STRIP */
     .filter-strip {
       padding: 8px 24px;
       background: rgba(11, 15, 25, 0.35);
       border-top: 1px solid var(--border);
       overflow-x: auto;
     }
-    body.light .filter-strip {
-      background: #f1f5f9;
-    }
+    body.light .filter-strip { background: #f1f5f9; }
     .filter-container {
       display: flex;
       align-items: center;
@@ -794,10 +945,7 @@ function htmlPage(content, env) {
       white-space: nowrap;
       transition: all 0.2s;
     }
-    .filter-chip:hover {
-      color: var(--text);
-      border-color: var(--primary-light);
-    }
+    .filter-chip:hover { color: var(--text); border-color: var(--primary-light); }
     .filter-chip.active {
       background: var(--accent-gradient);
       color: #fff;
@@ -813,7 +961,6 @@ function htmlPage(content, env) {
       flex: 1;
     }
 
-    /* BREADCRUMB & TOOLBAR */
     .breadcrumb-bar {
       padding: 10px 18px;
       border-radius: var(--radius);
@@ -843,21 +990,17 @@ function htmlPage(content, env) {
     .crumb:hover { text-decoration: underline; }
     .crumb-sep { color: var(--text-dim); }
     .crumb-current { color: var(--text); font-weight: 700; }
-    .toolbar-actions {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
+    .toolbar-actions { display: flex; align-items: center; gap: 8px; }
     .btn-action-tool {
       display: inline-flex;
       align-items: center;
       gap: 5px;
-      padding: 5px 12px;
+      padding: 6px 14px;
       border-radius: var(--radius-sm);
       border: 1px solid var(--border);
       background: var(--bg-card);
       color: var(--text);
-      font-size: 0.8rem;
+      font-size: 0.82rem;
       font-weight: 600;
       cursor: pointer;
       transition: all 0.2s;
@@ -867,15 +1010,12 @@ function htmlPage(content, env) {
       background: rgba(99, 102, 241, 0.12);
     }
 
-    /* FILE TABLE */
     .file-table-wrapper {
       border-radius: var(--radius);
       overflow: hidden;
       box-shadow: 0 10px 30px rgba(0, 0, 0, 0.15);
     }
-    body.light .file-table-wrapper {
-      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
-    }
+    body.light .file-table-wrapper { box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05); }
     .table-header {
       display: flex;
       align-items: center;
@@ -893,7 +1033,7 @@ function htmlPage(content, env) {
     .col-name { flex: 1; min-width: 0; }
     .col-size { width: 110px; text-align: right; }
     .col-date { width: 140px; text-align: right; }
-    .col-actions { width: 220px; text-align: right; }
+    .col-actions { width: 230px; text-align: right; }
 
     .file-row {
       display: flex;
@@ -924,18 +1064,9 @@ function htmlPage(content, env) {
       background: rgba(99, 102, 241, 0.1);
       color: var(--primary-light);
     }
-    .file-icon-box.folder {
-      background: rgba(245, 158, 11, 0.12);
-      color: #f59e0b;
-    }
-    .file-icon-box.video {
-      background: rgba(236, 72, 153, 0.12);
-      color: #ec4899;
-    }
-    .file-icon-box.archive {
-      background: rgba(168, 85, 247, 0.12);
-      color: #a855f7;
-    }
+    .file-icon-box.folder { background: rgba(245, 158, 11, 0.12); color: #f59e0b; }
+    .file-icon-box.video { background: rgba(236, 72, 153, 0.12); color: #ec4899; }
+    .file-icon-box.archive { background: rgba(168, 85, 247, 0.12); color: #a855f7; }
 
     .file-title {
       font-size: 0.9rem;
@@ -956,10 +1087,10 @@ function htmlPage(content, env) {
     .file-date-cell { width: 140px; text-align: right; }
 
     .file-actions-cell {
-      width: 220px;
+      width: 230px;
       display: flex;
       justify-content: flex-end;
-      gap: 6px;
+      gap: 5px;
     }
     .btn-act {
       padding: 5px 9px;
@@ -986,20 +1117,10 @@ function htmlPage(content, env) {
       border-color: rgba(236, 72, 153, 0.3);
       color: #ec4899;
     }
-    .btn-act.play:hover {
-      background: #ec4899;
-      color: white;
-    }
-    .btn-act.btn-delete {
-      color: #ef4444;
-      border-color: rgba(239, 68, 68, 0.25);
-    }
-    .btn-act.btn-delete:hover {
-      background: #ef4444;
-      color: white;
-    }
+    .btn-act.play:hover { background: #ec4899; color: white; }
+    .btn-act.btn-delete { color: #ef4444; border-color: rgba(239, 68, 68, 0.25); }
+    .btn-act.btn-delete:hover { background: #ef4444; color: white; }
 
-    /* BULK TOOLBAR */
     .bulk-toolbar {
       position: fixed;
       bottom: 24px;
@@ -1007,7 +1128,7 @@ function htmlPage(content, env) {
       transform: translateX(-50%);
       display: flex;
       align-items: center;
-      gap: 12px;
+      gap: 10px;
       padding: 10px 20px;
       border-radius: 30px;
       box-shadow: 0 10px 35px rgba(0,0,0,0.5);
@@ -1035,12 +1156,8 @@ function htmlPage(content, env) {
       border-color: rgba(239, 68, 68, 0.4);
       color: #ef4444;
     }
-    .btn-bulk.danger:hover {
-      background: #ef4444;
-      color: white;
-    }
+    .btn-bulk.danger:hover { background: #ef4444; color: white; }
 
-    /* MODAL SYSTEM & COMPACT THEATER PLYR */
     .modal-backdrop {
       position: fixed;
       inset: 0;
@@ -1068,7 +1185,6 @@ function htmlPage(content, env) {
       100% { opacity: 1; transform: scale(1) translateY(0); }
     }
     
-    /* COMPACT THEATER VIDEO CARD (PERFECTLY FITS VIEWPORT) */
     .video-card {
       max-width: 760px;
       width: 100%;
@@ -1084,10 +1200,7 @@ function htmlPage(content, env) {
       aspect-ratio: 16 / 9;
       max-height: 52vh;
     }
-    .plyr--video {
-      height: 100%;
-      width: 100%;
-    }
+    .plyr--video { height: 100%; width: 100%; }
 
     .modal-header {
       display: flex;
@@ -1155,12 +1268,7 @@ function htmlPage(content, env) {
       box-shadow: 0 0 0 3px rgba(236, 72, 153, 0.2);
     }
 
-    .external-players-row {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      flex-wrap: wrap;
-    }
+    .external-players-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
     .btn-ext-player {
       display: inline-flex;
       align-items: center;
@@ -1180,7 +1288,21 @@ function htmlPage(content, env) {
       background: rgba(99, 102, 241, 0.12);
     }
 
-    /* RESPONSIVE MOBILE */
+    /* DRAG DROP ZONE */
+    .dropzone-box {
+      border: 2px dashed rgba(236, 72, 153, 0.4);
+      background: rgba(236, 72, 153, 0.04);
+      border-radius: 14px;
+      padding: 24px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .dropzone-box:hover {
+      border-color: var(--accent);
+      background: rgba(236, 72, 153, 0.08);
+    }
+
     @media (max-width: 768px) {
       .nav-container { flex-wrap: wrap; padding: 10px 14px; gap: 8px; }
       .nav-left { gap: 8px; }
@@ -1196,8 +1318,8 @@ function htmlPage(content, env) {
       .col-date, .file-date-cell { display: none; }
       .col-size { width: 75px; }
       .file-size-cell { width: 75px; }
-      .col-actions { width: 90px; }
-      .file-actions-cell { width: 90px; gap: 4px; }
+      .col-actions { width: 100px; }
+      .file-actions-cell { width: 100px; gap: 4px; }
       .btn-act .btn-act-label { display: none; }
       .btn-act { padding: 5px 7px; }
       .file-row { padding: 10px; }
@@ -1209,12 +1331,12 @@ function htmlPage(content, env) {
     }
     @media (max-width: 480px) {
       .col-size, .file-size-cell { display: none; }
-      .col-actions { width: 75px; }
-      .file-actions-cell { width: 75px; }
+      .col-actions { width: 85px; }
+      .file-actions-cell { width: 85px; }
     }
   </style>
 </head>
-<body>
+<body data-mode="${pageMode}">
   ${content}
   <script>
 let currentPath = '';
@@ -1223,30 +1345,23 @@ let allFiles = [];
 let activeFilter = 'all';
 let selectedFiles = new Set();
 let plyrPlayerInstance = null;
-let isAdminActive = false;
+const isPageAdmin = document.body.getAttribute('data-mode') === 'admin';
+let selectedUploadFile = null;
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
-  // Theme check
   if (localStorage.getItem('haruTheme') === 'light') {
     document.body.classList.add('light');
     updateThemeIcon(true);
   }
 
-  // Admin PIN check
-  if (localStorage.getItem('harudrive_admin_pin')) {
-    setAdminState(true);
-  } else {
-    setAdminState(false);
+  if (isPageAdmin) {
+    initAdminConsole();
   }
 
-  // Setup Event Listeners
   document.getElementById('darkToggle')?.addEventListener('click', toggleTheme);
   document.getElementById('refreshBtn')?.addEventListener('click', () => loadFolder(currentPath, currentFolderId));
-  document.getElementById('mirrorModalBtn')?.addEventListener('click', openMirrorModal);
-  document.getElementById('adminToggleBtn')?.addEventListener('click', openAdminAuthModal);
   
-  // Filter chips
   document.querySelectorAll('.filter-chip').forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.filter-chip').forEach(b => b.classList.remove('active'));
@@ -1256,13 +1371,11 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // Spotlight search
   const searchInput = document.getElementById('searchInput');
   if (searchInput) {
     searchInput.addEventListener('input', debounce(handleSearch, 300));
   }
 
-  // Keyboard shortcut Ctrl+K
   document.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
       e.preventDefault();
@@ -1270,20 +1383,62 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // History Popstate
   window.addEventListener('popstate', handlePopState);
 
-  // Initial Route Check
-  const pathName = window.location.pathname;
-  if (pathName.startsWith('/folder/')) {
-    const fId = pathName.replace('/folder/', '').split('/')[0];
-    loadFolder('', fId);
-  } else {
-    const urlParams = new URLSearchParams(window.location.search);
-    const p = urlParams.get('p') || '';
-    loadFolder(p, '');
+  if (!isPageAdmin || localStorage.getItem('harudrive_admin_pin')) {
+    const pathName = window.location.pathname;
+    if (pathName.startsWith('/folder/')) {
+      const fId = pathName.replace('/folder/', '').split('/')[0];
+      loadFolder('', fId);
+    } else {
+      const urlParams = new URLSearchParams(window.location.search);
+      const p = urlParams.get('p') || '';
+      loadFolder(p, '');
+    }
   }
 });
+
+// Admin Console Auth Manager
+function initAdminConsole() {
+  const gate = document.getElementById('adminLoginGate');
+  const main = document.getElementById('adminMainContent');
+  const savedPin = localStorage.getItem('harudrive_admin_pin');
+
+  if (savedPin === '290722') {
+    if (gate) gate.style.display = 'none';
+    if (main) main.style.display = 'block';
+  } else {
+    if (gate) gate.style.display = 'flex';
+    if (main) main.style.display = 'none';
+    document.getElementById('gatePinInput')?.focus();
+  }
+}
+
+function unlockAdminConsole() {
+  const pinInput = document.getElementById('gatePinInput');
+  const rememberCb = document.getElementById('gateRememberPin');
+  const pin = (pinInput?.value || '').trim();
+
+  if (pin === '290722') {
+    if (rememberCb && rememberCb.checked) {
+      localStorage.setItem('harudrive_admin_pin', pin);
+    }
+    document.getElementById('adminLoginGate').style.display = 'none';
+    document.getElementById('adminMainContent').style.display = 'block';
+    loadFolder(currentPath, currentFolderId);
+  } else {
+    alert('❌ PIN Admin Salah!');
+    pinInput?.focus();
+    pinInput?.select();
+  }
+}
+
+function lockAdminSession() {
+  localStorage.removeItem('harudrive_admin_pin');
+  document.getElementById('adminLoginGate').style.display = 'flex';
+  document.getElementById('adminMainContent').style.display = 'none';
+  alert('🔒 Console Admin telah dikunci.');
+}
 
 // Navigation
 function navigateTo(path, id = '', pushHistory = true) {
@@ -1292,6 +1447,11 @@ function navigateTo(path, id = '', pushHistory = true) {
     window.history.pushState({ path, id }, '', targetUrl);
   }
   loadFolder(path, id);
+}
+
+function navigateToAdmin(path) {
+  currentPath = path;
+  loadFolder(path, '');
 }
 
 function handlePopState(e) {
@@ -1382,12 +1542,16 @@ function renderFileList() {
     const fileShortLink = \`/file/\${file.id}\`;
     const downloadShortLink = \`/d/\${file.id}\`;
 
+    const clickAction = isDir 
+      ? (isPageAdmin ? \`navigateToAdmin('\${escapeJs(file.path)}')\` : \`navigateTo('\${escapeJs(file.path)}', '\${file.id}')\`)
+      : (isVideo ? \`playVideo('\${file.id}', '\${escapeJs(file.name)}')\` : \`downloadFile('\${file.id}')\`);
+
     html += \`
     <div class="file-row \${isDir ? 'is-folder' : ''}">
       <div class="col-cb">
         <input type="checkbox" \${isChecked ? 'checked' : ''} onchange="toggleItemSelect('\${escapeJs(file.path)}', this.checked)">
       </div>
-      <div class="file-name-cell" onclick="\${isDir ? \`navigateTo('\${escapeJs(file.path)}', '\${file.id}')\` : (isVideo ? \`playVideo('\${file.id}', '\${escapeJs(file.name)}')\` : \`downloadFile('\${file.id}')\`)}">
+      <div class="file-name-cell" onclick="\${clickAction}">
         <div class="file-icon-box \${iconType}">
           \${getFileSvgIcon(iconType)}
         </div>
@@ -1395,8 +1559,8 @@ function renderFileList() {
       </div>
       <div class="file-size-cell">\${isDir ? '-' : formatBytes(file.size)}</div>
       <div class="file-date-cell">\${formatDate(file.modifiedTime)}</div>
-      <div class="file-actions-cell">
-        \${isVideo ? \`
+      <div class="file-actions-cell" style="\${isPageAdmin ? 'width: 260px;' : ''}">
+        \${isVideo && !isPageAdmin ? \`
           <button class="btn-act play" onclick="playVideo('\${file.id}', '\${escapeJs(file.name)}')" title="Putar Video">
             <svg class="icon icon-sm" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>
             <span class="btn-act-label">Play</span>
@@ -1410,7 +1574,14 @@ function renderFileList() {
             <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
           </button>
         \` : ''}
-        \${isAdminActive ? \`
+
+        \${isPageAdmin ? \`
+          <button class="btn-act" onclick="openRenameModal('\${escapeJs(file.path)}', '\${escapeJs(file.name)}')" title="Ubah Nama">
+            <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
+          </button>
+          <button class="btn-act" onclick="openMoveModalSingle('\${escapeJs(file.path)}')" title="Pindahkan">
+            <svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/><path d="M3 12h12"/></svg>
+          </button>
           <button class="btn-act btn-delete" onclick="deleteSingleItem('\${escapeJs(file.path)}')" title="Hapus Permanen">
             <svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
           </button>
@@ -1427,8 +1598,9 @@ function updateBreadcrumbs() {
   const nav = document.getElementById('breadcrumbNav');
   if (!nav) return;
 
+  const baseRootUrl = isPageAdmin ? '/admin' : '/';
   let html = \`
-    <a href="/" class="crumb" onclick="navigateTo(''); return false;">
+    <a href="\${baseRootUrl}" class="crumb" onclick="\${isPageAdmin ? \`navigateToAdmin('')\` : \`navigateTo('')\`}; return false;">
       <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
       <span>Home</span>
     </a>\`;
@@ -1443,7 +1615,7 @@ function updateBreadcrumbs() {
       if (isLast) {
         html += \`<span class="crumb-current">\${escapeHtml(p)}</span>\`;
       } else {
-        html += \`<a href="/?p=\${encodeURIComponent(accum)}" class="crumb" onclick="navigateTo('\${escapeJs(accum)}'); return false;">\${escapeHtml(p)}</a>\`;
+        html += \`<a href="\${baseRootUrl}?p=\${encodeURIComponent(accum)}" class="crumb" onclick="\${isPageAdmin ? \`navigateToAdmin('\${escapeJs(accum)}')\` : \`navigateTo('\${escapeJs(accum)}')\`}; return false;">\${escapeHtml(p)}</a>\`;
       }
     });
   }
@@ -1462,7 +1634,6 @@ function playVideo(shortId, filename) {
   const streamUrl = \`\${window.location.origin}/file/\${shortId}\`;
   titleEl.textContent = filename;
 
-  // External Player Deep Links
   extEl.innerHTML = \`
     <a href="vlc://\${streamUrl}" class="btn-ext-player" title="Buka di VLC">VLC</a>
     <a href="potplayer://\${streamUrl}" class="btn-ext-player" title="Buka di PotPlayer">PotPlayer</a>
@@ -1471,7 +1642,6 @@ function playVideo(shortId, filename) {
     <a href="/d/\${shortId}" class="btn-ext-player" style="margin-left: auto; background: var(--primary); color: white; border: none;">Download File</a>
   \`;
 
-  // Destroy previous Plyr instance
   if (plyrPlayerInstance) {
     try { plyrPlayerInstance.destroy(); } catch (e) {}
   }
@@ -1480,7 +1650,6 @@ function playVideo(shortId, filename) {
   modal.style.display = 'flex';
   document.body.classList.add('modal-open');
 
-  // Init Plyr
   if (window.Plyr) {
     plyrPlayerInstance = new Plyr(videoEl, {
       autoplay: true,
@@ -1506,7 +1675,6 @@ function closeVideoModal() {
   }
 }
 
-// Shortlink Copy
 function copyShortLink(shortId) {
   const link = \`\${window.location.origin}/file/\${shortId}\`;
   navigator.clipboard.writeText(link).then(() => {
@@ -1520,87 +1688,170 @@ function downloadFile(shortId) {
   window.location.href = \`/d/\${shortId}\`;
 }
 
-// Admin Mode State Manager
-function setAdminState(active) {
-  isAdminActive = active;
-  const btn = document.getElementById('adminToggleBtn');
-  const btnText = document.getElementById('adminBtnText');
-  const toolbar = document.getElementById('adminToolbar');
-  const mirrorBtn = document.getElementById('mirrorModalBtn');
-
-  if (btn) {
-    if (active) {
-      btn.className = 'nav-btn btn-admin-badge';
-      if (btnText) btnText.textContent = 'Admin On';
-    } else {
-      btn.className = 'nav-btn';
-      if (btnText) btnText.textContent = 'Admin';
-    }
-  }
-
-  // Show/Hide New Folder toolbar & Mirror button based on Admin state
-  if (toolbar) toolbar.style.display = active ? 'flex' : 'none';
-  if (mirrorBtn) mirrorBtn.style.display = active ? 'inline-flex' : 'none';
-
-  renderFileList();
-}
-
-function openAdminAuthModal() {
-  const m = document.getElementById('adminAuthModal');
-  const inputSec = document.getElementById('adminAuthInputSection');
-  const activeSec = document.getElementById('adminActiveSection');
-  const footer = document.getElementById('adminAuthFooter');
-  const btnSubmit = document.getElementById('btnSubmitAdminAuth');
-
+// Manual Upload Modal (Admin)
+function openUploadModal() {
+  const m = document.getElementById('uploadModal');
+  const targetDirInput = document.getElementById('uploadTargetDirInput');
   if (!m) return;
+
+  targetDirInput.value = currentPath;
+  selectedUploadFile = null;
+  document.getElementById('selectedFileInfo').style.display = 'none';
+  document.getElementById('uploadProgressBox').style.display = 'none';
   m.style.display = 'flex';
-
-  if (isAdminActive) {
-    // Mode Admin is already active: Show reset/lock options
-    if (inputSec) inputSec.style.display = 'none';
-    if (activeSec) activeSec.style.display = 'block';
-    if (btnSubmit) btnSubmit.style.display = 'none';
-  } else {
-    // Mode Admin is inactive: Show PIN prompt
-    if (inputSec) inputSec.style.display = 'flex';
-    if (activeSec) activeSec.style.display = 'none';
-    if (btnSubmit) btnSubmit.style.display = 'inline-flex';
-    document.getElementById('adminPinInput')?.focus();
-  }
 }
-
-function closeAdminAuthModal() {
-  const m = document.getElementById('adminAuthModal');
+function closeUploadModal() {
+  const m = document.getElementById('uploadModal');
   if (m) m.style.display = 'none';
 }
+function handleFileSelected(files) {
+  if (files && files.length > 0) {
+    selectedUploadFile = files[0];
+    document.getElementById('selectedFileName').textContent = \`📄 \${selectedUploadFile.name} (\${formatBytes(selectedUploadFile.size)})\`;
+    document.getElementById('selectedFileInfo').style.display = 'block';
+  }
+}
+async function submitManualUpload() {
+  if (!selectedUploadFile) return alert('Silakan pilih file terlebih dahulu!');
+  const targetDir = (document.getElementById('uploadTargetDirInput').value || '').trim();
+  const pin = localStorage.getItem('harudrive_admin_pin') || '290722';
 
-function verifyAdminPin() {
-  const pinInput = document.getElementById('adminPinInput');
-  const rememberCb = document.getElementById('rememberAdminPin');
-  const pin = (pinInput?.value || '').trim();
+  const progressBox = document.getElementById('uploadProgressBox');
+  const progressBar = document.getElementById('uploadProgressBar');
+  const statusText = document.getElementById('uploadStatusText');
+  const btn = document.getElementById('startUploadBtn');
 
-  if (pin === '290722') {
-    if (rememberCb && rememberCb.checked) {
-      localStorage.setItem('harudrive_admin_pin', pin);
+  progressBox.style.display = 'block';
+  progressBar.style.width = '45%';
+  statusText.textContent = \`Mengupload \${selectedUploadFile.name}...\`;
+  btn.disabled = true;
+
+  const formData = new FormData();
+  formData.append('file', selectedUploadFile);
+  formData.append('target_dir', targetDir);
+  formData.append('admin_pin', pin);
+
+  try {
+    const res = await fetch('/api/admin/upload', {
+      method: 'POST',
+      body: formData
+    });
+    progressBar.style.width = '100%';
+    const data = await res.json();
+    if (res.ok && data.success) {
+      closeUploadModal();
+      loadFolder(currentPath, currentFolderId);
+      alert(\`✅ File berhasil diunggah ke /\${data.path}\`);
     } else {
-      localStorage.removeItem('harudrive_admin_pin');
+      alert('Gagal upload: ' + (data.error || 'Terjadi kesalahan'));
     }
-    setAdminState(true);
-    closeAdminAuthModal();
-    if (pinInput) pinInput.value = '';
-    alert('✅ Mode Admin Berhasil Diaktifkan!');
-  } else {
-    alert('❌ PIN Admin Salah! Silakan periksa kembali.');
-    pinInput?.focus();
-    pinInput?.select();
+  } catch (err) {
+    alert('Upload error: ' + err.message);
+  } finally {
+    btn.disabled = false;
+    progressBox.style.display = 'none';
   }
 }
 
-function resetAndLockAdmin() {
-  localStorage.removeItem('harudrive_admin_pin');
-  setAdminState(false);
-  closeAdminAuthModal();
-  alert('🔒 Mode Admin telah dikunci & PIN tersimpan berhasil dihapus dari browser ini.');
+// Rename Modal Logic (Admin)
+function openRenameModal(oldPath, oldName) {
+  const m = document.getElementById('renameModal');
+  const oldPathInput = document.getElementById('renameOldPath');
+  const newNameInput = document.getElementById('renameNewNameInput');
+  if (!m) return;
+
+  oldPathInput.value = oldPath;
+  newNameInput.value = oldName;
+  m.style.display = 'flex';
+  newNameInput.focus();
+}
+function closeRenameModal() {
+  const m = document.getElementById('renameModal');
+  if (m) m.style.display = 'none';
+}
+async function submitRename() {
+  const oldPath = document.getElementById('renameOldPath').value;
+  const newName = (document.getElementById('renameNewNameInput').value || '').trim();
+  if (!newName) return alert('Nama baru tidak boleh kosong!');
+
+  const pathParts = oldPath.split('/');
+  pathParts.pop();
+  const newPath = pathParts.length ? \`\${pathParts.join('/')}/\${newName}\` : newName;
+  const pin = localStorage.getItem('harudrive_admin_pin') || '290722';
+
+  try {
+    const res = await fetch('/api/admin/rename', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ old_path: oldPath, new_path: newPath, admin_pin: pin })
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      closeRenameModal();
+      loadFolder(currentPath, currentFolderId);
+    } else {
+      alert('Gagal rename: ' + (data.error || 'Terjadi kesalahan'));
+    }
+  } catch (e) {
+    alert('Error: ' + e.message);
+  }
+}
+
+// Move Modal Logic (Admin)
+let moveItemsQueue = [];
+function openMoveModalSingle(itemPath) {
+  moveItemsQueue = [itemPath];
+  const m = document.getElementById('moveModal');
+  const desc = document.getElementById('moveTargetDesc');
+  const input = document.getElementById('moveDestinationInput');
+  if (!m) return;
+
+  desc.textContent = \`Memindahkan: \${itemPath.split('/').pop()}\`;
+  input.value = currentPath;
+  m.style.display = 'flex';
+  input.focus();
+}
+function openBulkMoveModal() {
+  moveItemsQueue = Array.from(selectedFiles);
+  if (!moveItemsQueue.length) return;
+
+  const m = document.getElementById('moveModal');
+  const desc = document.getElementById('moveTargetDesc');
+  const input = document.getElementById('moveDestinationInput');
+  if (!m) return;
+
+  desc.textContent = \`Memindahkan \${moveItemsQueue.length} item terpilih.\`;
+  input.value = currentPath;
+  m.style.display = 'flex';
+  input.focus();
+}
+function closeMoveModal() {
+  const m = document.getElementById('moveModal');
+  if (m) m.style.display = 'none';
+  moveItemsQueue = [];
+}
+async function submitMove() {
+  const destFolder = (document.getElementById('moveDestinationInput').value || '').trim();
+  const pin = localStorage.getItem('harudrive_admin_pin') || '290722';
+
+  try {
+    const res = await fetch('/api/admin/move', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paths: moveItemsQueue, target_folder: destFolder, admin_pin: pin })
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      closeMoveModal();
+      clearBulkSelection();
+      loadFolder(currentPath, currentFolderId);
+      alert(\`✅ Berhasil memindahkan \${data.movedCount} item ke /\${destFolder}\`);
+    } else {
+      alert('Gagal memindahkan: ' + (data.error || 'Terjadi kesalahan'));
+    }
+  } catch (e) {
+    alert('Error: ' + e.message);
+  }
 }
 
 // New Folder Modal
@@ -1748,7 +1999,7 @@ async function submitCloudMirror() {
   const targetPath = (targetInput?.value || '').trim();
   if (!gdriveUrl) return alert('Masukkan URL Google Drive!');
 
-  const pin = localStorage.getItem('harudrive_admin_pin') || prompt('Masukkan PIN Admin (290722):');
+  const pin = localStorage.getItem('harudrive_admin_pin') || prompt('Masukkan PIN Admin...:');
   if (!pin) return;
 
   const btn = document.getElementById('startMirrorBtn');
@@ -1789,7 +2040,6 @@ function updateThemeIcon(isLight) {
   }
 }
 
-// SVG Icons
 function getFileSvgIcon(type) {
   if (type === 'folder') {
     return '<svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>';
@@ -1803,7 +2053,6 @@ function getFileSvgIcon(type) {
   return '<svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
 }
 
-// Helpers
 function formatBytes(bytes) {
   if (!bytes || bytes === 0) return '0 B';
   const k = 1024;
@@ -1868,9 +2117,9 @@ function loginUI(errorMsg = '') {
   </div>`;
 }
 
-function mainUI() {
+function publicUI() {
   return `
-  <!-- TOP NAVBAR -->
+  <!-- TOP NAVBAR (PUBLIC CLEAN VIEW) -->
   <header class="navbar-cyber glass">
     <div class="nav-container">
       <div class="nav-left">
@@ -1902,16 +2151,10 @@ function mainUI() {
           <svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
         </button>
 
-        <!-- MIRROR BUTTON (SHOWN ONLY WHEN ADMIN IS ACTIVE) -->
-        <button class="nav-btn btn-mirror-stealth" id="mirrorModalBtn" title="Cloud Mirror Engine">
-          <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/><polyline points="12 13 12 7 9 10"/><polyline points="12 7 15 10"/></svg>
-          <span class="btn-text-label">Mirror</span>
-        </button>
-
-        <button class="nav-btn" id="adminToggleBtn" title="Mode Admin File Manager">
+        <a href="/admin" class="nav-btn btn-admin-nav" title="Buka Console Admin">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-          <span class="btn-text-label" id="adminBtnText">Admin</span>
-        </button>
+          <span class="btn-text-label">Admin</span>
+        </a>
 
         <button class="nav-btn" id="darkToggle" title="Ganti Tema">
           <svg class="icon icon-sm" id="themeIcon" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
@@ -1960,13 +2203,6 @@ function mainUI() {
           <span>Home</span>
         </a>
       </div>
-
-      <div class="toolbar-actions" id="adminToolbar" style="display: none;">
-        <button class="btn-action-tool" onclick="openNewFolderModal()">
-          <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>
-          <span>+ Folder Baru</span>
-        </button>
-      </div>
     </div>
 
     <!-- File Table -->
@@ -1990,10 +2226,6 @@ function mainUI() {
   <!-- FLOATING BULK ACTIONS TOOLBAR -->
   <div id="bulkToolbar" class="bulk-toolbar" style="display: none;">
     <span id="bulkCount" style="font-size: 0.85rem; font-weight: 700;">0 Dipilih</span>
-    <button class="btn-bulk danger" onclick="bulkDeleteSelected()">
-      <svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
-      <span>Hapus</span>
-    </button>
     <button class="btn-bulk" onclick="bulkCopyLinks()">
       <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
       <span>Salin Link</span>
@@ -2019,38 +2251,210 @@ function mainUI() {
       </div>
     </div>
   </div>
+  `;
+}
 
-  <!-- ADMIN AUTH MODAL (WITH RESET/LOCK SUPPORT) -->
-  <div id="adminAuthModal" class="modal-backdrop" style="display: none;">
+function adminConsoleUI() {
+  return `
+  <!-- TOP NAVBAR (ADMIN CONSOLE VIEW) -->
+  <header class="navbar-cyber glass">
+    <div class="nav-container">
+      <div class="nav-left">
+        <a href="/admin" class="brand-logo">
+          <div class="logo-glow-wrap">
+            <svg class="sakura-icon-svg" viewBox="0 0 24 24"><path d="M12 2a4 4 0 0 0-3.5 6 4 4 0 0 0-6 3.5 4 4 0 0 0 3.5 6 4 4 0 0 0 6 3.5 4 4 0 0 0 6-3.5 4 4 0 0 0 3.5-6 4 4 0 0 0-3.5-6 4 4 0 0 0-6-3.5z"/><circle cx="12" cy="12" r="2.5" fill="#ffffff"/></svg>
+          </div>
+          <div class="brand-info">
+            <span class="brand-title">HaruDrive</span>
+            <span class="brand-subtag" style="color: #10b981;">Admin Console</span>
+          </div>
+        </a>
+      </div>
+
+      <div class="nav-right">
+        <a href="/" class="nav-btn" title="Kembali ke Web Publik">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+          <span class="btn-text-label">Web Publik</span>
+        </a>
+
+        <button class="nav-btn" style="background: rgba(239, 68, 68, 0.12); border-color: rgba(239, 68, 68, 0.35); color: #ef4444;" onclick="lockAdminSession()" title="Kunci Mode Admin">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          <span class="btn-text-label">Kunci Admin</span>
+        </button>
+
+        <button class="nav-btn" id="darkToggle" title="Ganti Tema">
+          <svg class="icon icon-sm" id="themeIcon" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- ADMIN AUTH BARRIER (IF LOCKED) -->
+  <div id="adminLoginGate" style="display: none; min-height: 75vh; align-items: center; justify-content: center; padding: 20px;">
+    <div class="glass" style="max-width: 420px; width: 100%; padding: 32px; border-radius: 24px; text-align: center; box-shadow: 0 20px 50px rgba(0,0,0,0.4);">
+      <div class="logo-glow-wrap" style="margin: 0 auto 16px; width: 56px; height: 56px;">
+        <svg class="icon icon-lg" style="color: #ec4899;" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+      </div>
+      <h2 style="font-size: 1.4rem; font-weight: 800; margin-bottom: 6px;">Admin Storage Console</h2>
+      <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 20px;">Masukkan PIN Admin untuk mengelola file, folder, dan Cloud Mirror:</p>
+      
+      <div style="display: flex; flex-direction: column; gap: 14px;">
+        <input type="password" id="gatePinInput" placeholder="PIN Admin..." maxlength="10" class="form-input-pro" style="padding: 12px; font-size: 1.2rem; text-align: center; letter-spacing: 4px;">
+        <label style="display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 0.84rem; cursor: pointer;">
+          <input type="checkbox" id="gateRememberPin" checked>
+          <span>Ingat PIN di browser ini</span>
+        </label>
+        <button class="nav-btn" style="width: 100%; justify-content: center; padding: 12px; background: var(--accent-gradient); color: white; border: none; font-size: 0.95rem; font-weight: 700;" onclick="unlockAdminConsole()">Buka Console Admin</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ADMIN CONSOLE MAIN CONTENT -->
+  <div id="adminMainContent" class="container" style="display: none;">
+    <!-- Storage Stat & Quick Tools Bar -->
+    <div class="breadcrumb-bar glass" style="margin-bottom: 16px;">
+      <div class="crumb-group" id="breadcrumbNav">
+        <a href="/admin" class="crumb" onclick="navigateToAdmin(''); return false;">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+          <span>Root / Home</span>
+        </a>
+      </div>
+
+      <div class="toolbar-actions">
+        <!-- MANUAL UPLOAD BUTTON -->
+        <button class="btn-action-tool" style="background: rgba(99, 102, 241, 0.15); border-color: rgba(99, 102, 241, 0.4); color: var(--primary-light);" onclick="openUploadModal()">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          <span>⬆ Upload File</span>
+        </button>
+
+        <button class="btn-action-tool" style="background: rgba(16, 185, 129, 0.12); border-color: rgba(16, 185, 129, 0.35); color: #10b981;" onclick="openNewFolderModal()">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>
+          <span>+ Folder Baru</span>
+        </button>
+
+        <button class="btn-action-tool" style="background: rgba(236, 72, 153, 0.12); border-color: rgba(236, 72, 153, 0.35); color: #ec4899;" onclick="openMirrorModal()">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/><polyline points="12 13 12 7 9 10"/><polyline points="12 7 15 10"/></svg>
+          <span>⚡ Cloud Mirror</span>
+        </button>
+
+        <button class="btn-action-tool" onclick="loadFolder(currentPath, currentFolderId)">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- Admin File Manager Table -->
+    <div class="file-table-wrapper glass">
+      <div class="table-header">
+        <div class="col-cb"><input type="checkbox" id="selectAllCheckbox" onchange="toggleSelectAll(this.checked)"></div>
+        <div class="col-name">Nama File / Folder</div>
+        <div class="col-size">Ukuran</div>
+        <div class="col-date">Diperbarui</div>
+        <div class="col-actions" style="width: 260px;">Kelola File</div>
+      </div>
+      <div id="fileListContainer">
+        <div style="text-align: center; padding: 40px; color: var(--text-muted);">
+          <div class="pulse-dot" style="margin: 0 auto 12px; width: 12px; height: 12px;"></div>
+          <p>Menghubungkan ke HaruDrive Storage...</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- FLOATING BULK ACTIONS TOOLBAR (ADMIN) -->
+  <div id="bulkToolbar" class="bulk-toolbar" style="display: none;">
+    <span id="bulkCount" style="font-size: 0.85rem; font-weight: 700;">0 Dipilih</span>
+    <button class="btn-bulk" style="color: var(--primary-light);" onclick="openBulkMoveModal()">
+      <svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/><path d="M3 12h12"/></svg>
+      <span>Pindahkan</span>
+    </button>
+    <button class="btn-bulk danger" onclick="bulkDeleteSelected()">
+      <svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+      <span>Hapus</span>
+    </button>
+    <button class="btn-bulk" onclick="bulkCopyLinks()">
+      <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+      <span>Salin Link</span>
+    </button>
+    <button class="btn-bulk" onclick="clearBulkSelection()">Batal</button>
+  </div>
+
+  <!-- MANUAL UPLOAD MODAL -->
+  <div id="uploadModal" class="modal-backdrop" style="display: none;">
     <div class="modal-card">
       <div class="modal-header">
-        <span class="modal-title" id="adminModalTitle">🔐 Mode Admin File Manager</span>
-        <button class="btn-close-circle" onclick="closeAdminAuthModal()">
+        <span class="modal-title">⬆ Upload File ke HaruDrive</span>
+        <button class="btn-close-circle" onclick="closeUploadModal()">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
       </div>
-      
-      <div id="adminAuthInputSection" class="modal-body">
-        <p style="font-size: 0.86rem; color: var(--text-muted);">Masukkan 6-digit PIN Admin Anda untuk mengaktifkan fitur Buat Folder, Rename, Delete, dan Cloud Mirror:</p>
-        <input type="password" id="adminPinInput" class="form-input-pro" placeholder="PIN Admin (290722)" maxlength="10" style="text-align: center; font-size: 1.2rem; letter-spacing: 4px;">
-        <label style="display: flex; align-items: center; gap: 8px; font-size: 0.84rem; cursor: pointer;">
-          <input type="checkbox" id="rememberAdminPin" checked>
-          <span>Ingat PIN Admin di browser ini</span>
-        </label>
-      </div>
-
-      <div id="adminActiveSection" class="modal-body" style="display: none;">
-        <div style="background: rgba(16, 185, 129, 0.12); border: 1px solid rgba(16, 185, 129, 0.3); padding: 14px; border-radius: 12px; text-align: center;">
-          <p style="font-size: 0.95rem; font-weight: 700; color: #10b981; margin-bottom: 4px;">✅ Mode Admin Sedang Aktif</p>
-          <p style="font-size: 0.82rem; color: var(--text-muted);">Semua fitur manajemen file dan tombol Cloud Mirror sudah terbuka.</p>
+      <div class="modal-body">
+        <div class="dropzone-box" onclick="document.getElementById('manualFileInput').click()">
+          <svg class="icon icon-lg" style="margin: 0 auto 8px; color: var(--accent);" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          <p style="font-size: 0.9rem; font-weight: 700; color: var(--text);">Klik di sini untuk memilih file dari PC / HP</p>
+          <p style="font-size: 0.78rem; color: var(--text-muted); margin-top: 4px;">Atau drag and drop file langsung ke sini</p>
+          <input type="file" id="manualFileInput" style="display: none;" onchange="handleFileSelected(this.files)">
         </div>
-        <p style="font-size: 0.84rem; color: var(--text-muted); margin-top: 6px;">Ingin mengunci kembali atau mereset PIN tersimpan di browser ini?</p>
-        <button class="nav-btn" style="width: 100%; justify-content: center; background: rgba(239, 68, 68, 0.15); border-color: rgba(239, 68, 68, 0.4); color: #ef4444; font-weight: 700;" onclick="resetAndLockAdmin()">🔒 Kunci & Lupakan PIN Admin</button>
-      </div>
 
-      <div class="modal-footer" id="adminAuthFooter">
-        <button class="nav-btn" onclick="closeAdminAuthModal()">Tutup</button>
-        <button class="nav-btn" id="btnSubmitAdminAuth" style="background: var(--accent-gradient); color: white; border: none;" onclick="verifyAdminPin()">Aktifkan Admin</button>
+        <div id="selectedFileInfo" style="display: none; background: var(--bg-surface); padding: 10px 14px; border-radius: 10px; border: 1px solid var(--border);">
+          <span id="selectedFileName" style="font-size: 0.85rem; font-weight: 600;"></span>
+        </div>
+
+        <label style="font-size: 0.82rem; font-weight: 600;">Folder Tujuan:</label>
+        <input type="text" id="uploadTargetDirInput" class="form-input-pro" placeholder="Biarkan kosong untuk root (/)">
+        
+        <div id="uploadProgressBox" style="display: none;">
+          <div style="font-size: 0.82rem; color: var(--primary-light); margin-bottom: 4px;" id="uploadStatusText">Mengupload ke Hugging Face...</div>
+          <div style="width: 100%; height: 6px; background: rgba(255,255,255,0.1); border-radius: 4px; overflow: hidden;">
+            <div id="uploadProgressBar" style="width: 30%; height: 100%; background: var(--accent-gradient); border-radius: 4px; transition: width 0.3s;"></div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="nav-btn" onclick="closeUploadModal()">Batal</button>
+        <button class="nav-btn" id="startUploadBtn" style="background: var(--accent-gradient); color: white; border: none;" onclick="submitManualUpload()">Upload File</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- RENAME MODAL -->
+  <div id="renameModal" class="modal-backdrop" style="display: none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <span class="modal-title">✏️ Ubah Nama (Rename)</span>
+        <button class="btn-close-circle" onclick="closeRenameModal()">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="renameOldPath">
+        <label style="font-size: 0.85rem; font-weight: 600;">Nama Baru:</label>
+        <input type="text" id="renameNewNameInput" class="form-input-pro" placeholder="Masukkan nama file/folder baru...">
+      </div>
+      <div class="modal-footer">
+        <button class="nav-btn" onclick="closeRenameModal()">Batal</button>
+        <button class="nav-btn" style="background: var(--primary); color: white; border: none;" onclick="submitRename()">Simpan Nama</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MOVE MODAL -->
+  <div id="moveModal" class="modal-backdrop" style="display: none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <span class="modal-title">📦 Pindahkan File (Move)</span>
+        <button class="btn-close-circle" onclick="closeMoveModal()">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <p id="moveTargetDesc" style="font-size: 0.85rem; color: var(--text-muted);"></p>
+        <label style="font-size: 0.85rem; font-weight: 600;">Folder Tujuan di HaruDrive:</label>
+        <input type="text" id="moveDestinationInput" class="form-input-pro" placeholder="contoh: VIU/Series atau biarkan kosong untuk Root (/)">
+      </div>
+      <div class="modal-footer">
+        <button class="nav-btn" onclick="closeMoveModal()">Batal</button>
+        <button class="nav-btn" style="background: var(--accent-gradient); color: white; border: none;" onclick="submitMove()">Pindahkan Sekarang</button>
       </div>
     </div>
   </div>
