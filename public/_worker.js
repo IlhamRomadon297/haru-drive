@@ -111,9 +111,9 @@ export default {
         }
 
         const stmt = env.harudrive_db.prepare(
-          'SELECT short_id, file_path, name, type, size FROM shortlinks WHERE name LIKE ? ORDER BY name ASC LIMIT 60'
+          'SELECT short_id, file_path, name, type, size FROM shortlinks WHERE instr(lower(name), lower(?)) > 0 ORDER BY name ASC LIMIT 60'
         );
-        const { results } = await stmt.bind(`%${q}%`).all();
+        const { results } = await stmt.bind(q).all();
 
         const formattedResults = (results || []).map(row => {
           const isDir = row.type === 'folder';
@@ -468,8 +468,11 @@ export default {
         if (env.harudrive_db) {
           const newName = newPath.split('/').pop();
           const newShortId = await generateShortId(newPath);
-          await env.harudrive_db.prepare('DELETE FROM shortlinks WHERE file_path = ? OR file_path LIKE ?')
-            .bind(oldPath, `${oldPath}/%`).run();
+          const oldPrefix = oldPath + '/';
+          try {
+            await env.harudrive_db.prepare('DELETE FROM shortlinks WHERE file_path = ? OR substr(file_path, 1, ?) = ?')
+              .bind(oldPath, oldPrefix.length, oldPrefix).run();
+          } catch (e) {}
           await env.harudrive_db.prepare(
             'INSERT OR REPLACE INTO shortlinks (short_id, file_path, name, type, size) VALUES (?, ?, ?, ?, ?)'
           ).bind(newShortId, newPath, newName, isDirectory ? 'folder' : 'file', 0).run();
@@ -561,8 +564,11 @@ export default {
               const filename = cleanP.split('/').pop();
               const newPath = targetFolder ? `${targetFolder}/${filename}` : filename;
               const newShortId = await generateShortId(newPath);
-              await env.harudrive_db.prepare('DELETE FROM shortlinks WHERE file_path = ? OR file_path LIKE ?')
-                .bind(cleanP, `${cleanP}/%`).run();
+              const cleanPrefix = cleanP + '/';
+              try {
+                await env.harudrive_db.prepare('DELETE FROM shortlinks WHERE file_path = ? OR substr(file_path, 1, ?) = ?')
+                  .bind(cleanP, cleanPrefix.length, cleanPrefix).run();
+              } catch (e) {}
               await env.harudrive_db.prepare(
                 'INSERT OR REPLACE INTO shortlinks (short_id, file_path, name, type, size) VALUES (?, ?, ?, ?, ?)'
               ).bind(newShortId, newPath, filename, 'file', 0).run();
@@ -670,8 +676,13 @@ export default {
         if (env.harudrive_db) {
           for (const p of paths) {
             const cleanP = p.replace(/^\/+|\/+$/g, '');
-            await env.harudrive_db.prepare('DELETE FROM shortlinks WHERE file_path = ? OR file_path LIKE ?')
-              .bind(cleanP, `${cleanP}/%`).run();
+            const prefix = cleanP + '/';
+            try {
+              await env.harudrive_db.prepare('DELETE FROM shortlinks WHERE file_path = ? OR substr(file_path, 1, ?) = ?')
+                .bind(cleanP, prefix.length, prefix).run();
+            } catch (d1Err) {
+              console.error('D1 delete warning:', d1Err);
+            }
           }
         }
 
