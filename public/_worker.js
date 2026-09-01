@@ -2,7 +2,6 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
-    // Reliable Environment Secrets
     const HF_REPO_ID = env.HF_REPO_ID || 'harumidesu/harudrive-data';
     const HF_TOKEN = env.HF_TOKEN || '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';
     const APP_PASSWORD = env.APP_PASSWORD || 'HaruDrive_Desu';
@@ -10,11 +9,9 @@ export default {
     const GITHUB_PAT = env.GITHUB_PAT || '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';
     const GITHUB_REPO = env.GITHUB_REPO || 'IlhamRomadon297/haru-drive';
 
-    // Authentication Check
     const cookie = request.headers.get('Cookie') || '';
     const isLoggedIn = cookie.includes('harudrive_auth=true');
 
-    // Handle Login Submit
     if (url.pathname === '/login' && request.method === 'POST') {
       const formData = await request.formData();
       const password = formData.get('password');
@@ -33,7 +30,6 @@ export default {
       }
     }
 
-    // Public / Protected Route rules
     const isPublicRoute = url.pathname.startsWith('/file/') ||
                           url.pathname.startsWith('/d/') ||
                           url.pathname.startsWith('/raw/') ||
@@ -52,7 +48,6 @@ export default {
       });
     }
 
-    // Handle Logout
     if (url.pathname === '/logout') {
       return new Response('Logged out', {
         status: 302,
@@ -63,9 +58,7 @@ export default {
       });
     }
 
-    // ==========================================================
-    // API: Get All Available Folders (For GDrive-style Folder Picker)
-    // ==========================================================
+    // API: Available Folders
     if (url.pathname === '/api/folders') {
       try {
         const repoId = HF_REPO_ID;
@@ -74,7 +67,7 @@ export default {
         if (HF_TOKEN) hfHeaders['Authorization'] = `Bearer ${HF_TOKEN}`;
 
         const hfRes = await fetch(hfTreeUrl, { headers: hfHeaders });
-        const folderSet = new Set(['']); // root
+        const folderSet = new Set(['']);
 
         if (hfRes.ok) {
           const items = await hfRes.json();
@@ -103,9 +96,7 @@ export default {
       }
     }
 
-    // ==========================================================
-    // API: Realtime Global Search (D1 Database)
-    // ==========================================================
+    // API: Global Search
     if (url.pathname === '/api/search') {
       try {
         const q = (url.searchParams.get('q') || '').trim();
@@ -152,9 +143,7 @@ export default {
       }
     }
 
-    // ==========================================================
-    // API: List Folder Files from Hugging Face + D1 Indexing
-    // ==========================================================
+    // API: List Files
     if (url.pathname === '/api/list') {
       try {
         let reqPath = url.searchParams.get('path') || '';
@@ -175,14 +164,12 @@ export default {
           : `https://huggingface.co/api/datasets/${repoId}/tree/main`;
 
         const hfHeaders = { 'User-Agent': 'HaruDrive/1.0' };
-        if (HF_TOKEN) {
-          hfHeaders['Authorization'] = `Bearer ${HF_TOKEN}`;
-        }
+        if (HF_TOKEN) hfHeaders['Authorization'] = `Bearer ${HF_TOKEN}`;
 
         const hfRes = await fetch(hfTreeUrl, { headers: hfHeaders });
         if (!hfRes.ok) {
           const errText = await hfRes.text();
-          return new Response(JSON.stringify({ error: `Hugging Face API error (${hfRes.status}): ${errText}` }), {
+          return new Response(JSON.stringify({ error: `Hugging Face error (${hfRes.status}): ${errText}` }), {
             status: hfRes.status,
             headers: { 'Content-Type': 'application/json' }
           });
@@ -219,7 +206,6 @@ export default {
           return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
         });
 
-        // Batch save to D1
         if (env.harudrive_db && formattedFiles.length > 0) {
           try {
             const stmt = env.harudrive_db.prepare(
@@ -252,9 +238,7 @@ export default {
       }
     }
 
-    // ==========================================================
-    // API: Admin Manual File Upload (via HF Commit API)
-    // ==========================================================
+    // API: Admin Manual File Upload
     if (url.pathname === '/api/admin/upload' && request.method === 'POST') {
       try {
         const formData = await request.formData();
@@ -325,9 +309,7 @@ export default {
       }
     }
 
-    // ==========================================================
-    // API: Start Cloud Mirror (GitHub Actions Dispatch)
-    // ==========================================================
+    // API: Start Cloud Mirror
     if (url.pathname === '/api/admin/mirror' && request.method === 'POST') {
       try {
         const body = await request.json();
@@ -342,12 +324,10 @@ export default {
           return new Response(JSON.stringify({ error: 'GDRIVE_URL wajib diisi.' }), { status: 400 });
         }
 
-        const pat = GITHUB_PAT;
-        const repo = GITHUB_REPO;
-        const ghRes = await fetch(`https://api.github.com/repos/${repo}/dispatches`, {
+        const ghRes = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/dispatches`, {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${pat}`,
+            'Authorization': `Bearer ${GITHUB_PAT}`,
             'Accept': 'application/vnd.github+json',
             'User-Agent': 'HaruDrive-Admin',
             'Content-Type': 'application/json'
@@ -366,7 +346,7 @@ export default {
           return new Response(JSON.stringify({
             success: true,
             message: 'Cloud Mirror berhasil dijalankan di GitHub Actions!',
-            repo: repo,
+            repo: GITHUB_REPO,
             target_path: targetPath
           }), { headers: { 'Content-Type': 'application/json' } });
         } else {
@@ -378,9 +358,7 @@ export default {
       }
     }
 
-    // ==========================================================
-    // API: Admin File Manager (New Folder / Mkdir)
-    // ==========================================================
+    // API: Mkdir
     if (url.pathname === '/api/admin/mkdir' && request.method === 'POST') {
       try {
         const body = await request.json();
@@ -394,27 +372,16 @@ export default {
         }
 
         const commitUrl = `https://huggingface.co/api/datasets/${HF_REPO_ID}/commit/main`;
-        const commitPayload = {
-          summary: `Create folder ${folderPath} via HaruDrive`,
-          operations: [
-            {
-              key: 'file',
-              value: {
-                content: '',
-                path: `${folderPath}/.gitkeep`,
-                encoding: 'utf-8'
-              }
-            }
-          ]
-        };
-
         const hfRes = await fetch(commitUrl, {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${HF_TOKEN}`,
             'Content-Type': 'application/json'
           },
-          body: JSON.stringify(commitPayload)
+          body: JSON.stringify({
+            summary: `Create folder ${folderPath} via HaruDrive`,
+            operations: [{ key: 'file', value: { content: '', path: `${folderPath}/.gitkeep`, encoding: 'utf-8' } }]
+          })
         });
 
         if (!hfRes.ok) {
@@ -438,9 +405,7 @@ export default {
       }
     }
 
-    // ==========================================================
-    // API: Admin File Manager (Rename File / Folder)
-    // ==========================================================
+    // API: Rename
     if (url.pathname === '/api/admin/rename' && request.method === 'POST') {
       try {
         const body = await request.json();
@@ -454,7 +419,6 @@ export default {
           return new Response(JSON.stringify({ error: 'Path lama dan baru wajib diisi.' }), { status: 400 });
         }
 
-        // Fetch full tree to support renaming folders with subfiles
         const treeRes = await fetch(`https://huggingface.co/api/datasets/${HF_REPO_ID}/tree/main?recursive=true`, {
           headers: { 'Authorization': `Bearer ${HF_TOKEN}` }
         });
@@ -478,7 +442,6 @@ export default {
           }
         });
 
-        // Fallback if not in recursive tree
         if (operations.length === 0) {
           operations.push({ key: 'deleted', value: { path: oldPath } });
           operations.push({ key: 'copied', value: { src_path: oldPath, path: newPath } });
@@ -520,9 +483,7 @@ export default {
       }
     }
 
-    // ==========================================================
-    // API: Admin File Manager (Move Files / Folders)
-    // ==========================================================
+    // API: Move
     if (url.pathname === '/api/admin/move' && request.method === 'POST') {
       try {
         const body = await request.json();
@@ -536,7 +497,6 @@ export default {
           return new Response(JSON.stringify({ error: 'Tidak ada file/folder yang dipilih.' }), { status: 400 });
         }
 
-        // Fetch repo tree to expand any directories
         const treeRes = await fetch(`https://huggingface.co/api/datasets/${HF_REPO_ID}/tree/main?recursive=true`, {
           headers: { 'Authorization': `Bearer ${HF_TOKEN}` }
         });
@@ -567,7 +527,6 @@ export default {
             }
           });
 
-          // Fallback if not found in tree
           if (matchedFiles === 0) {
             const newPath = targetFolder ? `${targetFolder}/${filename}` : filename;
             if (cleanP !== newPath) {
@@ -619,9 +578,7 @@ export default {
       }
     }
 
-    // ==========================================================
-    // API: Admin File Manager (Delete Files / Folders)
-    // ==========================================================
+    // API: Delete
     if (url.pathname === '/api/admin/delete' && request.method === 'POST') {
       try {
         const body = await request.json();
@@ -634,7 +591,6 @@ export default {
           return new Response(JSON.stringify({ error: 'Tidak ada item yang dipilih untuk dihapus.' }), { status: 400 });
         }
 
-        // Fetch repo tree to find all sub-files if a folder is deleted
         const treeRes = await fetch(`https://huggingface.co/api/datasets/${HF_REPO_ID}/tree/main?recursive=true`, {
           headers: { 'Authorization': `Bearer ${HF_TOKEN}` }
         });
@@ -654,7 +610,6 @@ export default {
             }
           });
 
-          // Fallback single file delete
           if (!matched) {
             deleteOps.push({ key: 'deleted', value: { path: cleanP } });
           }
@@ -696,9 +651,7 @@ export default {
       }
     }
 
-    // ==========================================================
-    // Clean Shortlink File & Download Handler (/file/:id, /d/:id, /raw/:id)
-    // ==========================================================
+    // Direct / Stream / Download Routes
     if (url.pathname.startsWith('/file/') || url.pathname.startsWith('/d/') || url.pathname.startsWith('/raw/')) {
       const isDownload = url.pathname.startsWith('/d/') || url.searchParams.get('download') === '1';
       let pathAfterPrefix = url.pathname.replace(/^\/(file|d|raw)\//, '');
@@ -747,34 +700,19 @@ export default {
       });
     }
 
-    // ==========================================================
-    // Dedicated Admin Console Page (/admin)
-    // ==========================================================
+    // Page Routes
     if (url.pathname === '/admin') {
       return new Response(htmlPage(adminConsoleUI(), env, 'admin'), {
         headers: { 'Content-Type': 'text/html;charset=UTF-8' }
       });
     }
 
-    // ==========================================================
-    // Public UI (/ and /folder/:id)
-    // ==========================================================
-    if (url.pathname === '/' || url.pathname.startsWith('/folder/')) {
-      return new Response(htmlPage(publicUI(), env, 'public'), {
-        headers: { 'Content-Type': 'text/html;charset=UTF-8' }
-      });
-    }
-
-    // Fallback
     return new Response(htmlPage(publicUI(), env, 'public'), {
       headers: { 'Content-Type': 'text/html;charset=UTF-8' }
     });
   }
 };
 
-// ==========================================================
-// Helper Functions
-// ==========================================================
 async function generateShortId(path) {
   const encoder = new TextEncoder();
   const data = encoder.encode(path);
@@ -823,9 +761,6 @@ function getMimeType(filename) {
   return mimeTypes[ext] || 'application/octet-stream';
 }
 
-// ==========================================================
-// HTML Page Generator with Pure Clean Minimalist Aesthetics
-// ==========================================================
 function htmlPage(content, env, pageMode = 'public') {
   return `<!DOCTYPE html>
 <html lang="id">
@@ -1067,6 +1002,7 @@ function htmlPage(content, env, pageMode = 'public') {
       border: 1px solid var(--border);
       background: var(--bg-card);
       transition: all 0.2s;
+      flex-shrink: 0;
     }
     .nav-btn:hover {
       border-color: var(--primary-light);
@@ -1084,7 +1020,9 @@ function htmlPage(content, env, pageMode = 'public') {
       background: rgba(11, 15, 25, 0.35);
       border-top: 1px solid var(--border);
       overflow-x: auto;
+      scrollbar-width: none;
     }
+    .filter-strip::-webkit-scrollbar { display: none; }
     body.light .filter-strip { background: #f1f5f9; }
     .filter-container {
       display: flex;
@@ -1124,14 +1062,15 @@ function htmlPage(content, env, pageMode = 'public') {
       flex: 1;
     }
 
+    /* BREADCRUMB & ACTION BAR SYSTEM */
     .breadcrumb-bar {
-      padding: 10px 18px;
+      padding: 10px 16px;
       border-radius: var(--radius);
       margin-bottom: 14px;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 10px;
+      gap: 12px;
       flex-wrap: wrap;
     }
     .crumb-group {
@@ -1153,14 +1092,20 @@ function htmlPage(content, env, pageMode = 'public') {
     .crumb:hover { text-decoration: underline; }
     .crumb-sep { color: var(--text-dim); }
     .crumb-current { color: var(--text); font-weight: 700; }
-    .toolbar-actions { display: flex; align-items: center; gap: 8px; }
     
-    /* MODERN TOOLBAR ACTION BUTTONS (NO TEXT EMOJIS) */
+    .toolbar-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    
     .btn-action-tool {
       display: inline-flex;
       align-items: center;
-      gap: 7px;
-      padding: 7px 14px;
+      justify-content: center;
+      gap: 6px;
+      padding: 7px 13px;
       border-radius: var(--radius-sm);
       border: 1px solid var(--border);
       background: var(--bg-card);
@@ -1168,6 +1113,7 @@ function htmlPage(content, env, pageMode = 'public') {
       font-size: 0.82rem;
       font-weight: 600;
       cursor: pointer;
+      white-space: nowrap;
       transition: all 0.2s;
     }
     .btn-action-tool:hover {
@@ -1182,6 +1128,7 @@ function htmlPage(content, env, pageMode = 'public') {
       box-shadow: 0 10px 30px rgba(0, 0, 0, 0.15);
     }
     body.light .file-table-wrapper { box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05); }
+    
     .table-header {
       display: flex;
       align-items: center;
@@ -1195,16 +1142,16 @@ function htmlPage(content, env, pageMode = 'public') {
       user-select: none;
       background: rgba(0, 0, 0, 0.05);
     }
-    .col-cb { width: 34px; display: flex; align-items: center; }
+    .col-cb { width: 34px; display: flex; align-items: center; flex-shrink: 0; }
     .col-name { flex: 1; min-width: 0; }
-    .col-size { width: 110px; text-align: right; }
-    .col-date { width: 140px; text-align: right; }
-    .col-actions { width: 230px; text-align: right; }
+    .col-size { width: 100px; text-align: right; flex-shrink: 0; }
+    .col-date { width: 130px; text-align: right; flex-shrink: 0; }
+    .col-actions { width: 130px; text-align: right; flex-shrink: 0; }
 
     .file-row {
       display: flex;
       align-items: center;
-      padding: 11px 18px;
+      padding: 10px 18px;
       border-bottom: 1px solid var(--border);
       transition: background 0.15s;
     }
@@ -1218,6 +1165,7 @@ function htmlPage(content, env, pageMode = 'public') {
       flex: 1;
       cursor: pointer;
       min-width: 0;
+      overflow: hidden;
     }
     
     .file-icon-box {
@@ -1247,12 +1195,13 @@ function htmlPage(content, env, pageMode = 'public') {
     }
 
     .file-title {
-      font-size: 0.9rem;
+      font-size: 0.88rem;
       font-weight: 600;
       color: var(--text);
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+      min-width: 0;
     }
     .file-row.is-folder .file-title { color: #f59e0b; }
 
@@ -1260,42 +1209,39 @@ function htmlPage(content, env, pageMode = 'public') {
       font-size: 0.8rem;
       color: var(--text-muted);
       font-family: 'JetBrains Mono', monospace;
+      flex-shrink: 0;
     }
-    .file-size-cell { width: 110px; text-align: right; }
-    .file-date-cell { width: 140px; text-align: right; }
+    .file-size-cell { width: 100px; text-align: right; }
+    .file-date-cell { width: 130px; text-align: right; }
 
     .file-actions-cell {
-      width: 230px;
+      width: 130px;
       display: flex;
       justify-content: flex-end;
-      gap: 5px;
+      align-items: center;
+      gap: 4px;
+      flex-shrink: 0;
     }
     .btn-act {
-      padding: 5px 9px;
-      border-radius: var(--radius-sm);
+      width: 30px;
+      height: 30px;
+      border-radius: 8px;
       border: 1px solid var(--border);
       background: var(--bg-card);
       color: var(--text);
-      font-size: 0.78rem;
-      font-weight: 600;
       cursor: pointer;
       text-decoration: none;
       display: inline-flex;
       align-items: center;
-      gap: 4px;
+      justify-content: center;
       transition: all 0.2s;
+      flex-shrink: 0;
     }
     .btn-act:hover {
       border-color: var(--primary-light);
       background: var(--primary);
       color: white;
     }
-    .btn-act.play {
-      background: rgba(236, 72, 153, 0.12);
-      border-color: rgba(236, 72, 153, 0.3);
-      color: #ec4899;
-    }
-    .btn-act.play:hover { background: #ec4899; color: white; }
     .btn-act.btn-delete { color: #ef4444; border-color: rgba(239, 68, 68, 0.25); }
     .btn-act.btn-delete:hover { background: #ef4444; color: white; }
 
@@ -1340,6 +1286,7 @@ function htmlPage(content, env, pageMode = 'public') {
     }
     .btn-bulk.danger:hover { background: #ef4444; color: white; }
 
+    /* MODAL SYSTEM (MOBILE ADAPTIVE) */
     .modal-backdrop {
       position: fixed;
       inset: 0;
@@ -1350,7 +1297,7 @@ function htmlPage(content, env, pageMode = 'public') {
       display: flex;
       align-items: center;
       justify-content: center;
-      padding: 20px;
+      padding: 16px;
     }
     .modal-card {
       width: 100%;
@@ -1370,7 +1317,6 @@ function htmlPage(content, env, pageMode = 'public') {
     .video-card {
       max-width: 760px;
       width: 100%;
-      max-height: 88vh;
       border-radius: 18px;
       display: flex;
       flex-direction: column;
@@ -1380,7 +1326,7 @@ function htmlPage(content, env, pageMode = 'public') {
       background: #000;
       overflow: hidden;
       aspect-ratio: 16 / 9;
-      max-height: 52vh;
+      max-height: 55vh;
     }
     .plyr--video { height: 100%; width: 100%; }
 
@@ -1388,11 +1334,11 @@ function htmlPage(content, env, pageMode = 'public') {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding: 14px 20px;
+      padding: 14px 18px;
       border-bottom: 1px solid var(--border);
     }
     .modal-title {
-      font-size: 1rem;
+      font-size: 0.95rem;
       font-weight: 700;
       color: var(--text);
       white-space: nowrap;
@@ -1401,8 +1347,8 @@ function htmlPage(content, env, pageMode = 'public') {
       max-width: 85%;
     }
     .btn-close-circle {
-      width: 30px;
-      height: 30px;
+      width: 28px;
+      height: 28px;
       border-radius: 50%;
       border: 1px solid var(--border);
       background: transparent;
@@ -1420,13 +1366,13 @@ function htmlPage(content, env, pageMode = 'public') {
     }
 
     .modal-body {
-      padding: 16px 20px;
+      padding: 16px 18px;
       display: flex;
       flex-direction: column;
-      gap: 14px;
+      gap: 12px;
     }
     .modal-footer {
-      padding: 14px 20px;
+      padding: 12px 18px;
       border-top: 1px solid var(--border);
       display: flex;
       justify-content: flex-end;
@@ -1528,6 +1474,9 @@ function htmlPage(content, env, pageMode = 'public') {
       background: rgba(236, 72, 153, 0.08);
     }
 
+    /* ==========================================================
+       RESPONSIVE MOBILE STYLES (Clean & Uncluttered)
+       ========================================================== */
     @media (max-width: 768px) {
       .nav-container { flex-wrap: wrap; padding: 10px 14px; gap: 8px; }
       .nav-left { gap: 8px; }
@@ -1539,25 +1488,50 @@ function htmlPage(content, env, pageMode = 'public') {
       .btn-text-label { display: none; }
       .nav-btn { padding: 7px 9px; }
       .filter-strip { padding: 6px 12px; }
-      .container { padding: 0 10px; margin: 12px auto; }
+      .container { padding: 0 10px; margin: 10px auto; }
+      
+      /* Breadcrumb on top, actions row clean underneath */
+      .breadcrumb-bar {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 10px;
+        padding: 12px 14px;
+      }
+      .toolbar-actions {
+        width: 100%;
+        display: flex;
+        gap: 6px;
+        overflow-x: auto;
+        padding-bottom: 2px;
+      }
+      .btn-action-tool {
+        flex: 1;
+        padding: 8px 10px;
+        font-size: 0.78rem;
+      }
+
+      /* Responsive File Table */
       .col-date, .file-date-cell { display: none; }
-      .col-size { width: 75px; }
-      .file-size-cell { width: 75px; }
-      .col-actions { width: 100px; }
-      .file-actions-cell { width: 100px; gap: 4px; }
-      .btn-act .btn-act-label { display: none; }
-      .btn-act { padding: 5px 7px; }
-      .file-row { padding: 10px; }
-      .file-title { font-size: 0.85rem; }
-      .col-cb { width: 28px; }
-      .bulk-toolbar { width: calc(100% - 24px); padding: 8px 14px; border-radius: 16px; }
-      .modal-backdrop { padding: 0; align-items: flex-end; }
-      .modal-card { max-width: 100%; border-radius: 20px 20px 0 0; }
-    }
-    @media (max-width: 480px) {
       .col-size, .file-size-cell { display: none; }
-      .col-actions { width: 85px; }
-      .file-actions-cell { width: 85px; }
+      
+      .table-header { padding: 10px 12px; }
+      .file-row { padding: 10px 12px; }
+      .col-cb { width: 28px; }
+      
+      /* Action column minimal size */
+      .col-actions { width: 75px; }
+      .file-actions-cell { width: 75px; gap: 4px; }
+      body[data-mode="admin"] .col-actions { width: 105px; }
+      body[data-mode="admin"] .file-actions-cell { width: 105px; gap: 3px; }
+
+      .btn-act { width: 28px; height: 28px; }
+      .file-title { font-size: 0.84rem; }
+
+      .bulk-toolbar { width: calc(100% - 24px); padding: 8px 14px; border-radius: 16px; }
+      
+      /* Responsive modal centered nicely */
+      .modal-backdrop { padding: 12px; align-items: center; }
+      .modal-card { max-width: 100%; border-radius: 18px; }
     }
   </style>
 </head>
@@ -1629,7 +1603,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 });
 
-// Admin Console Auth Manager with Auto-Session Persistence
+// Admin Session
 function initAdminConsole() {
   const gate = document.getElementById('adminLoginGate');
   const main = document.getElementById('adminMainContent');
@@ -1697,7 +1671,7 @@ function handlePopState(e) {
   }
 }
 
-// Fetch Folder Tree for Folder Pickers
+// Folder Tree for Pickers
 async function fetchFolderTree() {
   try {
     const res = await fetch('/api/folders');
@@ -1721,7 +1695,7 @@ function renderFolderPickerUI(containerId, inputId, selectedValue = '') {
   folders.forEach(f => {
     const isSelected = f === selectedValue;
     const displayName = f ? \`/\${f}\` : 'Root (/)';
-    const indent = f ? (f.split('/').length - 1) * 16 : 0;
+    const indent = f ? (f.split('/').length - 1) * 14 : 0;
 
     html += \`
       <div class="folder-tree-item \${isSelected ? 'selected' : ''}" style="margin-left: \${indent}px;" onclick="selectFolderPickerItem('\${containerId}', '\${inputId}', '\${escapeJs(f)}')">
@@ -1777,14 +1751,14 @@ async function loadFolder(path = '', id = '') {
     if (container) {
       container.innerHTML = \`
         <div style="text-align: center; padding: 40px; color: #ef4444;">
-          <p>Gagal memuat folder: \${err.message}</p>
+          <p>Gagal memuat: \${err.message}</p>
           <button class="nav-btn" style="margin-top: 12px;" onclick="loadFolder(currentPath, currentFolderId)">Coba Lagi</button>
         </div>\`;
     }
   }
 }
 
-// Render File Table with Modern SVG Icons
+// Render File Table (NO REDUNDANT PLAY BUTTON - DIRECT ROW CLICK TO PLAY!)
 function renderFileList() {
   const container = document.getElementById('fileListContainer');
   if (!container) return;
@@ -1815,6 +1789,7 @@ function renderFileList() {
 
     const downloadShortLink = \`/d/\${file.id}\`;
 
+    // Direct Click Behavior
     const clickAction = isDir 
       ? (isPageAdmin ? \`navigateToAdmin('\${escapeJs(file.path)}')\` : \`navigateTo('\${escapeJs(file.path)}', '\${file.id}')\`)
       : (isVideo ? \`playVideo('\${file.id}', '\${escapeJs(file.name)}')\` : \`downloadFile('\${file.id}')\`);
@@ -1824,7 +1799,7 @@ function renderFileList() {
       <div class="col-cb">
         <input type="checkbox" \${isChecked ? 'checked' : ''} onchange="toggleItemSelect('\${escapeJs(file.path)}', this.checked)">
       </div>
-      <div class="file-name-cell" onclick="\${clickAction}">
+      <div class="file-name-cell" onclick="\${clickAction}" title="\${isDir ? 'Buka Folder' : (isVideo ? 'Klik untuk Putar Video' : 'Download File')}">
         <div class="file-icon-box \${iconType}">
           \${getModernSvgIcon(iconType)}
         </div>
@@ -1832,23 +1807,17 @@ function renderFileList() {
       </div>
       <div class="file-size-cell">\${isDir ? '-' : formatBytes(file.size)}</div>
       <div class="file-date-cell">\${formatDate(file.modifiedTime)}</div>
-      <div class="file-actions-cell" style="\${isPageAdmin ? 'width: 260px;' : ''}">
-        \${isVideo && !isPageAdmin ? \`
-          <button class="btn-act play" onclick="playVideo('\${file.id}', '\${escapeJs(file.name)}')" title="Putar Video">
-            <svg class="icon icon-sm" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-            <span class="btn-act-label">Play</span>
-          </button>
-        \` : ''}
-        \${!isDir ? \`
-          <a class="btn-act" href="\${downloadShortLink}" title="Download">
-            <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-          </a>
-          <button class="btn-act" onclick="copyShortLink('\${file.id}')" title="Salin Shortlink">
-            <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
-          </button>
-        \` : ''}
-
-        \${isPageAdmin ? \`
+      <div class="file-actions-cell">
+        \${!isPageAdmin ? \`
+          \${!isDir ? \`
+            <a class="btn-act" href="\${downloadShortLink}" title="Download">
+              <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            </a>
+            <button class="btn-act" onclick="copyShortLink('\${file.id}')" title="Salin Shortlink">
+              <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+            </button>
+          \` : ''}
+        \` : \`
           <button class="btn-act" onclick="openRenameModal('\${escapeJs(file.path)}', '\${escapeJs(file.name)}')" title="Ubah Nama">
             <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
           </button>
@@ -1858,7 +1827,7 @@ function renderFileList() {
           <button class="btn-act btn-delete" onclick="deleteSingleItem('\${escapeJs(file.path)}')" title="Hapus Permanen">
             <svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
           </button>
-        \` : ''}
+        \`}
       </div>
     </div>\`;
   });
@@ -1871,7 +1840,6 @@ function updateBreadcrumbs() {
   const nav = document.getElementById('breadcrumbNav');
   if (!nav) return;
 
-  const baseRootUrl = isPageAdmin ? '/admin' : '/';
   let html = \`
     <a href="javascript:void(0)" class="crumb" onclick="\${isPageAdmin ? \`navigateToAdmin('')\` : \`navigateTo('')\`}; return false;">
       <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
@@ -2026,7 +1994,7 @@ async function submitManualUpload() {
   }
 }
 
-// Rename Modal Logic (Admin)
+// Rename Modal
 function openRenameModal(oldPath, oldName) {
   const m = document.getElementById('renameModal');
   const oldPathInput = document.getElementById('renameOldPath');
@@ -2071,7 +2039,7 @@ async function submitRename() {
   }
 }
 
-// Move Modal Logic with Folder Selector (Admin)
+// Move Modal
 let moveItemsQueue = [];
 function openMoveModalSingle(itemPath) {
   moveItemsQueue = [itemPath];
@@ -2165,7 +2133,7 @@ async function submitNewFolder() {
   }
 }
 
-// Single Item Delete (Recursive support for folders)
+// Single Delete
 async function deleteSingleItem(itemPath) {
   if (!confirm(\`Yakin ingin menghapus permanent:\\n\${itemPath}?\`)) return;
   const pin = localStorage.getItem('harudrive_admin_pin') || getCookie('harudrive_admin_pin') || '290722';
@@ -2330,7 +2298,7 @@ function getModernSvgIcon(type) {
   return \`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#818cf8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><polyline points="14 2 14 8 20 8"/></svg>\`;
 }
 
-// Cookie Helpers
+// Helpers
 function setCookie(name, value, days) {
   let expires = "";
   if (days) {
@@ -2420,7 +2388,7 @@ function loginUI(errorMsg = '') {
 
 function publicUI() {
   return `
-  <!-- TOP NAVBAR (PUBLIC CLEAN VIEW) -->
+  <!-- TOP NAVBAR -->
   <header class="navbar-cyber glass">
     <div class="nav-container">
       <div class="nav-left">
@@ -2468,7 +2436,7 @@ function publicUI() {
     </div>
   </header>
 
-  <!-- SUBHEADER CATEGORY FILTER -->
+  <!-- CATEGORY FILTER -->
   <div class="filter-strip">
     <div class="filter-container">
       <button class="filter-chip active" data-filter="all">
@@ -2522,7 +2490,7 @@ function publicUI() {
     </div>
   </main>
 
-  <!-- FLOATING BULK ACTIONS TOOLBAR (PUBLIC) -->
+  <!-- FLOATING BULK TOOLBAR -->
   <div id="bulkToolbar" class="bulk-toolbar" style="display: none;">
     <span id="bulkCount" style="font-size: 0.85rem; font-weight: 700;">0 Dipilih</span>
     <button class="btn-bulk" onclick="bulkCopyLinks()">
@@ -2532,7 +2500,7 @@ function publicUI() {
     <button class="btn-bulk" onclick="clearBulkSelection()">Batal</button>
   </div>
 
-  <!-- COMPACT THEATER PLYR VIDEO MODAL -->
+  <!-- THEATER PLYR VIDEO MODAL -->
   <div id="videoModal" class="modal-backdrop" style="display: none;">
     <div class="modal-card video-card">
       <div class="modal-header">
@@ -2544,7 +2512,7 @@ function publicUI() {
       <div class="video-container-wrap">
         <video id="plyrPlayer" playsinline controls></video>
       </div>
-      <div class="modal-body" style="padding: 10px 18px 14px;">
+      <div class="modal-body" style="padding: 12px 18px 14px;">
         <div style="font-size: 0.72rem; font-weight: 700; color: var(--text-dim); text-transform: uppercase; margin-bottom: 6px;">Buka di External Player:</div>
         <div class="external-players-row" id="externalPlayersContainer"></div>
       </div>
@@ -2555,7 +2523,7 @@ function publicUI() {
 
 function adminConsoleUI() {
   return `
-  <!-- TOP NAVBAR (ADMIN CONSOLE VIEW) -->
+  <!-- TOP NAVBAR -->
   <header class="navbar-cyber glass">
     <div class="nav-container">
       <div class="nav-left">
@@ -2588,33 +2556,29 @@ function adminConsoleUI() {
     </div>
   </header>
 
-  <!-- ADMIN AUTH BARRIER (IF LOCKED) -->
+  <!-- AUTH BARRIER -->
   <div id="adminLoginGate" style="display: none; min-height: 75vh; align-items: center; justify-content: center; padding: 20px;">
     <div class="glass" style="max-width: 440px; width: 100%; padding: 36px 32px; border-radius: 24px; text-align: center; box-shadow: 0 20px 50px rgba(0,0,0,0.4);">
       <div class="logo-glow-wrap" style="margin: 0 auto 16px; width: 56px; height: 56px;">
         <svg class="icon icon-lg" style="color: #ec4899;" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
       </div>
       <h2 style="font-size: 1.4rem; font-weight: 800; margin-bottom: 6px;">Admin Storage Console</h2>
-      <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 20px;">Masukkan PIN Admin untuk mengelola file, folder, dan Cloud Mirror:</p>
+      <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 20px;">Masukkan PIN Admin untuk mengelola storage:</p>
       
       <div style="display: flex; flex-direction: column; gap: 14px;">
         <input type="text" id="gatePinInput" inputmode="numeric" placeholder="••••••" maxlength="10" autocomplete="off" data-lpignore="true" data-1p-ignore="true" class="form-input-pro pin-input-stealth">
-        <label style="display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 0.84rem; cursor: pointer;">
-          <input type="checkbox" id="gateRememberPin" checked>
-          <span>Ingat sesi Admin di browser ini</span>
-        </label>
         <button class="nav-btn" style="width: 100%; justify-content: center; padding: 12px; background: var(--accent-gradient); color: white; border: none; font-size: 0.95rem; font-weight: 700;" onclick="unlockAdminConsole()">Buka Console Admin</button>
       </div>
     </div>
   </div>
 
-  <!-- ADMIN CONSOLE MAIN CONTENT -->
+  <!-- ADMIN CONSOLE CONTENT -->
   <div id="adminMainContent" class="container" style="display: none;">
-    <div class="breadcrumb-bar glass" style="margin-bottom: 16px;">
+    <div class="breadcrumb-bar glass">
       <div class="crumb-group" id="breadcrumbNav">
         <a href="javascript:void(0)" class="crumb" onclick="navigateToAdmin(''); return false;">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
-          <span>Root / Home</span>
+          <span>Root</span>
         </a>
       </div>
 
@@ -2634,20 +2598,20 @@ function adminConsoleUI() {
           <span>Cloud Mirror</span>
         </button>
 
-        <button class="btn-action-tool" onclick="loadFolder(currentPath, currentFolderId)">
+        <button class="btn-action-tool" onclick="loadFolder(currentPath, currentFolderId)" title="Refresh">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
         </button>
       </div>
     </div>
 
-    <!-- Admin File Manager Table -->
+    <!-- Table -->
     <div class="file-table-wrapper glass">
       <div class="table-header">
         <div class="col-cb"><input type="checkbox" id="selectAllCheckbox" onchange="toggleSelectAll(this.checked)"></div>
         <div class="col-name">Nama File / Folder</div>
         <div class="col-size">Ukuran</div>
         <div class="col-date">Diperbarui</div>
-        <div class="col-actions" style="width: 260px;">Kelola File</div>
+        <div class="col-actions">Kelola</div>
       </div>
       <div id="fileListContainer">
         <div style="text-align: center; padding: 40px; color: var(--text-muted);">
@@ -2658,7 +2622,7 @@ function adminConsoleUI() {
     </div>
   </div>
 
-  <!-- FLOATING BULK ACTIONS TOOLBAR (ADMIN) -->
+  <!-- BULK TOOLBAR -->
   <div id="bulkToolbar" class="bulk-toolbar" style="display: none;">
     <span id="bulkCount" style="font-size: 0.85rem; font-weight: 700;">0 Dipilih</span>
     <button class="btn-bulk" style="color: var(--primary-light);" onclick="openBulkMoveModal()">
@@ -2666,7 +2630,7 @@ function adminConsoleUI() {
       <span>Pindahkan</span>
     </button>
     <button class="btn-bulk danger" onclick="bulkDeleteSelected()">
-      <svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+      <svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
       <span>Hapus</span>
     </button>
     <button class="btn-bulk" onclick="bulkCopyLinks()">
@@ -2676,11 +2640,11 @@ function adminConsoleUI() {
     <button class="btn-bulk" onclick="clearBulkSelection()">Batal</button>
   </div>
 
-  <!-- MANUAL UPLOAD MODAL -->
+  <!-- UPLOAD MODAL -->
   <div id="uploadModal" class="modal-backdrop" style="display: none;">
     <div class="modal-card">
       <div class="modal-header">
-        <span class="modal-title">Upload File ke HaruDrive</span>
+        <span class="modal-title">Upload File ke Storage</span>
         <button class="btn-close-circle" onclick="closeUploadModal()">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
@@ -2688,7 +2652,7 @@ function adminConsoleUI() {
       <div class="modal-body">
         <div class="dropzone-box" onclick="document.getElementById('manualFileInput').click()">
           <svg class="icon icon-lg" style="margin: 0 auto 8px; color: var(--accent);" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-          <p style="font-size: 0.9rem; font-weight: 700; color: var(--text);">Pilih File dari Komputer / HP</p>
+          <p style="font-size: 0.9rem; font-weight: 700; color: var(--text);">Pilih File dari HP / Laptop</p>
           <p style="font-size: 0.78rem; color: var(--text-muted); margin-top: 4px;">Atau drag and drop file langsung ke sini</p>
           <input type="file" id="manualFileInput" style="display: none;" onchange="handleFileSelected(this.files)">
         </div>
@@ -2727,7 +2691,7 @@ function adminConsoleUI() {
       <div class="modal-body">
         <input type="hidden" id="renameOldPath">
         <label style="font-size: 0.85rem; font-weight: 600;">Nama Baru:</label>
-        <input type="text" id="renameNewNameInput" class="form-input-pro" placeholder="Masukkan nama file/folder baru...">
+        <input type="text" id="renameNewNameInput" class="form-input-pro" placeholder="Nama file/folder baru...">
       </div>
       <div class="modal-footer">
         <button class="nav-btn" onclick="closeRenameModal()">Batal</button>
@@ -2769,7 +2733,7 @@ function adminConsoleUI() {
       </div>
       <div class="modal-body">
         <label style="font-size: 0.85rem; font-weight: 600;">Nama Folder:</label>
-        <input type="text" id="newFolderNameInput" class="form-input-pro" placeholder="contoh: Drama 2026 atau Anime">
+        <input type="text" id="newFolderNameInput" class="form-input-pro" placeholder="Nama folder...">
       </div>
       <div class="modal-footer">
         <button class="nav-btn" onclick="closeNewFolderModal()">Batal</button>
