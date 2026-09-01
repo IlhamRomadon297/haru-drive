@@ -26,7 +26,6 @@ export default {
     }
 
     // Public / Protected Route rules
-    // Public routes: /file/* (downloads & streaming links), /api/list?path=...
     const isPublicRoute = url.pathname.startsWith('/file/') ||
                           url.pathname.startsWith('/raw/') ||
                           (url.pathname === '/api/list' && url.searchParams.has('path'));
@@ -60,7 +59,7 @@ export default {
     if (url.pathname === '/api/list') {
       try {
         let reqPath = url.searchParams.get('path') || '';
-        reqPath = reqPath.replace(/^\/+|\/+$/g, ''); // strip leading/trailing slashes
+        reqPath = reqPath.replace(/^\/+|\/+$/g, '');
 
         const repoId = env.HF_REPO_ID;
         if (!repoId) {
@@ -70,14 +69,11 @@ export default {
           });
         }
 
-        // Build HF Tree API URL
         const hfTreeUrl = reqPath 
           ? `https://huggingface.co/api/datasets/${encodeURIComponent(repoId)}/tree/main/${encodeURI(reqPath)}`
           : `https://huggingface.co/api/datasets/${encodeURIComponent(repoId)}/tree/main`;
 
-        const hfHeaders = {
-          'User-Agent': 'HaruDrive/1.0'
-        };
+        const hfHeaders = { 'User-Agent': 'HaruDrive/1.0' };
         if (env.HF_TOKEN) {
           hfHeaders['Authorization'] = `Bearer ${env.HF_TOKEN}`;
         }
@@ -99,7 +95,6 @@ export default {
           const isDir = item.type === 'directory';
           const itemName = item.path.split('/').pop();
           
-          // Skip internal Git/HF files
           if (itemName === '.gitattributes' || itemName === 'README.md' || itemName.startsWith('.git/')) {
             continue;
           }
@@ -115,7 +110,6 @@ export default {
           });
         }
 
-        // Sort: Folders first, then alphabetically
         formattedFiles.sort((a, b) => {
           const aIsDir = a.mimeType === 'application/vnd.google-apps.folder';
           const bIsDir = b.mimeType === 'application/vnd.google-apps.folder';
@@ -124,7 +118,6 @@ export default {
           return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
         });
 
-        // Store shortlinks in D1 database if binding exists
         if (env.harudrive_db && formattedFiles.length > 0) {
           try {
             const stmt = env.harudrive_db.prepare(
@@ -174,7 +167,6 @@ export default {
           }), { status: 500 });
         }
 
-        // Trigger GitHub Actions repository_dispatch
         const ghUrl = `https://api.github.com/repos/${env.GITHUB_REPO}/dispatches`;
         const ghRes = await fetch(ghUrl, {
           method: 'POST',
@@ -221,7 +213,6 @@ export default {
       let filePath = rawPath;
       let filename = url.searchParams.get('name');
 
-      // Check short ID in D1 if available
       if (env.harudrive_db && keyOrId.length === 8) {
         try {
           const row = await env.harudrive_db.prepare(
@@ -231,7 +222,6 @@ export default {
             filePath = row.file_path;
             if (!filename) filename = row.name;
 
-            // Redirect short URL to /file/shortId/Filename for media player compatibility
             if (pathParts.length === 1 && filename) {
               return new Response(null, {
                 status: 302,
@@ -243,8 +233,7 @@ export default {
           }
         } catch (e) {}
       } else {
-        // Direct file path
-        if (pathParts.length > 1 && keyOrId.length === 8) {
+        if (pathParts.length > 1 && keyOrId.length === 8 && env.harudrive_db) {
           try {
             const row = await env.harudrive_db.prepare(
               'SELECT file_path FROM shortlinks WHERE short_id = ?'
@@ -268,7 +257,6 @@ export default {
         hfReqHeaders.set('Range', request.headers.get('Range'));
       }
 
-      // Fetch with redirect follow
       const hfResponse = await fetch(hfFileUrl, {
         method: 'GET',
         headers: hfReqHeaders,
@@ -300,9 +288,6 @@ export default {
   }
 };
 
-// ==========================================
-// Helper Utilities
-// ==========================================
 async function generateShortId(str) {
   const encoder = new TextEncoder();
   const data = encoder.encode(str);
@@ -327,9 +312,6 @@ function getMimeType(filename) {
   return map[ext] || 'application/octet-stream';
 }
 
-// ==========================================
-// HTML Templates & Modern HaruDrive UI
-// ==========================================
 function loginUI(errorMsg = '') {
   return `
   <div class="login-wrapper">
@@ -395,7 +377,6 @@ function mainUI() {
     </div>
   </main>
 
-  <!-- Floating Bulk Action Toolbar -->
   <div id="bulkToolbar" class="bulk-toolbar glass" style="display:none;">
     <span id="bulkCount">0 selected</span>
     <div class="bulk-actions">
@@ -405,7 +386,6 @@ function mainUI() {
     </div>
   </div>
 
-  <!-- Video Player & Streaming Modal -->
   <div id="videoModal" class="modal-backdrop" style="display:none;" onclick="if(event.target===this)closeModal()">
     <div class="modal-card video-card glass">
       <div class="modal-header">
@@ -419,7 +399,6 @@ function mainUI() {
     </div>
   </div>
 
-  <!-- Cloud Mirror Modal (GDrive -> Hugging Face) -->
   <div id="mirrorModal" class="modal-backdrop" style="display:none;" onclick="if(event.target===this)closeMirrorModal()">
     <div class="modal-card mirror-card glass">
       <div class="modal-header">
@@ -474,6 +453,285 @@ function mainUI() {
 }
 
 function htmlPage(content, env) {
+  const clientScript = `
+    let currentPath = '';
+    let allFiles = [];
+
+    async function loadFiles(path) {
+      if (path === undefined) path = '';
+      currentPath = path;
+      const listEl = document.getElementById('fileList');
+      listEl.innerHTML = '<div class="loading-state"><div class="spinner"></div><p>Fetching files from Hugging Face Storage...</p></div>';
+      
+      updateBreadcrumbs(path);
+
+      try {
+        const res = await fetch('/api/list?path=' + encodeURIComponent(path));
+        if (!res.ok) {
+          const errData = await res.json();
+          throw new Error(errData.error || 'Failed to fetch directory');
+        }
+        const data = await res.json();
+        allFiles = data.files || [];
+        renderFiles(allFiles);
+      } catch (e) {
+        listEl.innerHTML = '<div class="loading-state" style="color:#ef4444;"><p>❌ Error: ' + escapeHtml(e.message) + '</p></div>';
+      }
+    }
+
+    function renderFiles(files) {
+      const listEl = document.getElementById('fileList');
+      if (files.length === 0) {
+        listEl.innerHTML = '<div class="loading-state"><p>📂 Folder is empty</p></div>';
+        return;
+      }
+
+      listEl.innerHTML = files.map(function(file) {
+        const isDir = file.mimeType === 'application/vnd.google-apps.folder';
+        const isVideo = file.mimeType.startsWith('video/') || /\\.(mp4|mkv|webm|avi|mov)$/i.test(file.name);
+        const icon = isDir ? '📁' : isVideo ? '🎬' : '📄';
+        const fileUrl = '/file/' + file.id + '/' + encodeURIComponent(file.name);
+
+        let actionBtns = '';
+        if (isVideo) {
+          actionBtns += '<button class="btn-act play" onclick="openVideoModal(\'' + escapeJs(file.name) + '\', \'' + escapeJs(fileUrl) + '\')">▶ Play</button>';
+        }
+        if (!isDir) {
+          actionBtns += '<a href="' + fileUrl + '" class="btn-act" download>⬇</a>';
+          actionBtns += '<button class="btn-act" onclick="copyLink(\'' + window.location.origin + fileUrl + '\')">🔗</button>';
+        }
+
+        const clickHandler = isDir 
+          ? "navigateTo('" + escapeJs(file.path) + "')" 
+          : (isVideo ? "openVideoModal('" + escapeJs(file.name) + "', '" + escapeJs(fileUrl) + "')" : "window.open('" + fileUrl + "', '_blank')");
+
+        return '<div class="file-row ' + (isDir ? 'is-folder' : '') + '">' +
+          '<div class="col-cb">' +
+            (!isDir ? '<input type="checkbox" class="item-cb" value="' + window.location.origin + fileUrl + '" onchange="updateBulkToolbar()" />' : '') +
+          '</div>' +
+          '<div class="file-name-cell" onclick="' + clickHandler + '">' +
+            '<span class="file-icon">' + icon + '</span>' +
+            '<span class="file-title">' + escapeHtml(file.name) + '</span>' +
+          '</div>' +
+          '<div class="file-size-cell">' + (isDir ? '-' : formatBytes(file.size)) + '</div>' +
+          '<div class="file-date-cell">' + formatDate(file.modifiedTime) + '</div>' +
+          '<div class="file-actions-cell">' + actionBtns + '</div>' +
+        '</div>';
+      }).join('');
+    }
+
+    function navigateTo(path) {
+      window.history.pushState(null, '', path ? '?p=' + encodeURIComponent(path) : '/');
+      loadFiles(path);
+    }
+
+    function updateBreadcrumbs(path) {
+      const bar = document.getElementById('breadcrumbBar');
+      if (!bar) return;
+      if (!path) {
+        bar.innerHTML = '<span class="crumb-current">🏠 Home</span>';
+        return;
+      }
+      const parts = path.split('/');
+      let html = '<span class="crumb" onclick="navigateTo(\'\')">🏠 Home</span>';
+      let accum = '';
+      parts.forEach(function(p, idx) {
+        accum += (idx === 0 ? '' : '/') + p;
+        const isLast = idx === parts.length - 1;
+        html += ' <span class="crumb-sep">/</span> ';
+        if (isLast) {
+          html += '<span class="crumb-current">' + escapeHtml(p) + '</span>';
+        } else {
+          html += '<span class="crumb" onclick="navigateTo(\'' + escapeJs(accum) + '\')">' + escapeHtml(p) + '</span>';
+        }
+      });
+      bar.innerHTML = html;
+    }
+
+    function filterFiles() {
+      const q = document.getElementById('searchInput').value.toLowerCase();
+      const filtered = allFiles.filter(function(f) { return f.name.toLowerCase().includes(q); });
+      renderFiles(filtered);
+    }
+
+    function updateBulkToolbar() {
+      const checked = document.querySelectorAll('.item-cb:checked');
+      const bar = document.getElementById('bulkToolbar');
+      if (!bar) return;
+      if (checked.length > 0) {
+        bar.style.display = 'flex';
+        document.getElementById('bulkCount').textContent = checked.length + ' selected';
+      } else {
+        bar.style.display = 'none';
+      }
+    }
+
+    function toggleSelectAll(masterCb) {
+      document.querySelectorAll('.item-cb').forEach(function(cb) { cb.checked = masterCb.checked; });
+      updateBulkToolbar();
+    }
+
+    function deselectAll() {
+      document.querySelectorAll('.item-cb').forEach(function(cb) { cb.checked = false; });
+      const master = document.getElementById('selectAllCb');
+      if (master) master.checked = false;
+      updateBulkToolbar();
+    }
+
+    function copySelectedLinks() {
+      const selected = Array.from(document.querySelectorAll('.item-cb:checked')).map(function(cb) { return cb.value; });
+      if (!selected.length) return;
+      navigator.clipboard.writeText(selected.join('\n')).then(function() {
+        showToast('Copied ' + selected.length + ' links to clipboard! 📋');
+        deselectAll();
+      });
+    }
+
+    function copyLink(url) {
+      navigator.clipboard.writeText(url).then(function() { showToast('Link copied to clipboard! 🔗'); });
+    }
+
+    async function downloadSelected() {
+      const selected = Array.from(document.querySelectorAll('.item-cb:checked')).map(function(cb) { return cb.value; });
+      if (!selected.length) return;
+      showToast('Starting batch download...');
+      for (let i = 0; i < selected.length; i++) {
+        const a = document.createElement('a');
+        a.href = selected[i];
+        a.download = '';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        await new Promise(function(r) { setTimeout(r, 600); });
+      }
+      deselectAll();
+    }
+
+    function openVideoModal(name, url) {
+      document.getElementById('modalTitle').textContent = name;
+      const player = document.getElementById('videoPlayer');
+      player.src = url;
+      
+      const fullUrl = window.location.origin + url;
+      const cleanUrl = fullUrl.replace(/^https?:\/\//, '');
+      const footer = document.getElementById('modalFooter');
+      footer.innerHTML = 
+        '<a href="' + url + '" class="btn-player" download>⬇ Download Video</a>' +
+        '<button onclick="copyLink(\'' + fullUrl + '\')" class="btn-player">🔗 Copy Stream Link</button>' +
+        '<a href="potplayer://' + fullUrl + '" class="btn-player">PotPlayer</a>' +
+        '<a href="vlc://' + fullUrl + '" class="btn-player">VLC iOS/Mac</a>' +
+        '<a href="iina://weblink?url=' + fullUrl + '" class="btn-player">IINA (Mac)</a>' +
+        '<a href="intent://' + cleanUrl + '#Intent;action=android.intent.action.VIEW;scheme=https;type=video/*;package=org.videolan.vlc;end" class="btn-player">VLC Android</a>' +
+        '<a href="intent://' + cleanUrl + '#Intent;action=android.intent.action.VIEW;scheme=https;type=video/*;package=com.mxtech.videoplayer.ad;end" class="btn-player">MX Player</a>';
+
+      document.getElementById('videoModal').style.display = 'flex';
+      player.play().catch(function() {});
+    }
+
+    function closeModal() {
+      const modal = document.getElementById('videoModal');
+      if (modal) modal.style.display = 'none';
+      const player = document.getElementById('videoPlayer');
+      if (player) {
+        player.pause();
+        player.src = '';
+      }
+    }
+
+    function openMirrorModal() {
+      const m = document.getElementById('mirrorModal');
+      if (m) m.style.display = 'flex';
+    }
+    function closeMirrorModal() {
+      const m = document.getElementById('mirrorModal');
+      if (m) m.style.display = 'none';
+    }
+
+    async function submitCloudMirror(e) {
+      e.preventDefault();
+      const gdrive_url = document.getElementById('mirrorGdriveUrl').value.trim();
+      const target_path = document.getElementById('mirrorTargetPath').value.trim();
+      const btn = document.getElementById('startMirrorBtn');
+
+      btn.disabled = true;
+      btn.textContent = '🚀 Dispatching Cloud Job...';
+
+      try {
+        const res = await fetch('/api/admin/mirror', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ gdrive_url: gdrive_url, target_path: target_path })
+        });
+        const result = await res.json();
+        if (res.ok && result.success) {
+          alert('✅ SUCCESS!\n\n' + result.message + '\n\nProses mirror sedang berjalan di GitHub Actions Cloud.');
+          closeMirrorModal();
+        } else {
+          alert('❌ Error: ' + (result.error || 'Failed to dispatch mirror job.'));
+        }
+      } catch (err) {
+        alert('❌ Error: ' + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '⚡ Start Cloud Mirror (GitHub Actions)';
+      }
+    }
+
+    function showToast(msg) {
+      const toast = document.getElementById('toastOverlay');
+      if (!toast) return;
+      toast.textContent = msg;
+      toast.style.display = 'block';
+      setTimeout(function() { toast.style.display = 'none'; }, 3000);
+    }
+
+    function toggleDark() {
+      const isLight = document.body.classList.toggle('light');
+      localStorage.setItem('haruTheme', isLight ? 'light' : 'dark');
+      const toggle = document.getElementById('darkToggle');
+      if (toggle) toggle.textContent = isLight ? '🌙' : '☀️';
+    }
+
+    function formatBytes(bytes) {
+      if (!bytes || bytes === 0) return '0 B';
+      const k = 1024;
+      const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    }
+
+    function formatDate(dateStr) {
+      if (!dateStr) return '-';
+      const d = new Date(dateStr);
+      return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+    }
+
+    function escapeHtml(str) {
+      return (str || '').replace(/[&<>"']/g, function(m) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m];
+      });
+    }
+
+    function escapeJs(str) {
+      return (str || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    }
+
+    window.addEventListener('popstate', function() {
+      const params = new URLSearchParams(window.location.search);
+      loadFiles(params.get('p') || '');
+    });
+
+    window.onload = function() {
+      if (localStorage.getItem('haruTheme') === 'light') {
+        document.body.classList.add('light');
+        const toggle = document.getElementById('darkToggle');
+        if (toggle) toggle.textContent = '🌙';
+      }
+      const params = new URLSearchParams(window.location.search);
+      loadFiles(params.get('p') || '');
+    };
+  `;
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -536,7 +794,6 @@ function htmlPage(content, env) {
       border: 1px solid var(--border);
     }
 
-    /* Navbar */
     .navbar {
       display: flex;
       justify-content: space-between;
@@ -611,7 +868,6 @@ function htmlPage(content, env) {
       background: rgba(99, 102, 241, 0.15);
     }
 
-    /* Container */
     .container {
       max-width: 1200px;
       width: 100%;
@@ -620,7 +876,6 @@ function htmlPage(content, env) {
       flex: 1;
     }
 
-    /* Breadcrumbs */
     .breadcrumb-bar {
       padding: 12px 18px;
       border-radius: var(--radius);
@@ -641,7 +896,6 @@ function htmlPage(content, env) {
     .crumb-sep { color: var(--text-dim); }
     .crumb-current { color: var(--text); font-weight: 700; }
 
-    /* File Table */
     .file-table-wrapper {
       border-radius: var(--radius);
       overflow: hidden;
@@ -738,7 +992,6 @@ function htmlPage(content, env) {
       color: white;
     }
 
-    /* Floating Toolbar */
     .bulk-toolbar {
       position: fixed;
       bottom: 24px;
@@ -764,7 +1017,6 @@ function htmlPage(content, env) {
     }
     .btn-bulk.primary { background: var(--primary); color: white; }
 
-    /* Modals */
     .modal-backdrop {
       position: fixed;
       top: 0; left: 0; right: 0; bottom: 0;
@@ -830,7 +1082,6 @@ function htmlPage(content, env) {
       color: white;
     }
 
-    /* Forms */
     .form-group { margin-bottom: 16px; }
     .form-group label {
       display: block;
@@ -929,7 +1180,6 @@ function htmlPage(content, env) {
       white-space: nowrap;
     }
 
-    /* Login */
     .login-wrapper {
       flex: 1;
       display: flex;
@@ -966,7 +1216,6 @@ function htmlPage(content, env) {
       margin-bottom: 16px;
     }
 
-    /* Toast */
     .toast-overlay {
       position: fixed;
       bottom: 30px; right: 30px;
@@ -994,267 +1243,7 @@ function htmlPage(content, env) {
 </head>
 <body>
   ${content}
-
-  <script>
-    let currentPath = '';
-    let allFiles = [];
-
-    async function loadFiles(path = '') {
-      currentPath = path;
-      const listEl = document.getElementById('fileList');
-      listEl.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Fetching files from Hugging Face Storage...</p></div>`;
-      
-      updateBreadcrumbs(path);
-
-      try {
-        const res = await fetch('/api/list?path=' + encodeURIComponent(path));
-        if (!res.ok) {
-          const errData = await res.json();
-          throw new Error(errData.error || 'Failed to fetch directory');
-        }
-        const data = await res.json();
-        allFiles = data.files || [];
-        renderFiles(allFiles);
-      } catch (e) {
-        listEl.innerHTML = `<div class="loading-state" style="color:#ef4444;"><p>❌ Error: ${e.message}</p></div>`;
-      }
-    }
-
-    function renderFiles(files) {
-      const listEl = document.getElementById('fileList');
-      if (files.length === 0) {
-        listEl.innerHTML = `<div class="loading-state"><p>📂 Folder is empty</p></div>`;
-        return;
-      }
-
-      listEl.innerHTML = files.map(file => {
-        const isDir = file.mimeType === 'application/vnd.google-apps.folder';
-        const isVideo = file.mimeType.startsWith('video/') || /\.(mp4|mkv|webm|avi|mov)$/i.test(file.name);
-        const icon = isDir ? '📁' : isVideo ? '🎬' : '📄';
-        const fileUrl = '/file/' + file.id + '/' + encodeURIComponent(file.name);
-
-        return `
-          <div class="file-row ${isDir ? 'is-folder' : ''}">
-            <div class="col-cb">
-              ${!isDir ? `<input type="checkbox" class="item-cb" value="${window.location.origin}${fileUrl}" onchange="updateBulkToolbar()" />` : ''}
-            </div>
-            <div class="file-name-cell" onclick="${isDir ? `navigateTo('${file.path}')` : (isVideo ? `openVideoModal('${escapeHtml(file.name)}', '${fileUrl}')` : `window.open('${fileUrl}', '_blank')`)}">
-              <span class="file-icon">${icon}</span>
-              <span class="file-title">${escapeHtml(file.name)}</span>
-            </div>
-            <div class="file-size-cell">${isDir ? '-' : formatBytes(file.size)}</div>
-            <div class="file-date-cell">${formatDate(file.modifiedTime)}</div>
-            <div class="file-actions-cell">
-              ${isVideo ? `<button class="btn-act play" onclick="openVideoModal('${escapeHtml(file.name)}', '${fileUrl}')">▶ Play</button>` : ''}
-              ${!isDir ? `<a href="${fileUrl}" class="btn-act" download>⬇</a>` : ''}
-              ${!isDir ? `<button class="btn-act" onclick="copyLink('${window.location.origin}${fileUrl}')">🔗</button>` : ''}
-            </div>
-          </div>
-        `;
-      }).join('');
-    }
-
-    function navigateTo(path) {
-      window.history.pushState(null, '', path ? '?p=' + encodeURIComponent(path) : '/');
-      loadFiles(path);
-    }
-
-    function updateBreadcrumbs(path) {
-      const bar = document.getElementById('breadcrumbBar');
-      if (!path) {
-        bar.innerHTML = '<span class="crumb-current">🏠 Home</span>';
-        return;
-      }
-      const parts = path.split('/');
-      let html = '<span class="crumb" onclick="navigateTo(\'\')">🏠 Home</span>';
-      let accum = '';
-      parts.forEach((p, idx) => {
-        accum += (idx === 0 ? '' : '/') + p;
-        const isLast = idx === parts.length - 1;
-        html += ' <span class="crumb-sep">/</span> ';
-        if (isLast) {
-          html += `<span class="crumb-current">${escapeHtml(p)}</span>`;
-        } else {
-          const target = accum;
-          html += `<span class="crumb" onclick="navigateTo('${target}')">${escapeHtml(p)}</span>`;
-        }
-      });
-      bar.innerHTML = html;
-    }
-
-    function filterFiles() {
-      const q = document.getElementById('searchInput').value.toLowerCase();
-      const filtered = allFiles.filter(f => f.name.toLowerCase().includes(q));
-      renderFiles(filtered);
-    }
-
-    function updateBulkToolbar() {
-      const checked = document.querySelectorAll('.item-cb:checked');
-      const bar = document.getElementById('bulkToolbar');
-      if (checked.length > 0) {
-        bar.style.display = 'flex';
-        document.getElementById('bulkCount').textContent = checked.length + ' selected';
-      } else {
-        bar.style.display = 'none';
-      }
-    }
-
-    function toggleSelectAll(masterCb) {
-      document.querySelectorAll('.item-cb').forEach(cb => cb.checked = masterCb.checked);
-      updateBulkToolbar();
-    }
-
-    function deselectAll() {
-      document.querySelectorAll('.item-cb').forEach(cb => cb.checked = false);
-      const master = document.getElementById('selectAllCb');
-      if (master) master.checked = false;
-      updateBulkToolbar();
-    }
-
-    function copySelectedLinks() {
-      const selected = Array.from(document.querySelectorAll('.item-cb:checked')).map(cb => cb.value);
-      if (!selected.length) return;
-      navigator.clipboard.writeText(selected.join('\n')).then(() => {
-        showToast('Copied ' + selected.length + ' links to clipboard! 📋');
-        deselectAll();
-      });
-    }
-
-    function copyLink(url) {
-      navigator.clipboard.writeText(url).then(() => showToast('Link copied to clipboard! 🔗'));
-    }
-
-    async function downloadSelected() {
-      const selected = Array.from(document.querySelectorAll('.item-cb:checked')).map(cb => cb.value);
-      if (!selected.length) return;
-      showToast('Starting batch download...');
-      for (const url of selected) {
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = '';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        await new Promise(r => setTimeout(r, 600));
-      }
-      deselectAll();
-    }
-
-    // Video Modal & External Player deep links
-    function openVideoModal(name, url) {
-      document.getElementById('modalTitle').textContent = name;
-      const player = document.getElementById('videoPlayer');
-      player.src = url;
-      
-      const fullUrl = window.location.origin + url;
-      const cleanUrl = fullUrl.replace(/^https?:\/\//, '');
-      const footer = document.getElementById('modalFooter');
-      footer.innerHTML = `
-        <a href="${url}" class="btn-player" download>⬇ Download Video</a>
-        <button onclick="copyLink('${fullUrl}')" class="btn-player">🔗 Copy Stream Link</button>
-        <a href="potplayer://${fullUrl}" class="btn-player">PotPlayer</a>
-        <a href="vlc://${fullUrl}" class="btn-player">VLC iOS/Mac</a>
-        <a href="iina://weblink?url=${fullUrl}" class="btn-player">IINA (Mac)</a>
-        <a href="intent://${cleanUrl}#Intent;action=android.intent.action.VIEW;scheme=https;type=video/*;package=org.videolan.vlc;end" class="btn-player">VLC Android</a>
-        <a href="intent://${cleanUrl}#Intent;action=android.intent.action.VIEW;scheme=https;type=video/*;package=com.mxtech.videoplayer.ad;end" class="btn-player">MX Player</a>
-      `;
-
-      document.getElementById('videoModal').style.display = 'flex';
-      player.play().catch(() => {});
-    }
-
-    function closeModal() {
-      document.getElementById('videoModal').style.display = 'none';
-      const player = document.getElementById('videoPlayer');
-      player.pause();
-      player.src = '';
-    }
-
-    // Cloud Mirror Modal
-    function openMirrorModal() {
-      document.getElementById('mirrorModal').style.display = 'flex';
-    }
-    function closeMirrorModal() {
-      document.getElementById('mirrorModal').style.display = 'none';
-    }
-
-    async function submitCloudMirror(e) {
-      e.preventDefault();
-      const gdrive_url = document.getElementById('mirrorGdriveUrl').value.trim();
-      const target_path = document.getElementById('mirrorTargetPath').value.trim();
-      const btn = document.getElementById('startMirrorBtn');
-
-      btn.disabled = true;
-      btn.textContent = '🚀 Dispatching Cloud Job...';
-
-      try {
-        const res = await fetch('/api/admin/mirror', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ gdrive_url, target_path })
-        });
-        const result = await res.json();
-        if (res.ok && result.success) {
-          alert('✅ SUCCESS!\n\n' + result.message + '\n\nProses mirror sedang berjalan di GitHub Actions Cloud.');
-          closeMirrorModal();
-        } else {
-          alert('❌ Error: ' + (result.error || 'Failed to dispatch mirror job.'));
-        }
-      } catch (err) {
-        alert('❌ Error: ' + err.message);
-      } finally {
-        btn.disabled = false;
-        btn.textContent = '⚡ Start Cloud Mirror (GitHub Actions)';
-      }
-    }
-
-    function showToast(msg) {
-      const toast = document.getElementById('toastOverlay');
-      toast.textContent = msg;
-      toast.style.display = 'block';
-      setTimeout(() => toast.style.display = 'none', 3000);
-    }
-
-    function toggleDark() {
-      const isLight = document.body.classList.toggle('light');
-      localStorage.setItem('haruTheme', isLight ? 'light' : 'dark');
-      document.getElementById('darkToggle').textContent = isLight ? '🌙' : '☀️';
-    }
-
-    function formatBytes(bytes) {
-      if (!bytes || bytes === 0) return '0 B';
-      const k = 1024;
-      const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-      const i = Math.floor(Math.log(bytes) / Math.log(k));
-      return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-    }
-
-    function formatDate(dateStr) {
-      if (!dateStr) return '-';
-      const d = new Date(dateStr);
-      return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
-    }
-
-    function escapeHtml(str) {
-      return (str || '').replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
-    }
-
-    // Check query params on load
-    window.addEventListener('popstate', () => {
-      const params = new URLSearchParams(window.location.search);
-      loadFiles(params.get('p') || '');
-    });
-
-    window.onload = () => {
-      if (localStorage.getItem('haruTheme') === 'light') {
-        document.body.classList.add('light');
-        document.getElementById('darkToggle').textContent = '🌙';
-      }
-      const params = new URLSearchParams(window.location.search);
-      loadFiles(params.get('p') || '');
-    };
-  </script>
+  <script>${clientScript}</script>
 </body>
-</html>
-  `;
+</html>`;
 }
