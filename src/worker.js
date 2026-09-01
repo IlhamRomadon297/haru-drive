@@ -111,9 +111,9 @@ export default {
         }
 
         const stmt = env.harudrive_db.prepare(
-          'SELECT short_id, file_path, name, type, size FROM shortlinks WHERE instr(lower(name), lower(?)) > 0 ORDER BY name ASC LIMIT 60'
+          'SELECT short_id, file_path, name, type, size FROM shortlinks WHERE name LIKE ? ORDER BY name ASC LIMIT 60'
         );
-        const { results } = await stmt.bind(q).all();
+        const { results } = await stmt.bind(`%${q}%`).all();
 
         const formattedResults = (results || []).map(row => {
           const isDir = row.type === 'folder';
@@ -266,27 +266,18 @@ export default {
         const base64Content = btoa(binary);
 
         const commitUrl = `https://huggingface.co/api/datasets/${HF_REPO_ID}/commit/main`;
-        const commitPayload = {
-          summary: `Upload ${filename} via HaruDrive`,
-          operations: [
-            {
-              key: 'file',
-              value: {
-                content: base64Content,
-                path: fullPath,
-                encoding: 'base64'
-              }
-            }
-          ]
-        };
-
+        const lines = [
+          JSON.stringify({ key: 'header', value: { summary: `Upload ${filename} via HaruDrive`, description: '' } }),
+          JSON.stringify({ key: 'file', value: { content: base64Content, path: fullPath, encoding: 'base64' } })
+        ];
+        const ndjsonBody = lines.join(String.fromCharCode(10)) + String.fromCharCode(10);
         const hfRes = await fetch(commitUrl, {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${HF_TOKEN}`,
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/x-ndjson'
           },
-          body: JSON.stringify(commitPayload)
+          body: ndjsonBody
         });
 
         if (!hfRes.ok) {
@@ -358,7 +349,7 @@ export default {
       }
     }
 
-    // API: Mkdir (NDJSON Protocol)
+    // API: Mkdir
     if (url.pathname === '/api/admin/mkdir' && request.method === 'POST') {
       try {
         const body = await request.json();
@@ -376,10 +367,7 @@ export default {
           JSON.stringify({ key: 'header', value: { summary: `Create folder ${folderPath} via HaruDrive`, description: '' } }),
           JSON.stringify({ key: 'file', value: { content: '', path: `${folderPath}/.gitkeep`, encoding: 'utf-8' } })
         ];
-        const ndjsonBody = lines.join('
-') + '
-';
-
+        const ndjsonBody = lines.join(String.fromCharCode(10)) + String.fromCharCode(10);
         const hfRes = await fetch(commitUrl, {
           method: 'POST',
           headers: {
@@ -397,11 +385,9 @@ export default {
         const shortId = await generateShortId(folderPath);
         if (env.harudrive_db) {
           const folderName = folderPath.split('/').pop();
-          try {
-            await env.harudrive_db.prepare(
-              'INSERT OR REPLACE INTO shortlinks (short_id, file_path, name, type, size) VALUES (?, ?, ?, ?, ?)'
-            ).bind(shortId, folderPath, folderName, 'folder', 0).run();
-          } catch (e) {}
+          await env.harudrive_db.prepare(
+            'INSERT OR REPLACE INTO shortlinks (short_id, file_path, name, type, size) VALUES (?, ?, ?, ?, ?)'
+          ).bind(shortId, folderPath, folderName, 'folder', 0).run();
         }
 
         return new Response(JSON.stringify({ success: true, folderId: shortId, folderPath }), {
@@ -475,11 +461,8 @@ export default {
         if (env.harudrive_db) {
           const newName = newPath.split('/').pop();
           const newShortId = await generateShortId(newPath);
-          const oldPrefix = oldPath + '/';
-          try {
-            await env.harudrive_db.prepare('DELETE FROM shortlinks WHERE file_path = ? OR substr(file_path, 1, ?) = ?')
-              .bind(oldPath, oldPrefix.length, oldPrefix).run();
-          } catch (e) {}
+          await env.harudrive_db.prepare('DELETE FROM shortlinks WHERE file_path = ? OR file_path LIKE ?')
+            .bind(oldPath, `${oldPath}/%`).run();
           await env.harudrive_db.prepare(
             'INSERT OR REPLACE INTO shortlinks (short_id, file_path, name, type, size) VALUES (?, ?, ?, ?, ?)'
           ).bind(newShortId, newPath, newName, isDirectory ? 'folder' : 'file', 0).run();
@@ -571,11 +554,8 @@ export default {
               const filename = cleanP.split('/').pop();
               const newPath = targetFolder ? `${targetFolder}/${filename}` : filename;
               const newShortId = await generateShortId(newPath);
-              const cleanPrefix = cleanP + '/';
-              try {
-                await env.harudrive_db.prepare('DELETE FROM shortlinks WHERE file_path = ? OR substr(file_path, 1, ?) = ?')
-                  .bind(cleanP, cleanPrefix.length, cleanPrefix).run();
-              } catch (e) {}
+              await env.harudrive_db.prepare('DELETE FROM shortlinks WHERE file_path = ? OR file_path LIKE ?')
+                .bind(cleanP, `${cleanP}/%`).run();
               await env.harudrive_db.prepare(
                 'INSERT OR REPLACE INTO shortlinks (short_id, file_path, name, type, size) VALUES (?, ?, ?, ?, ?)'
               ).bind(newShortId, newPath, filename, 'file', 0).run();
@@ -638,9 +618,7 @@ export default {
         }
 
         const commitUrl = `https://huggingface.co/api/datasets/${HF_REPO_ID}/commit/main`;
-        const ndjsonBody = lines.join('
-') + '
-';
+        const ndjsonBody = lines.join(String.fromCharCode(10)) + String.fromCharCode(10);
 
         const hfRes = await fetch(commitUrl, {
           method: 'POST',
@@ -657,7 +635,7 @@ export default {
           return new Response(JSON.stringify({ error: `Gagal commit delete ke HF: ${errText}` }), { status: hfRes.status });
         }
 
-        // Clean D1 database
+        // Clean D1 database with substr
         if (env.harudrive_db) {
           for (const p of paths) {
             const cleanP = p.replace(/^\/+|\/+$/g, '');
