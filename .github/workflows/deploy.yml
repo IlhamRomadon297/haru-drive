@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 jobs:
   deploy:
@@ -17,6 +18,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+
+      - name: 🛠️ Prepare Pages Output Directory
+        run: |
+          mkdir -p public
+          cp src/worker.js public/_worker.js
 
       - name: 🚀 Deploy to Cloudflare Pages (haru-drive.pages.dev)
         uses: cloudflare/wrangler-action@v3
