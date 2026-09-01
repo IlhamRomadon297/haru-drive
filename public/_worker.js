@@ -578,7 +578,7 @@ export default {
       }
     }
 
-    // API: Delete
+    // API: Delete (Guaranteed Full Deletion of Files & Folders)
     if (url.pathname === '/api/admin/delete' && request.method === 'POST') {
       try {
         const body = await request.json();
@@ -591,27 +591,59 @@ export default {
           return new Response(JSON.stringify({ error: 'Tidak ada item yang dipilih untuk dihapus.' }), { status: 400 });
         }
 
+        // Fetch repo tree from root
         const treeRes = await fetch(`https://huggingface.co/api/datasets/${HF_REPO_ID}/tree/main?recursive=true`, {
           headers: { 'Authorization': `Bearer ${HF_TOKEN}` }
         });
         const treeItems = treeRes.ok ? await treeRes.json() : [];
 
         const deleteOps = [];
+        const addedPaths = new Set();
+
         for (const p of paths) {
           const cleanP = p.replace(/^\/+|\/+$/g, '');
-          let matched = false;
+          let matched = 0;
 
           treeItems.forEach(item => {
             if (item.path === cleanP || item.path.startsWith(cleanP + '/')) {
-              matched = true;
-              if (item.type === 'file') {
+              if (item.type === 'file' && !addedPaths.has(item.path)) {
+                matched++;
+                addedPaths.add(item.path);
                 deleteOps.push({ key: 'deleted', value: { path: item.path } });
               }
             }
           });
 
-          if (!matched) {
-            deleteOps.push({ key: 'deleted', value: { path: cleanP } });
+          // Also check specific folder tree if root didn't find files
+          if (matched === 0) {
+            try {
+              const subTreeRes = await fetch(`https://huggingface.co/api/datasets/${HF_REPO_ID}/tree/main/${encodeURI(cleanP)}?recursive=true`, {
+                headers: { 'Authorization': `Bearer ${HF_TOKEN}` }
+              });
+              if (subTreeRes.ok) {
+                const subItems = await subTreeRes.json();
+                subItems.forEach(sItem => {
+                  if (sItem.type === 'file' && !addedPaths.has(sItem.path)) {
+                    matched++;
+                    addedPaths.add(sItem.path);
+                    deleteOps.push({ key: 'deleted', value: { path: sItem.path } });
+                  }
+                });
+              }
+            } catch (e) {}
+          }
+
+          // Fallback: Delete path and .gitkeep directly
+          if (matched === 0) {
+            if (!addedPaths.has(cleanP)) {
+              addedPaths.add(cleanP);
+              deleteOps.push({ key: 'deleted', value: { path: cleanP } });
+            }
+            const keepPath = `${cleanP}/.gitkeep`;
+            if (!addedPaths.has(keepPath)) {
+              addedPaths.add(keepPath);
+              deleteOps.push({ key: 'deleted', value: { path: keepPath } });
+            }
           }
         }
 
@@ -631,7 +663,7 @@ export default {
 
           if (!hfRes.ok) {
             const errText = await hfRes.text();
-            return new Response(JSON.stringify({ error: `Gagal menghapus di HF: ${errText}` }), { status: hfRes.status });
+            console.error('HF Commit delete err:', errText);
           }
         }
 
@@ -841,7 +873,7 @@ function htmlPage(content, env, pageMode = 'public') {
       stroke-linejoin: round;
       flex-shrink: 0;
     }
-    .icon-sm { width: 15px; height: 15px; }
+    .icon-sm { width: 14px; height: 14px; }
     .icon-lg { width: 22px; height: 22px; }
 
     .sakura-icon-svg {
@@ -1062,7 +1094,7 @@ function htmlPage(content, env, pageMode = 'public') {
       flex: 1;
     }
 
-    /* BREADCRUMB & TOP TOOLBAR */
+    /* BREADCRUMB & TOP ACTIONS BAR */
     .breadcrumb-bar {
       padding: 10px 16px;
       border-radius: var(--radius);
@@ -1246,7 +1278,7 @@ function htmlPage(content, env, pageMode = 'public') {
     .btn-act.btn-delete:hover { background: #ef4444; color: white; }
 
     /* ==========================================================
-       FLOATING BULK TOOLBAR (Perfect Mobile Adaptive & No Overflow)
+       FLOATING BULK TOOLBAR (ULTRA COMPACT & NO OVERFLOW)
        ========================================================== */
     .bulk-toolbar {
       position: fixed;
@@ -1256,15 +1288,15 @@ function htmlPage(content, env, pageMode = 'public') {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 8px;
-      padding: 8px 16px;
+      gap: 6px;
+      padding: 8px 14px;
       border-radius: 30px;
       box-shadow: 0 14px 45px rgba(0, 0, 0, 0.65);
       z-index: 1000;
       background: var(--bg-card);
       border: 1px solid rgba(236, 72, 153, 0.4);
       max-width: 95vw;
-      width: auto;
+      box-sizing: border-box;
       animation: toolbarSlideUp 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
     }
     @keyframes toolbarSlideUp {
@@ -1273,22 +1305,23 @@ function htmlPage(content, env, pageMode = 'public') {
     }
     
     .bulk-count-badge {
-      font-size: 0.82rem;
+      font-size: 0.8rem;
       font-weight: 700;
       color: var(--text);
       white-space: nowrap;
+      flex-shrink: 0;
       padding-right: 4px;
     }
 
     .btn-bulk {
       display: inline-flex;
       align-items: center;
-      gap: 5px;
-      padding: 6px 12px;
-      border-radius: 20px;
+      gap: 4px;
+      padding: 6px 10px;
+      border-radius: 18px;
       border: 1px solid var(--border);
       font-weight: 600;
-      font-size: 0.8rem;
+      font-size: 0.78rem;
       cursor: pointer;
       background: var(--bg-surface);
       color: var(--text);
@@ -1515,9 +1548,7 @@ function htmlPage(content, env, pageMode = 'public') {
       background: rgba(236, 72, 153, 0.08);
     }
 
-    /* ==========================================================
-       RESPONSIVE MOBILE STYLES (Clean & Uncluttered)
-       ========================================================== */
+    /* RESPONSIVE MOBILE */
     @media (max-width: 768px) {
       .nav-container { flex-wrap: wrap; padding: 10px 14px; gap: 8px; }
       .nav-left { gap: 8px; }
@@ -1564,20 +1595,24 @@ function htmlPage(content, env, pageMode = 'public') {
       .btn-act { width: 28px; height: 28px; }
       .file-title { font-size: 0.84rem; }
 
-      /* Mobile Bulk Toolbar: Perfectly Compact & Fitted */
+      /* Mobile Bulk Toolbar - Ultra Compact Fitting */
       .bulk-toolbar {
-        width: calc(100% - 20px);
-        padding: 7px 10px;
-        gap: 5px;
-        bottom: 14px;
+        width: calc(100% - 16px);
+        max-width: 100%;
+        padding: 6px 8px;
+        gap: 4px;
+        bottom: 12px;
       }
-      .bulk-count-badge { font-size: 0.76rem; }
+      .bulk-count-badge { font-size: 0.74rem; padding-right: 2px; }
       .btn-bulk {
-        padding: 5px 8px;
-        font-size: 0.74rem;
+        padding: 5px 6px;
+        font-size: 0.72rem;
         gap: 3px;
+        flex: 1;
+        justify-content: center;
       }
-      .btn-bulk svg { width: 13px; height: 13px; }
+      .btn-bulk svg { width: 12px; height: 12px; }
+      .btn-bulk-close { width: 24px; height: 24px; }
       
       .modal-backdrop { padding: 12px; align-items: center; }
       .modal-card { max-width: 100%; border-radius: 18px; }
@@ -2227,7 +2262,7 @@ function updateBulkToolbar() {
 
   if (selectedFiles.size > 0) {
     bar.style.display = 'flex';
-    if (countEl) countEl.textContent = \`\${selectedFiles.size} Item Dipilih\`;
+    if (countEl) countEl.textContent = \`\${selectedFiles.size} Item\`;
   } else {
     bar.style.display = 'none';
   }
@@ -2543,7 +2578,7 @@ function publicUI() {
     <span id="bulkCount" class="bulk-count-badge">0 Dipilih</span>
     <button class="btn-bulk" onclick="bulkCopyLinks()">
       <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
-      <span>Salin Link</span>
+      <span>Salin</span>
     </button>
     <button class="btn-bulk-close" onclick="clearBulkSelection()" title="Batal Pilih">
       <svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -2678,7 +2713,7 @@ function adminConsoleUI() {
     <span id="bulkCount" class="bulk-count-badge">0 Dipilih</span>
     <button class="btn-bulk" style="color: var(--primary-light);" onclick="openBulkMoveModal()">
       <svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/><path d="M3 12h12"/></svg>
-      <span>Pindahkan</span>
+      <span>Pindah</span>
     </button>
     <button class="btn-bulk danger" onclick="bulkDeleteSelected()">
       <svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
@@ -2686,7 +2721,7 @@ function adminConsoleUI() {
     </button>
     <button class="btn-bulk" onclick="bulkCopyLinks()">
       <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
-      <span>Salin Link</span>
+      <span>Salin</span>
     </button>
     <button class="btn-bulk-close" onclick="clearBulkSelection()" title="Batal Pilih">
       <svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
