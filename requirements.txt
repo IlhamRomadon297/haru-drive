@@ -1,3 +1,4 @@
-huggingface_hub
-gdown
+huggingface_hub>=0.24.0
+gdown>=5.2.0
 tqdm
+requests
