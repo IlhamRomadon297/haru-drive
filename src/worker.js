@@ -329,7 +329,7 @@ export default {
         if (ghRes.status === 204) {
           return new Response(JSON.stringify({
             success: true,
-            message: 'Cloud Mirror berhasil dijalankan di GitHub Actions!',
+            message: 'Cloud Mirror berhasil dijalankan!',
             repo: GITHUB_REPO,
             target_path: targetPath
           }), { headers: { 'Content-Type': 'application/json' } });
@@ -337,6 +337,75 @@ export default {
           const errText = await ghRes.text();
           return new Response(JSON.stringify({ error: `GitHub dispatch error (${ghRes.status}): ${errText}` }), { status: ghRes.status });
         }
+      } catch (err) {
+        return new Response(JSON.stringify({ error: err.message }), { status: 500 });
+      }
+    }
+
+    // API: Fetch Cloud Mirror Tasks
+    if (url.pathname === '/api/admin/mirror-tasks') {
+      try {
+        const ghRes = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/actions/runs?per_page=10`, {
+          headers: {
+            'Authorization': `Bearer ${GITHUB_PAT}`,
+            'Accept': 'application/vnd.github+json',
+            'User-Agent': 'HaruDrive-Admin'
+          }
+        });
+
+        if (!ghRes.ok) {
+          const errText = await ghRes.text();
+          return new Response(JSON.stringify({ error: `GitHub API error: ${errText}` }), { status: ghRes.status });
+        }
+
+        const data = await ghRes.json();
+        const runs = (data.workflow_runs || []).map(r => ({
+          id: r.id,
+          name: r.name || 'Cloud Mirror Runner',
+          status: r.status, // queued, in_progress, completed
+          conclusion: r.conclusion, // success, failure, cancelled, null
+          created_at: r.created_at,
+          updated_at: r.updated_at,
+          html_url: r.html_url,
+          display_title: r.display_title || r.name
+        }));
+
+        const hasActive = runs.some(r => r.status === 'in_progress' || r.status === 'queued');
+
+        return new Response(JSON.stringify({ runs, hasActive }), {
+          headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }
+        });
+      } catch (err) {
+        return new Response(JSON.stringify({ error: err.message }), { status: 500 });
+      }
+    }
+
+    // API: Cancel Mirror Task
+    if (url.pathname === '/api/admin/cancel-task' && request.method === 'POST') {
+      try {
+        const body = await request.json();
+        const pin = body.admin_pin || '';
+        if (pin !== ADMIN_PIN) {
+          return new Response(JSON.stringify({ error: 'PIN Admin Salah!' }), { status: 403 });
+        }
+
+        const runId = body.run_id;
+        if (!runId) {
+          return new Response(JSON.stringify({ error: 'Run ID wajib diisi.' }), { status: 400 });
+        }
+
+        const ghRes = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/actions/runs/${runId}/cancel`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${GITHUB_PAT}`,
+            'Accept': 'application/vnd.github+json',
+            'User-Agent': 'HaruDrive-Admin'
+          }
+        });
+
+        return new Response(JSON.stringify({ success: ghRes.status === 202 }), {
+          headers: { 'Content-Type': 'application/json' }
+        });
       } catch (err) {
         return new Response(JSON.stringify({ error: err.message }), { status: 500 });
       }
@@ -1682,6 +1751,7 @@ function unlockAdminConsole() {
     document.getElementById('adminMainContent').style.display = 'block';
     loadFolder(currentPath, currentFolderId);
     fetchFolderTree();
+    fetchAndRenderTasks();
   } else {
     alert('PIN Admin Salah!');
     pinInput?.focus();
@@ -2310,7 +2380,7 @@ async function submitCloudMirror() {
     const data = await res.json();
     if (res.ok && data.success) {
       closeMirrorModal();
-      alert('Cloud Mirror Runner berhasil dijalankan di GitHub Actions!');
+      openTaskManagerModal();
     } else {
       alert('Gagal: ' + (data.error || 'Akses Ditolak'));
     }
@@ -2348,6 +2418,149 @@ function getModernSvgIcon(type) {
     return \`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#a855f7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="20" x="2" y="2" rx="5" ry="5"/><path d="M10 2v20"/><path d="M14 2v20"/><path d="M2 12h20"/></svg>\`;
   }
   return \`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#818cf8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><polyline points="14 2 14 8 20 8"/></svg>\`;
+}
+
+
+let taskPollInterval = null;
+
+async function openTaskManagerModal() {
+  const m = document.getElementById('taskManagerModal');
+  if (!m) return;
+  m.style.display = 'flex';
+  await fetchAndRenderTasks();
+  if (!taskPollInterval) {
+    taskPollInterval = setInterval(fetchAndRenderTasks, 5000);
+  }
+}
+
+function closeTaskManagerModal() {
+  const m = document.getElementById('taskManagerModal');
+  if (m) m.style.display = 'none';
+  if (taskPollInterval) {
+    clearInterval(taskPollInterval);
+    taskPollInterval = null;
+  }
+}
+
+async function fetchAndRenderTasks() {
+  const listEl = document.getElementById('taskManagerList');
+  const dotEl = document.getElementById('taskPulseDot');
+
+  try {
+    const res = await fetch('/api/admin/mirror-tasks');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    const runs = data.runs || [];
+
+    if (dotEl) {
+      dotEl.style.display = data.hasActive ? 'block' : 'none';
+    }
+
+    if (!listEl) return;
+
+    if (runs.length === 0) {
+      listEl.innerHTML = `
+        <div style="text-align: center; padding: 30px; color: var(--text-muted);">
+          <p style="font-size: 0.85rem;">Belum ada task Cloud Mirror yang dijalankan.</p>
+        </div>`;
+      return;
+    }
+
+    let html = '<div style="display: flex; flex-direction: column; gap: 8px;">';
+
+    runs.forEach(run => {
+      const isRunning = run.status === 'in_progress' || run.status === 'queued';
+      const isSuccess = run.conclusion === 'success';
+      const isFailed = run.conclusion === 'failure' || run.conclusion === 'cancelled' || run.conclusion === 'timed_out';
+
+      let statusBadge = '';
+      if (isRunning) {
+        statusBadge = `
+          <span style="display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border-radius: 12px; font-size: 0.72rem; font-weight: 700; background: rgba(245, 158, 11, 0.15); border: 1px solid rgba(245, 158, 11, 0.35); color: #f59e0b;">
+            <span class="pulse-dot" style="width: 6px; height: 6px; background: #f59e0b; box-shadow: 0 0 6px #f59e0b;"></span>
+            ${run.status === 'queued' ? 'Antre...' : 'Sedang Berjalan...'}
+          </span>`;
+      } else if (isSuccess) {
+        statusBadge = `
+          <span style="display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 12px; font-size: 0.72rem; font-weight: 700; background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.35); color: #10b981;">
+            ✓ Selesai
+          </span>`;
+      } else {
+        statusBadge = `
+          <span style="display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 12px; font-size: 0.72rem; font-weight: 700; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.35); color: #ef4444;">
+            ✕ ${run.conclusion || 'Gagal'}
+          </span>`;
+      }
+
+      const timeAgo = formatTimeAgo(run.created_at);
+
+      html += `
+        <div style="background: var(--bg-surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px; display: flex; flex-direction: column; gap: 8px; transition: all 0.2s;">
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+            <div style="display: flex; align-items: center; gap: 6px; min-width: 0;">
+              <svg class="icon icon-sm" style="color: var(--primary-light);" viewBox="0 0 24 24"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/><polyline points="12 13 12 7 9 10"/><polyline points="12 7 15 10"/></svg>
+              <span style="font-size: 0.85rem; font-weight: 700; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                ${escapeHtml(run.display_title || 'Mirror Job #' + run.id)}
+              </span>
+            </div>
+            ${statusBadge}
+          </div>
+
+          <div style="display: flex; align-items: center; justify-content: space-between; font-size: 0.75rem; color: var(--text-dim);">
+            <span>Mulai: ${timeAgo}</span>
+            <div style="display: flex; align-items: center; gap: 6px;">
+              ${isRunning ? `
+                <button class="nav-btn" style="padding: 3px 8px; font-size: 0.72rem; color: #ef4444; border-color: rgba(239,68,68,0.3); background: rgba(239,68,68,0.1);" onclick="cancelMirrorTask(${run.id})">
+                  Batalkan
+                </button>
+              ` : ''}
+              <a href="${run.html_url}" target="_blank" rel="noopener noreferrer" class="nav-btn" style="padding: 3px 8px; font-size: 0.72rem;">
+                Logs ↗
+              </a>
+            </div>
+          </div>
+        </div>
+      `;
+    });
+
+    html += '</div>';
+    listEl.innerHTML = html;
+  } catch (err) {
+    if (listEl) {
+      listEl.innerHTML = `<div style="text-align: center; padding: 20px; color: #ef4444; font-size: 0.85rem;">Gagal memuat task: ${err.message}</div>`;
+    }
+  }
+}
+
+async function cancelMirrorTask(runId) {
+  if (!confirm(`Yakin ingin membatalkan task #${runId}?`)) return;
+  const pin = localStorage.getItem('harudrive_admin_pin') || getCookie('harudrive_admin_pin') || '290722';
+
+  try {
+    const res = await fetch('/api/admin/cancel-task', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ run_id: runId, admin_pin: pin })
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      alert('Task berhasil dibatalkan!');
+      fetchAndRenderTasks();
+    } else {
+      alert('Gagal membatalkan task: ' + (data.error || 'Akses ditolak'));
+    }
+  } catch (e) {
+    alert('Error: ' + e.message);
+  }
+}
+
+function formatTimeAgo(dateStr) {
+  if (!dateStr) return '-';
+  const diff = (Date.now() - new Date(dateStr).getTime()) / 1000;
+  if (diff < 60) return `${Math.floor(diff)} dtk lalu`;
+  if (diff < 3600) return `${Math.floor(diff / 60)} mnt lalu`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)} jam lalu`;
+  return `${Math.floor(diff / 86400)} hari lalu`;
 }
 
 // Helpers
@@ -2652,6 +2865,12 @@ function adminConsoleUI() {
           <span>Cloud Mirror</span>
         </button>
 
+        <button class="btn-action-tool" style="background: rgba(14, 165, 233, 0.12); border-color: rgba(14, 165, 233, 0.35); color: #0ea5e9; position: relative;" onclick="openTaskManagerModal()">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M12 2v4"/><path d="M12 18v4"/><path d="M4.93 4.93l2.83 2.83"/><path d="M16.24 16.24l2.83 2.83"/><path d="M2 12h4"/><path d="M18 12h4"/><path d="M4.93 19.07l2.83-2.83"/><path d="M16.24 7.76l2.83-2.83"/></svg>
+          <span>Task Manager</span>
+          <span id="taskPulseDot" style="display: none; width: 7px; height: 7px; border-radius: 50%; background: #10b981; box-shadow: 0 0 8px #10b981; position: absolute; top: 4px; right: 4px;"></span>
+        </button>
+
         <button class="btn-action-tool" onclick="loadFolder(currentPath, currentFolderId)" title="Refresh">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
           <span>Refresh</span>
@@ -2795,6 +3014,37 @@ function adminConsoleUI() {
       <div class="modal-footer">
         <button class="nav-btn" onclick="closeNewFolderModal()">Batal</button>
         <button class="nav-btn" style="background: var(--primary); color: white; border: none;" onclick="submitNewFolder()">Buat Folder</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- TASK MANAGER MODAL -->
+  <div id="taskManagerModal" class="modal-backdrop" style="display: none;">
+    <div class="modal-card" style="max-width: 580px;">
+      <div class="modal-header">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <svg class="icon icon-sm" style="color: #0ea5e9;" viewBox="0 0 24 24"><path d="M12 2v4"/><path d="M12 18v4"/><path d="M4.93 4.93l2.83 2.83"/><path d="M16.24 16.24l2.83 2.83"/><path d="M2 12h4"/><path d="M18 12h4"/><path d="M4.93 19.07l2.83-2.83"/><path d="M16.24 7.76l2.83-2.83"/></svg>
+          <span class="modal-title">Cloud Task Manager</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <button class="nav-btn" style="padding: 4px 8px; font-size: 0.72rem;" onclick="fetchAndRenderTasks()" title="Refresh Task">
+            <svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+            <span>Perbarui</span>
+          </button>
+          <button class="btn-close-circle" onclick="closeTaskManagerModal()">
+            <svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="modal-body" style="padding: 14px 18px; max-height: 60vh; overflow-y: auto;" id="taskManagerList">
+        <div style="text-align: center; padding: 25px; color: var(--text-muted);">
+          <div class="pulse-dot" style="margin: 0 auto 10px; width: 10px; height: 10px;"></div>
+          <p style="font-size: 0.85rem;">Memuat daftar proses Cloud Mirror...</p>
+        </div>
+      </div>
+      <div class="modal-footer" style="justify-content: space-between; align-items: center;">
+        <span style="font-size: 0.74rem; color: var(--text-dim);">Auto-refresh aktif setiap 5 detik</span>
+        <button class="nav-btn" onclick="closeTaskManagerModal()">Tutup</button>
       </div>
     </div>
   </div>
