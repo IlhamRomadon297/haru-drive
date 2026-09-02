@@ -2820,9 +2820,7 @@ function renderFileList() {
     html += '  </div>';
     html += '  <div class="file-size-cell" style="text-align: right;">' + (isDir ? (file.size > 0 ? formatBytes(file.size) : '-') : formatBytes(file.size)) + '</div>';
     
-    if (isPageAdmin) {
-      html += '  <div class="file-date-cell">' + formatDate(file.modifiedTime) + '</div>';
-    }
+    html += '  <div class="file-date-cell">' + formatDate(file.modifiedTime) + '</div>';
 
     html += '  <div class="file-actions-cell" style="text-align: center;">';
     
