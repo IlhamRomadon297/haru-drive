@@ -1368,7 +1368,7 @@ function htmlPage(content, env, pageMode = 'public') {
       display: inline-flex;
       align-items: center;
       gap: 4px;
-      max-width: 180px;
+      max-width: 260px;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
@@ -1376,7 +1376,7 @@ function htmlPage(content, env, pageMode = 'public') {
       min-width: 0;
     }
     .crumb.active {
-      max-width: 260px;
+      max-width: 520px;
     }
     .crumb:hover { text-decoration: underline; }
     .crumb-sep { color: var(--text-dim); }
@@ -2071,10 +2071,26 @@ function htmlPage(content, env, pageMode = 'public') {
 
 /* === GUEST CARD UI (Screenshot 2 Style) === */
 .guest-card-wrapper {
-  width: 100%;
+  width: min(1320px, 94vw);
   max-width: 1320px;
-  margin: 40px auto 70px;
+  margin: 24px auto 40px;
   padding: 0 18px;
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.guest-main-card {
+  display: flex;
+  flex-direction: column;
+  max-height: 100%;
+  overflow: hidden;
+}
+.guest-table-box {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
 }
 
 .guest-main-card {
@@ -2141,7 +2157,7 @@ function htmlPage(content, env, pageMode = 'public') {
 
 .guest-table-header {
   display: grid;
-  grid-template-columns: 40px 1fr 100px 80px;
+  grid-template-columns: 40px 1fr 90px 70px;
   align-items: center;
   padding: 11px 14px;
   background: rgba(255, 255, 255, 0.04);
@@ -2583,7 +2599,7 @@ function updateBreadcrumbs() {
       const isLast = idx === parts.length - 1;
       html += '<span class="crumb-separator" style="margin: 0 4px; color: var(--text-dim);">/</span>';
       if (isLast) {
-        html += '<span class="crumb active" style="color: var(--text); font-weight: 600;">' + escapeHtml(part) + '</span>';
+        html += '<span class="crumb active" title="' + escapeHtml(part) + '" style="color: var(--text); font-weight: 600;">' + escapeHtml(part) + '</span>';
       } else {
         const click = isPageAdmin ? ('navigateToAdmin(' + JSON.stringify(accum) + ')') : ('navigateTo(' + JSON.stringify(accum) + ', "")');
         html += '<a href="javascript:void(0)" class="crumb" onclick="' + click.replace(/"/g, '&quot;') + '; return false;">' + escapeHtml(part) + '</a>';
@@ -3186,7 +3202,7 @@ function playVideo(fileId, fileName) {
   if (!modal || !video) return;
 
   title.textContent = fileName || 'Video Player';
-  const videoUrl = window.location.origin + '/d/' + fileId;
+  const videoUrl = window.location.origin + '/d/' + fileId + '/' + encodeURIComponent(fileName || 'video');
   video.src = videoUrl;
 
   if (plyrPlayerInstance) {
@@ -3199,10 +3215,10 @@ function playVideo(fileId, fileName) {
 
   if (extContainer) {
     let eHtml = '';
-    eHtml += '<a href="vlc://' + videoUrl + '" class="btn-ext-player"><svg class="icon icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 2 L19 9 L12 22 L5 9 Z"/><line x1="8" y1="9" x2="16" y2="9" stroke-width="1.2"/></svg><span>VLC Player</span></a>';
-    eHtml += '<a href="potplayer://' + videoUrl + '" class="btn-ext-player"><svg class="icon icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg><span>PotPlayer</span></a>';
-    eHtml += '<a href="intent:' + videoUrl + '#Intent;type=video/*;package=com.mxtech.videoplayer.ad;end" class="btn-ext-player"><svg class="icon icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="7" y="2" width="10" height="20" rx="2" ry="2"/><circle cx="12" cy="18" r="1" fill="currentColor" stroke="none"/></svg><span>MX Player</span></a>';
-    eHtml += '<a href="' + videoUrl + '" target="_blank" download class="btn-ext-player" style="background: rgba(16, 185, 129, 0.15); color: #10b981; border-color: rgba(16, 185, 129, 0.3);"><svg class="icon icon-xs" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg><span>Download File</span></a>';
+    eHtml += '<a href="vlc://' + videoUrl + '" class="btn-ext-player"><span>VLC Player</span></a>';
+    eHtml += '<a href="potplayer://' + videoUrl + '" class="btn-ext-player"><span>PotPlayer</span></a>';
+    eHtml += '<a href="intent:' + videoUrl + '#Intent;type=video/*;package=com.mxtech.videoplayer.ad;end" class="btn-ext-player"><span>MX Player</span></a>';
+    eHtml += '<a href="' + videoUrl + '" target="_blank" download class="btn-ext-player" style="background: rgba(16, 185, 129, 0.15); color: #10b981; border-color: rgba(16, 185, 129, 0.3); margin-left:auto;"><svg class="icon icon-xs" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg><span>Download File</span></a>';
     extContainer.innerHTML = eHtml;
   }
 
