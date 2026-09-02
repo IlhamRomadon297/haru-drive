@@ -2188,28 +2188,27 @@ async function loadFolder(path = '', id = '') {
   }
 }
 
-// Render File Table
+// Render File Table & Link Helpers
 
 function copyFolderLink(id, path) {
-  const url = id ? `${window.location.origin}/folder/${id}` : `${window.location.origin}/?path=${encodeURIComponent(path)}`;
+  const url = id ? \`\${window.location.origin}/folder/\${id}\` : \`\${window.location.origin}/?path=\${encodeURIComponent(path)}\`;
   navigator.clipboard.writeText(url).then(() => {
     showToast('Link folder berhasil disalin ke clipboard! 📋', 'success');
   }).catch(() => {
-    showToast('Gagal menyalin link.', 'error');
+    prompt('Salin link folder:', url);
   });
 }
 
 function copyShortLink(id, path) {
-  const url = id ? `${window.location.origin}/d/${id}` : `${window.location.origin}/file/${encodeURIComponent(path)}`;
+  const url = id ? \`\${window.location.origin}/file/\${id}\` : \`\${window.location.origin}/d/\${encodeURIComponent(path)}\`;
   navigator.clipboard.writeText(url).then(() => {
     showToast('Link file berhasil disalin ke clipboard! 📋', 'success');
   }).catch(() => {
-    showToast('Gagal menyalin link.', 'error');
+    prompt('Salin link file:', url);
   });
 }
 
-
-function handleBulkCopyLinks() {
+function bulkCopyLinks() {
   if (selectedFiles.size === 0) {
     showToast('Pilih setidaknya 1 item terlebih dahulu.', 'warning');
     return;
@@ -2219,20 +2218,21 @@ function handleBulkCopyLinks() {
     if (selectedFiles.has(f.path)) {
       const isDir = f.mimeType === 'application/vnd.google-apps.folder';
       if (isDir) {
-        links.push(f.id ? `${window.location.origin}/folder/${f.id}` : `${window.location.origin}/?path=${encodeURIComponent(f.path)}`);
+        links.push(f.id ? \`\${window.location.origin}/folder/\${f.id}\` : \`\${window.location.origin}/?path=\${encodeURIComponent(f.path)}\`);
       } else {
-        links.push(f.id ? `${window.location.origin}/d/${f.id}` : `${window.location.origin}/file/${encodeURIComponent(f.path)}`);
+        links.push(f.id ? \`\${window.location.origin}/file/\${f.id}\` : \`\${window.location.origin}/d/\${encodeURIComponent(f.path)}\`);
       }
     }
   });
-  navigator.clipboard.writeText(links.join('\n')).then(() => {
-    showToast(`${links.length} Link berhasil disalin ke clipboard! 📋`, 'success');
+  const textToCopy = links.join('\n');
+  navigator.clipboard.writeText(textToCopy).then(() => {
+    showToast(\`\${links.length} Link berhasil disalin ke clipboard! 📋\`, 'success');
   }).catch(() => {
-    showToast('Gagal menyalin link.', 'error');
+    prompt('Salin link:', textToCopy);
   });
 }
 
-function handleBulkDownload() {
+function bulkDownloadSelected() {
   const filesToDownload = allFiles.filter(f => selectedFiles.has(f.path) && f.mimeType !== 'application/vnd.google-apps.folder');
   if (filesToDownload.length === 0) {
     showToast('Pilih setidaknya 1 file untuk di-download.', 'warning');
@@ -2241,14 +2241,14 @@ function handleBulkDownload() {
   filesToDownload.forEach((f, idx) => {
     setTimeout(() => {
       const a = document.createElement('a');
-      a.href = `/d/${f.id}`;
+      a.href = \`/d/\${f.id}\`;
       a.download = f.name;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
     }, idx * 500);
   });
-  showToast(`Memulai unduhan untuk ${filesToDownload.length} file... ⬇️`, 'success');
+  showToast(\`Memulai unduhan untuk \${filesToDownload.length} file... ⬇️\`, 'success');
 }
 
 
@@ -2271,8 +2271,8 @@ function renderFileList() {
     const fCount = allFiles.filter(f => f.mimeType === 'application/vnd.google-apps.folder').length;
     const fileCount = allFiles.filter(f => f.mimeType !== 'application/vnd.google-apps.folder').length;
     let sList = [];
-    if (fCount > 0) sList.push(`${fCount} folders`);
-    if (fileCount > 0) sList.push(`${fileCount} files`);
+    if (fCount > 0) sList.push(fCount + ' folders');
+    if (fileCount > 0) sList.push(fileCount + ' files');
     cardStats.textContent = sList.length > 0 ? sList.join(' • ') : 'Folder kosong';
   }
 
@@ -2286,10 +2286,7 @@ function renderFileList() {
   });
 
   if (filtered.length === 0) {
-    container.innerHTML = `
-      <div style="text-align: center; padding: 40px; color: var(--text-muted);">
-        <p>Tidak ada file di direktori ini.</p>
-      </div>`;
+    container.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--text-muted);"><p>Tidak ada file di direktori ini.</p></div>';
     return;
   }
 
@@ -2301,57 +2298,41 @@ function renderFileList() {
     const isChecked = selectedFiles.has(file.path);
 
     const clickAction = isDir 
-      ? (isPageAdmin ? `navigateToAdmin('${escapeJs(file.path)}')` : `navigateTo('${escapeJs(file.path)}', '${file.id}')`)
-      : (isVideo ? `playVideo('${file.id}', '${escapeJs(file.name)}')` : `downloadFile('${file.id}')`);
+      ? (isPageAdmin ? "navigateToAdmin('" + escapeJs(file.path) + "')" : "navigateTo('" + escapeJs(file.path) + "', '" + file.id + "')")
+      : (isVideo ? "playVideo('" + file.id + "', '" + escapeJs(file.name) + "')" : "downloadFile('" + file.id + "')");
 
     const copyFunc = isDir
-      ? `copyFolderLink('${file.id}', '${escapeJs(file.path)}')`
-      : `copyShortLink('${file.id}', '${escapeJs(file.path)}')`;
+      ? "copyFolderLink('" + file.id + "', '" + escapeJs(file.path) + "')"
+      : "copyShortLink('" + file.id + "', '" + escapeJs(file.path) + "')";
 
-    html += `
-    <div class="file-row ${isDir ? 'is-folder' : ''}">
-      <div class="col-cb">
-        <input type="checkbox" ${isChecked ? 'checked' : ''} onchange="toggleItemSelect('${escapeJs(file.path)}', this.checked)">
-      </div>
-      <div class="file-name-cell" onclick="${clickAction}" title="${isDir ? 'Buka Folder' : (isVideo ? 'Klik untuk Putar Video' : 'Download File')}">
-        <div class="file-icon-box ${iconType}">
-          ${getModernSvgIcon(iconType)}
-        </div>
-        <span class="file-title" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span>
-      </div>
-      <div class="file-size-cell" style="text-align: right;">${isDir ? '-' : formatBytes(file.size)}</div>
-      <div class="file-actions-cell" style="text-align: center;">
-        ${!isPageAdmin ? `
-          ${!isDir ? `
-            <a class="btn-act" href="/d/${file.id}" title="Download File">
-              <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-            </a>
-            <button class="btn-act" onclick="${copyFunc}" title="Salin Link File">
-              <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
-            </button>
-          ` : `
-            <button class="btn-act" onclick="${copyFunc}" title="Salin Link Folder">
-              <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
-            </button>
-          `}
-        ` : `
-          <button class="btn-act" onclick="openRenameModal('${escapeJs(file.path)}', '${escapeJs(file.name)}')" title="Ubah Nama">
-            <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-          </button>
-          <button class="btn-act" onclick="openMoveModalSingle('${escapeJs(file.path)}')" title="Pindahkan">
-            <svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="5 9 2 12 5 15"/><polyline points="9 5 12 2 15 5"/><polyline points="15 19 12 22 9 19"/><polyline points="19 9 22 12 19 15"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="12" y1="2" x2="12" y2="22"/></svg>
-          </button>
-          <button class="btn-act btn-act-danger" onclick="deleteItem('${escapeJs(file.path)}')" title="Hapus">
-            <svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-          </button>
-        `}
-      </div>
-    </div>`;
+    html += '<div class="file-row ' + (isDir ? 'is-folder' : '') + '">';
+    html += '  <div class="col-cb"><input type="checkbox" ' + (isChecked ? 'checked' : '') + ' onchange="toggleItemSelect(\'' + escapeJs(file.path) + '\', this.checked)"></div>';
+    html += '  <div class="file-name-cell" onclick="' + clickAction + '" title="' + (isDir ? 'Buka Folder' : (isVideo ? 'Klik untuk Putar Video' : 'Download File')) + '">';
+    html += '    <div class="file-icon-box ' + iconType + '">' + getModernSvgIcon(iconType) + '</div>';
+    html += '    <span class="file-title" title="' + escapeHtml(file.name) + '">' + escapeHtml(file.name) + '</span>';
+    html += '  </div>';
+    html += '  <div class="file-size-cell" style="text-align: right;">' + (isDir ? '-' : formatBytes(file.size)) + '</div>';
+    html += '  <div class="file-actions-cell" style="text-align: center;">';
+    
+    if (!isPageAdmin) {
+      if (!isDir) {
+        html += '    <a class="btn-act" href="/d/' + file.id + '" title="Download File"><svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></a>';
+        html += '    <button class="btn-act" onclick="' + copyFunc + '" title="Salin Link File"><svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>';
+      } else {
+        html += '    <button class="btn-act" onclick="' + copyFunc + '" title="Salin Link Folder"><svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>';
+      }
+    } else {
+      html += '    <button class="btn-act" onclick="openRenameModal(\'' + escapeJs(file.path) + '\', \'' + escapeJs(file.name) + '\')" title="Ubah Nama"><svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>';
+      html += '    <button class="btn-act" onclick="openMoveModalSingle(\'' + escapeJs(file.path) + '\')" title="Pindahkan"><svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="5 9 2 12 5 15"/><polyline points="9 5 12 2 15 5"/><polyline points="15 19 12 22 9 19"/><polyline points="19 9 22 12 19 15"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="12" y1="2" x2="12" y2="22"/></svg></button>';
+      html += '    <button class="btn-act btn-act-danger" onclick="deleteItem(\'' + escapeJs(file.path) + '\')" title="Hapus"><svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>';
+    }
+    
+    html += '  </div>';
+    html += '</div>';
   });
 
   container.innerHTML = html;
 }
-
 
 function toggleItemSelect(itemPath, checked) {
   if (checked) selectedFiles.add(itemPath);
@@ -2407,85 +2388,6 @@ async function bulkDeleteSelected() {
     }
   } catch (e) {
     alert('Error: ' + e.message);
-  }
-}
-
-
-function copyFolderLink(id, path) {
-  const url = id ? `${window.location.origin}/folder/${id}` : `${window.location.origin}/?path=${encodeURIComponent(path)}`;
-  navigator.clipboard.writeText(url).then(() => {
-    alert(`Link folder berhasil disalin!
-${url}`);
-  }).catch(() => {
-    prompt('Salin link folder ini:', url);
-  });
-}
-
-function copyShortLink(id, path) {
-  const url = id ? `${window.location.origin}/file/${id}` : `${window.location.origin}/d/${encodeURIComponent(path)}`;
-  navigator.clipboard.writeText(url).then(() => {
-    alert(`Link file berhasil disalin!
-${url}`);
-  }).catch(() => {
-    prompt('Salin link file ini:', url);
-  });
-}
-
-function bulkCopyLinks() {
-  if (selectedFiles.size === 0) {
-    alert('Pilih setidaknya 1 item terlebih dahulu.');
-    return;
-  }
-  const links = Array.from(selectedFiles).map(p => {
-    const file = allFiles.find(f => f.path === p);
-    if (!file) return '';
-    const isDir = file.mimeType === 'application/vnd.google-apps.folder';
-    if (isDir) {
-      return file.id ? `${window.location.origin}/folder/${file.id}` : `${window.location.origin}/?path=${encodeURIComponent(file.path)}`;
-    } else {
-      return file.id ? `${window.location.origin}/file/${file.id}` : `${window.location.origin}/d/${encodeURIComponent(file.path)}`;
-    }
-  }).filter(Boolean);
-
-  const textToCopy = links.join('\n');
-  navigator.clipboard.writeText(textToCopy).then(() => {
-    alert(`Berhasil menyalin ${links.length} link!
-
-${textToCopy}`);
-  }).catch(() => {
-    prompt('Salin link:', textToCopy);
-  });
-}
-
-function bulkDownloadSelected() {
-  const filesToDownload = allFiles.filter(f => selectedFiles.has(f.path) && f.mimeType !== 'application/vnd.google-apps.folder');
-  if (filesToDownload.length === 0) {
-    alert('Pilih setidaknya 1 file untuk di-download.');
-    return;
-  }
-  filesToDownload.forEach((f, idx) => {
-    setTimeout(() => {
-      const a = document.createElement('a');
-      a.href = `/d/${f.id}`;
-      a.download = f.name;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-    }, idx * 500);
-  });
-}
-
-function updateBulkToolbar() {
-  const count = selectedFiles.size;
-  const countSpan = document.getElementById('bulkCount');
-  if (countSpan) countSpan.textContent = `${count} Dipilih`;
-  
-  const dlBtnText = document.getElementById('bulkDownloadText');
-  if (dlBtnText) dlBtnText.textContent = `Download Selected (${count})`;
-
-  const toolbar = document.getElementById('bulkToolbar');
-  if (toolbar) {
-    toolbar.style.display = count > 0 ? 'flex' : 'none';
   }
 }
 
