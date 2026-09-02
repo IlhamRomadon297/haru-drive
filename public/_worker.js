@@ -33,7 +33,7 @@ export default {
             status: 302,
             headers: {
               'Location': '/',
-              'Set-Cookie': 'harudrive_auth=true; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=2592000'
+              'Set-Cookie': 'harudrive_auth=true; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=604800'
             }
           });
         } else {
