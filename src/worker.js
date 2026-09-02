@@ -836,8 +836,10 @@ export default {
       });
     }
 
-    // Public index (shown after the APP_PASSWORD login) + shared-folder guest views
-    return new Response(htmlPage(publicUI(), env, 'public'), {
+    // Public page: logged-in users get the full-width file-manager view,
+    // guests hitting a shared link get the centered folder card.
+    const publicView = isLoggedIn ? publicIndexUI() : publicUI();
+    return new Response(htmlPage(publicView, env, 'public'), {
       headers: { 'Content-Type': 'text/html;charset=UTF-8' }
     });
   }
@@ -1868,10 +1870,10 @@ function htmlPage(content, env, pageMode = 'public') {
 
 /* === GUEST CARD UI (Screenshot 2 Style) === */
 .guest-card-wrapper {
-  max-width: 780px;
   width: 100%;
-  margin: 48px auto 80px;
-  padding: 0 16px;
+  max-width: 1320px;
+  margin: 40px auto 70px;
+  padding: 0 18px;
 }
 
 .guest-main-card {
@@ -1971,6 +1973,12 @@ function htmlPage(content, env, pageMode = 'public') {
   flex-direction: column;
   gap: 10px;
   margin-top: 24px;
+}
+
+@media (min-width: 768px) {
+  .guest-bottom-actions { flex-direction: row; gap: 12px; }
+  .guest-bottom-actions .btn-bulk-download-green,
+  .guest-bottom-actions .btn-bulk-copy-subtle { width: auto; flex: 1; }
 }
 
 .btn-bulk-download-green {
@@ -3202,6 +3210,116 @@ function publicUI() {
   `;
 }
 
+function publicIndexUI() {
+  return `
+  <!-- PUBLIC FILE MANAGER TOPBAR -->
+  <header class="navbar-cyber glass">
+    <div class="nav-container">
+      <div class="nav-left">
+        <a href="javascript:void(0)" class="brand-logo" onclick="navigateTo('/', ''); return false;">
+          <div class="logo-glow-wrap">
+            <svg class="sakura-icon-svg" viewBox="0 0 24 24"><path d="M12 2a4 4 0 0 0-3.5 6 4 4 0 0 0-6 3.5 4 4 0 0 0 3.5 6 4 4 0 0 0 6 3.5 4 4 0 0 0 6-3.5 4 4 0 0 0 3.5-6 4 4 0 0 0-3.5-6 4 4 0 0 0-6-3.5z"/><circle cx="12" cy="12" r="2.5" fill="#ffffff"/></svg>
+          </div>
+          <div class="brand-info">
+            <span class="brand-title">HaruDrive</span>
+            <span class="brand-subtag" style="color: #6366f1;">Public Drive</span>
+          </div>
+        </a>
+      </div>
+      <div class="nav-right">
+        <a href="/admin" class="nav-btn" title="Masuk ke Admin Console">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          <span class="btn-text-label">Admin</span>
+        </a>
+        <button class="nav-btn" id="darkToggle" title="Ganti Tema">
+          <svg class="icon icon-sm" id="themeIcon" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <div class="container">
+    <div class="breadcrumb-bar glass">
+      <div class="crumb-group" id="breadcrumbNav">
+        <a href="javascript:void(0)" class="crumb" onclick="navigateTo('/', ''); return false;">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+          <span>Home</span>
+        </a>
+      </div>
+      <div class="toolbar-actions">
+        <div style="position: relative; flex: 1; min-width: 180px;">
+          <svg class="icon icon-xs" viewBox="0 0 24 24" style="position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--text-dim); pointer-events: none;"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input type="text" id="searchInput" class="form-input-pro" placeholder="Cari file global...   (Ctrl+K)" style="padding-left: 36px;">
+        </div>
+        <button class="btn-action-tool" onclick="loadFolder(currentPath, currentFolderId)" title="Refresh">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+          <span>Refresh</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- File Table -->
+    <div class="file-table-wrapper glass">
+      <div class="table-header">
+        <div class="col-cb"><input type="checkbox" id="selectAllCheckbox" onchange="toggleSelectAll(this.checked)"></div>
+        <div class="col-name">Nama File / Folder</div>
+        <div class="col-size">Ukuran</div>
+        <div class="col-actions">Aksi</div>
+      </div>
+      <div id="fileListContainer">
+        <div style="text-align: center; padding: 40px; color: var(--text-muted);">
+          <div class="pulse-dot" style="margin: 0 auto 12px; width: 12px; height: 12px;"></div>
+          <p>Memuat daftar file...</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- FLOATING BULK TOOLBAR (PUBLIC) -->
+  <div id="bulkToolbar" class="bulk-toolbar" style="display: none;">
+    <span id="bulkCount" class="bulk-count-badge">0 Dipilih</span>
+    <button class="btn-bulk" style="color: #10b981;" onclick="bulkDownloadSelected()">
+      <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      <span>Download</span>
+    </button>
+    <button class="btn-bulk" style="color: var(--primary-light);" onclick="bulkCopyLinks()">
+      <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+      <span>Salin</span>
+    </button>
+    <button class="btn-bulk-close" onclick="clearBulkSelection()" title="Batal Pilih">
+      <svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    </button>
+  </div>
+
+  <!-- TOAST -->
+  <div id="toastCopiedBadge" class="toast-copied-badge">
+    <div class="toast-check-icon">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+    </div>
+    <span id="toastCopiedText">31 links copied</span>
+  </div>
+
+  <!-- VIDEO MODAL -->
+  <div id="videoModal" class="modal-backdrop" style="display: none;">
+    <div class="modal-card video-card">
+      <div class="modal-header">
+        <span class="modal-title" id="videoModalTitle">Video Player</span>
+        <button class="btn-close-circle" onclick="closeVideoModal()">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="video-container-wrap">
+        <video id="plyrPlayer" playsinline controls></video>
+      </div>
+      <div class="modal-body" style="padding: 12px 18px 14px;">
+        <div style="font-size: 0.72rem; font-weight: 700; color: var(--text-dim); text-transform: uppercase; margin-bottom: 6px;">Buka di External Player:</div>
+        <div class="external-players-row" id="externalPlayersContainer"></div>
+      </div>
+    </div>
+  </div>
+  `;
+}
+
 function adminConsoleUI() {
   return `
   <!-- TOP NAVBAR -->
@@ -3265,6 +3383,10 @@ function adminConsoleUI() {
       </div>
 
       <div class="toolbar-actions">
+        <div style="position: relative; flex: 1; min-width: 180px;">
+          <svg class="icon icon-xs" viewBox="0 0 24 24" style="position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--text-dim); pointer-events: none;"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input type="text" id="searchInput" class="form-input-pro" placeholder="Cari file global...   (Ctrl+K)" style="padding-left: 36px;">
+        </div>
         <button class="btn-action-tool" style="background: rgba(99, 102, 241, 0.15); border-color: rgba(99, 102, 241, 0.4); color: var(--primary-light);" onclick="openUploadModal()">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
           <span>Upload File</span>
