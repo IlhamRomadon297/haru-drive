@@ -2,7 +2,7 @@ name = "haru-drive"
 main = "src/worker.js"
 compatibility_date = "2024-07-30"
 workers_dev = true
-account_id = "11b88ee6fb0a7509cabc91b5b5cd64de"
+account_id = "eb8b95c0d9d5eb2364e37ebb4bd0c1df"
 
 # Uncomment and set your custom domain if needed:
 # routes = [
