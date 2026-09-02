@@ -9,6 +9,9 @@ export default {
     const GITHUB_PAT = env.GITHUB_PAT || '';
     const GITHUB_REPO = env.GITHUB_REPO || 'IlhamRomadon297/haru-drive';
 
+    // Best-effort background sync: keeps the D1 search index fresh automatically.
+    ctx.waitUntil(maybeAutoSync(env));
+
     const cookie = request.headers.get('Cookie') || '';
     const isLoggedIn = cookie.includes('harudrive_auth=true');
 
@@ -397,47 +400,9 @@ export default {
         if (body.admin_pin !== ADMIN_PIN) {
           return new Response(JSON.stringify({ error: 'PIN Admin Salah!' }), { status: 403 });
         }
-        if (!env.harudrive_db) {
-          return new Response(JSON.stringify({ error: 'D1 database not bound' }), { status: 500 });
-        }
-        const hfHeaders = { 'User-Agent': 'HaruDrive/1.0' };
-        if (HF_TOKEN) hfHeaders['Authorization'] = `Bearer ${HF_TOKEN}`;
-
-        let items = 0;
-        const MAX_ITEMS = 4000;
-        const seen = new Set();
-        let nextUrl = `https://huggingface.co/api/datasets/${HF_REPO_ID}/tree/main?recursive=true`;
-
-        while (nextUrl && items < MAX_ITEMS) {
-          const hfRes = await fetch(nextUrl, { headers: hfHeaders });
-          if (!hfRes.ok) {
-            const errText = await hfRes.text();
-            return new Response(JSON.stringify({ error: `Hugging Face error (${hfRes.status}): ${errText}` }), { status: hfRes.status });
-          }
-          const pageItems = await hfRes.json();
-          if (!Array.isArray(pageItems)) break;
-
-          for (const item of pageItems) {
-            const path = item.path;
-            if (!path || path.startsWith('.') || path === 'README.md' || item.type === 'directory') continue;
-            if (seen.has(path)) continue;
-            seen.add(path);
-
-            const shortId = await generateShortId(path);
-            const filename = path.split('/').pop();
-            await env.harudrive_db.prepare(
-              'INSERT OR REPLACE INTO shortlinks (short_id, file_path, name, type, size) VALUES (?, ?, ?, ?, ?)'
-            ).bind(shortId, path, filename, 'file', item.size || 0).run();
-            items++;
-            if (items >= MAX_ITEMS) break;
-          }
-
-          const linkHeader = hfRes.headers.get('Link') || '';
-          const m = linkHeader.match(/<([^>]+)>\s*;\s*rel="next"/);
-          nextUrl = m ? (m[1].startsWith('http') ? m[1] : 'https://huggingface.co' + m[1]) : '';
-        }
-
-        return new Response(JSON.stringify({ success: true, items, truncated: items >= MAX_ITEMS }), {
+        const result = await syncIndex(env);
+        await recordLastSync(env);
+        return new Response(JSON.stringify({ success: true, items: result.items, truncated: result.truncated }), {
           headers: { 'Content-Type': 'application/json' }
         });
       } catch (err) {
@@ -899,6 +864,68 @@ export default {
     });
   }
 };
+
+async function syncIndex(env) {
+  if (!env.harudrive_db) return { items: 0, truncated: false };
+  const repoId = env.HF_REPO_ID || 'username/harudrive-data';
+  const token = env.HF_TOKEN || '';
+  const hfHeaders = { 'User-Agent': 'HaruDrive/1.0' };
+  if (token) hfHeaders['Authorization'] = `Bearer ${token}`;
+
+  let items = 0;
+  const MAX_ITEMS = 4000;
+  const seen = new Set();
+  let nextUrl = `https://huggingface.co/api/datasets/${repoId}/tree/main?recursive=true`;
+
+  while (nextUrl && items < MAX_ITEMS) {
+    const hfRes = await fetch(nextUrl, { headers: hfHeaders });
+    if (!hfRes.ok) {
+      const errText = await hfRes.text();
+      throw new Error(`Hugging Face error (${hfRes.status}): ${errText}`);
+    }
+    const pageItems = await hfRes.json();
+    if (!Array.isArray(pageItems)) break;
+
+    for (const item of pageItems) {
+      const path = item.path;
+      if (!path || path.startsWith('.') || path === 'README.md' || item.type === 'directory') continue;
+      if (seen.has(path)) continue;
+      seen.add(path);
+
+      const shortId = await generateShortId(path);
+      const filename = path.split('/').pop();
+      await env.harudrive_db.prepare(
+        'INSERT OR REPLACE INTO shortlinks (short_id, file_path, name, type, size) VALUES (?, ?, ?, ?, ?)'
+      ).bind(shortId, path, filename, 'file', item.size || 0).run();
+      items++;
+      if (items >= MAX_ITEMS) break;
+    }
+
+    const linkHeader = hfRes.headers.get('Link') || '';
+    const m = linkHeader.match(/<([^>]+)>\s*;\s*rel="next"/);
+    nextUrl = m ? (m[1].startsWith('http') ? m[1] : 'https://huggingface.co' + m[1]) : '';
+  }
+  return { items, truncated: items >= MAX_ITEMS };
+}
+
+async function recordLastSync(env) {
+  try {
+    await env.harudrive_db.prepare('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)').run();
+    await env.harudrive_db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('last_sync', ?)").bind(String(Date.now())).run();
+  } catch (e) {}
+}
+
+async function maybeAutoSync(env) {
+  try {
+    if (!env.harudrive_db) return;
+    await env.harudrive_db.prepare('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)').run();
+    const row = await env.harudrive_db.prepare("SELECT value FROM meta WHERE key = 'last_sync'").first();
+    const last = row ? parseInt(row.value || '0', 10) : 0;
+    if (Date.now() - last < 60 * 60 * 1000) return;
+    await syncIndex(env);
+    await recordLastSync(env);
+  } catch (e) {}
+}
 
 async function generateShortId(path) {
   const encoder = new TextEncoder();
