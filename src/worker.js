@@ -2931,28 +2931,17 @@ function playVideo(fileId, fileName) {
   });
 
   if (extContainer) {
-    extContainer.innerHTML = `
-      <a href="vlc://${videoUrl}" class="ext-btn">
-        <svg class="icon icon-xs" viewBox="0 0 24 24"><polygon points="12 2 2 22 22 22"/></svg>
-        <span>VLC Player</span>
-      </a>
-      <a href="potplayer://${videoUrl}" class="ext-btn">
-        <svg class="icon icon-xs" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8"/></svg>
-        <span>PotPlayer</span>
-      </a>
-      <a href="intent:${videoUrl}#Intent;type=video/*;package=com.mxtech.videoplayer.ad;end" class="ext-btn">
-        <svg class="icon icon-xs" viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="20" rx="4"/></svg>
-        <span>MX Player</span>
-      </a>
-      <a href="${videoUrl}" target="_blank" download class="ext-btn" style="background: rgba(16, 185, 129, 0.15); color: #10b981; border-color: rgba(16, 185, 129, 0.3);">
-        <svg class="icon icon-xs" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-        <span>Download File</span>
-      </a>
-    `;
+    let eHtml = '';
+    eHtml += '<a href="vlc://' + videoUrl + '" class="ext-btn"><svg class="icon icon-xs" viewBox="0 0 24 24"><polygon points="12 2 2 22 22 22"/></svg><span>VLC Player</span></a>';
+    eHtml += '<a href="potplayer://' + videoUrl + '" class="ext-btn"><svg class="icon icon-xs" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8"/></svg><span>PotPlayer</span></a>';
+    eHtml += '<a href="intent:' + videoUrl + '#Intent;type=video/*;package=com.mxtech.videoplayer.ad;end" class="ext-btn"><svg class="icon icon-xs" viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="20" rx="4"/></svg><span>MX Player</span></a>';
+    eHtml += '<a href="' + videoUrl + '" target="_blank" download class="ext-btn" style="background: rgba(16, 185, 129, 0.15); color: #10b981; border-color: rgba(16, 185, 129, 0.3);"><svg class="icon icon-xs" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg><span>Download File</span></a>';
+    extContainer.innerHTML = eHtml;
   }
 
   modal.style.display = 'flex';
 }
+
 function closeVideoModal() {
   const modal = document.getElementById('videoModal');
   const video = document.getElementById('plyrPlayer');
