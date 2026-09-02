@@ -2071,6 +2071,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
   if (isPageAdmin) {
     initAdminConsole();
+  } else {
+    // Guest Mode / Shared Folder View
+    const pathName = window.location.pathname;
+    if (pathName.startsWith('/folder/')) {
+      const fId = pathName.replace('/folder/', '').split('/')[0];
+      loadFolder('', fId);
+    } else {
+      const urlParams = new URLSearchParams(window.location.search);
+      loadFolder(urlParams.get('p') || '', '');
+    }
   }
 
   document.getElementById('darkToggle')?.addEventListener('click', toggleTheme);
@@ -2098,26 +2108,9 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   window.addEventListener('popstate', handlePopState);
-
-  const isUnlocked = (localStorage.getItem('harudrive_admin_pin') || getCookie('harudrive_admin_pin')) === '290722';
-  if (!isPageAdmin || isUnlocked) {
-    const pathName = window.location.pathname;
-    if (pathName.startsWith('/folder/')) {
-      const fId = pathName.replace('/folder/', '').split('/')[0];
-      loadFolder('', fId);
-    } else {
-      const urlParams = new URLSearchParams(window.location.search);
-      const p = urlParams.get('p') || '';
-      loadFolder(p, '');
-    }
-  }
-
-  if (isPageAdmin) {
-    fetchFolderTree(); fetchAndRenderTasks();
-  }
 });
 
-// Admin Session
+// Admin Session & PIN Gate
 function initAdminConsole() {
   const gate = document.getElementById('adminLoginGate');
   const main = document.getElementById('adminMainContent');
@@ -2127,8 +2120,14 @@ function initAdminConsole() {
     if (gate) gate.style.display = 'none';
     if (main) main.style.display = 'block';
     const pathName = window.location.pathname;
-    const urlParams = new URLSearchParams(window.location.search);
-    loadFolder(urlParams.get('p') || '', '');
+    if (pathName.startsWith('/folder/')) {
+      const fId = pathName.replace('/folder/', '').split('/')[0];
+      loadFolder('', fId);
+    } else {
+      const urlParams = new URLSearchParams(window.location.search);
+      loadFolder(urlParams.get('p') || '', '');
+    }
+    fetchFolderTree(); fetchAndRenderTasks();
   } else {
     if (gate) gate.style.display = 'flex';
     if (main) main.style.display = 'none';
@@ -2145,8 +2144,6 @@ function unlockAdminConsole() {
     setCookie('harudrive_admin_pin', '290722', 30);
     if (errText) errText.style.display = 'none';
     initAdminConsole();
-    loadFolder(currentPath, currentFolderId);
-    fetchFolderTree(); fetchAndRenderTasks();
   } else {
     if (errText) {
       errText.textContent = 'PIN Admin salah. Silakan coba lagi.';
@@ -2158,7 +2155,7 @@ function unlockAdminConsole() {
 function lockAdminSession() {
   localStorage.removeItem('harudrive_admin_pin');
   deleteCookie('harudrive_admin_pin');
-  window.location.href = '/';
+  window.location.reload();
 }
 
 // Navigation
@@ -2268,11 +2265,13 @@ function showCopyToast(message) {
     window._copyToastTimer = setTimeout(() => {
       badge.classList.remove('show');
     }, 2400);
+  } else {
+    alert(message || 'Link copied');
   }
 }
 
 function copyFolderLink(id, path) {
-  const url = id ? (window.location.origin + '/folder/' + id) : (window.location.origin + '/?path=' + encodeURIComponent(path));
+  const url = id ? (window.location.origin + '/folder/' + id) : (window.location.origin + '/?p=' + encodeURIComponent(path));
   navigator.clipboard.writeText(url).then(() => {
     showCopyToast('Link folder disalin');
   }).catch(() => {
@@ -2299,7 +2298,7 @@ function bulkCopyLinks() {
     if (selectedFiles.has(f.path)) {
       const isDir = f.mimeType === 'application/vnd.google-apps.folder';
       if (isDir) {
-        links.push(f.id ? (window.location.origin + '/folder/' + f.id) : (window.location.origin + '/?path=' + encodeURIComponent(f.path)));
+        links.push(f.id ? (window.location.origin + '/folder/' + f.id) : (window.location.origin + '/?p=' + encodeURIComponent(f.path)));
       } else {
         links.push(f.id ? (window.location.origin + '/file/' + f.id) : (window.location.origin + '/d/' + encodeURIComponent(f.path)));
       }
@@ -2440,6 +2439,11 @@ function renderFileList() {
     html += '    <span class="file-title" title="' + safeName + '">' + safeName + '</span>';
     html += '  </div>';
     html += '  <div class="file-size-cell" style="text-align: right;">' + (isDir ? '-' : formatBytes(file.size)) + '</div>';
+    
+    if (isPageAdmin) {
+      html += '  <div class="file-date-cell">' + formatDate(file.modifiedTime) + '</div>';
+    }
+
     html += '  <div class="file-actions-cell" style="text-align: center;">';
     
     if (!isPageAdmin) {
@@ -2452,6 +2456,7 @@ function renderFileList() {
     } else {
       html += '    <button class="btn-act" onclick="openRenameModal(' + JSON.stringify(file.path).replace(/"/g, '&quot;') + ', ' + JSON.stringify(file.name).replace(/"/g, '&quot;') + ')" title="Ubah Nama"><svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>';
       html += '    <button class="btn-act" onclick="openMoveModalSingle(' + JSON.stringify(file.path).replace(/"/g, '&quot;') + ')" title="Pindahkan"><svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="5 9 2 12 5 15"/><polyline points="9 5 12 2 15 5"/><polyline points="15 19 12 22 9 19"/><polyline points="19 9 22 12 19 15"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="12" y1="2" x2="12" y2="22"/></svg></button>';
+      html += '    <button class="btn-act" onclick="' + copyFunc.replace(/"/g, '&quot;') + '" title="Salin Link"><svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>';
       html += '    <button class="btn-act btn-act-danger" onclick="deleteItem(' + JSON.stringify(file.path).replace(/"/g, '&quot;') + ')" title="Hapus"><svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>';
     }
     
@@ -2526,6 +2531,242 @@ async function bulkDeleteSelected() {
   }
 }
 
+// Admin Action Modals & Handlers
+function openUploadModal() {
+  const m = document.getElementById('uploadModal');
+  const targetDirInput = document.getElementById('uploadTargetDirInput');
+  if (!m) return;
+
+  targetDirInput.value = currentPath;
+  selectedUploadFile = null;
+  document.getElementById('selectedFileInfo').style.display = 'none';
+  document.getElementById('uploadProgressBox').style.display = 'none';
+  renderFolderPickerUI('uploadFolderPicker', 'uploadTargetDirInput', currentPath);
+  m.style.display = 'flex';
+}
+function closeUploadModal() {
+  const m = document.getElementById('uploadModal');
+  if (m) m.style.display = 'none';
+}
+function handleFileSelected(files) {
+  if (files && files.length > 0) {
+    selectedUploadFile = files[0];
+    document.getElementById('selectedFileName').textContent = '📄 ' + selectedUploadFile.name + ' (' + formatBytes(selectedUploadFile.size) + ')';
+    document.getElementById('selectedFileInfo').style.display = 'block';
+  }
+}
+async function submitManualUpload() {
+  if (!selectedUploadFile) return alert('Silakan pilih file terlebih dahulu!');
+  const targetDir = (document.getElementById('uploadTargetDirInput').value || '').trim();
+  const pin = localStorage.getItem('harudrive_admin_pin') || '290722';
+
+  const progressBox = document.getElementById('uploadProgressBox');
+  const progressBar = document.getElementById('uploadProgressBar');
+  const statusText = document.getElementById('uploadStatusText');
+  const btn = document.getElementById('startUploadBtn');
+
+  progressBox.style.display = 'block';
+  progressBar.style.width = '45%';
+  statusText.textContent = 'Mengupload ' + selectedUploadFile.name + '...';
+  btn.disabled = true;
+
+  const formData = new FormData();
+  formData.append('file', selectedUploadFile);
+  formData.append('target_dir', targetDir);
+  formData.append('admin_pin', pin);
+
+  try {
+    const res = await fetch('/api/admin/upload', {
+      method: 'POST',
+      body: formData
+    });
+    progressBar.style.width = '100%';
+    const data = await res.json();
+    if (res.ok && data.success) {
+      closeUploadModal();
+      loadFolder(currentPath, currentFolderId);
+      alert('✅ File berhasil diunggah!');
+    } else {
+      alert('Gagal upload: ' + (data.error || 'Terjadi kesalahan'));
+    }
+  } catch (err) {
+    alert('Upload error: ' + err.message);
+  } finally {
+    btn.disabled = false;
+    progressBox.style.display = 'none';
+  }
+}
+
+function openRenameModal(oldPath, oldName) {
+  const m = document.getElementById('renameModal');
+  const oldPathInput = document.getElementById('renameOldPath');
+  const newNameInput = document.getElementById('renameNewNameInput');
+  if (!m) return;
+
+  oldPathInput.value = oldPath;
+  newNameInput.value = oldName;
+  m.style.display = 'flex';
+  newNameInput.focus();
+}
+function closeRenameModal() {
+  const m = document.getElementById('renameModal');
+  if (m) m.style.display = 'none';
+}
+async function submitRename() {
+  const oldPath = document.getElementById('renameOldPath').value;
+  const newName = (document.getElementById('renameNewNameInput').value || '').trim();
+  if (!newName) return alert('Nama baru tidak boleh kosong!');
+
+  const pathParts = oldPath.split('/');
+  pathParts.pop();
+  const newPath = pathParts.length ? (pathParts.join('/') + '/' + newName) : newName;
+  const pin = localStorage.getItem('harudrive_admin_pin') || '290722';
+
+  try {
+    const res = await fetch('/api/admin/rename', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ old_path: oldPath, new_path: newPath, admin_pin: pin })
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      closeRenameModal();
+      loadFolder(currentPath, currentFolderId);
+      fetchFolderTree();
+    } else {
+      alert('Gagal ubah nama: ' + (data.error || 'Error'));
+    }
+  } catch (e) {
+    alert('Error: ' + e.message);
+  }
+}
+
+function openMoveModalSingle(filePath) {
+  const m = document.getElementById('moveModal');
+  const desc = document.getElementById('moveTargetDesc');
+  if (!m) return;
+
+  selectedFiles.clear();
+  selectedFiles.add(filePath);
+  desc.textContent = 'Memindahkan: ' + filePath;
+  renderFolderPickerUI('moveFolderPicker', 'moveDestinationInput', currentPath);
+  m.style.display = 'flex';
+}
+function closeMoveModal() {
+  const m = document.getElementById('moveModal');
+  if (m) m.style.display = 'none';
+}
+async function submitMove() {
+  const dest = (document.getElementById('moveDestinationInput').value || '').trim();
+  const pin = localStorage.getItem('harudrive_admin_pin') || '290722';
+  const paths = Array.from(selectedFiles);
+
+  try {
+    const res = await fetch('/api/admin/move', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paths: paths, destination: dest, admin_pin: pin })
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      closeMoveModal();
+      clearBulkSelection();
+      loadFolder(currentPath, currentFolderId);
+      fetchFolderTree();
+    } else {
+      alert('Gagal memindahkan: ' + (data.error || 'Error'));
+    }
+  } catch (e) {
+    alert('Error: ' + e.message);
+  }
+}
+
+function openNewFolderModal() {
+  const m = document.getElementById('newFolderModal');
+  const input = document.getElementById('newFolderNameInput');
+  if (!m) return;
+  if (input) input.value = '';
+  m.style.display = 'flex';
+  input?.focus();
+}
+function closeNewFolderModal() {
+  const m = document.getElementById('newFolderModal');
+  if (m) m.style.display = 'none';
+}
+async function submitNewFolder() {
+  const folderName = (document.getElementById('newFolderNameInput').value || '').trim();
+  if (!folderName) return alert('Masukkan nama folder!');
+
+  const fullPath = currentPath ? (currentPath + '/' + folderName) : folderName;
+  const pin = localStorage.getItem('harudrive_admin_pin') || '290722';
+
+  try {
+    const res = await fetch('/api/admin/folder', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: fullPath, admin_pin: pin })
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      closeNewFolderModal();
+      loadFolder(currentPath, currentFolderId);
+      fetchFolderTree();
+    } else {
+      alert('Gagal membuat folder: ' + (data.error || 'Error'));
+    }
+  } catch (e) {
+    alert('Error: ' + e.message);
+  }
+}
+
+async function deleteItem(itemPath) {
+  if (!confirm('Yakin ingin menghapus ' + itemPath + '?')) return;
+  const pin = localStorage.getItem('harudrive_admin_pin') || '290722';
+
+  try {
+    const res = await fetch('/api/admin/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: itemPath, admin_pin: pin })
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      loadFolder(currentPath, currentFolderId);
+      fetchFolderTree();
+    } else {
+      alert('Gagal menghapus: ' + (data.error || 'Error'));
+    }
+  } catch (e) {
+    alert('Error: ' + e.message);
+  }
+}
+
+async function syncFromHF() {
+  const btn = document.getElementById('syncHfBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Menyinkronkan...'; }
+  const pin = localStorage.getItem('harudrive_admin_pin') || '290722';
+
+  try {
+    const res = await fetch('/api/admin/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ admin_pin: pin })
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      alert('✅ Sinkronisasi metadata index berhasil!');
+      loadFolder(currentPath, currentFolderId);
+      fetchFolderTree();
+    } else {
+      alert('Gagal sinkronisasi: ' + (data.error || 'Error'));
+    }
+  } catch (e) {
+    alert('Error: ' + e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '⚡ Sinkronkan D1 dari HF'; }
+  }
+}
+
 // Cloud Mirror Modal
 async function openMirrorModal() {
   const m = document.getElementById('mirrorModal');
@@ -2545,9 +2786,7 @@ async function submitCloudMirror() {
   const gdriveUrl = (urlInput?.value || '').trim();
   if (!gdriveUrl) return alert('Masukkan URL Google Drive!');
 
-  const pin = localStorage.getItem('harudrive_admin_pin') || getCookie('harudrive_admin_pin') || prompt('Masukkan PIN Admin:');
-  if (!pin) return;
-
+  const pin = localStorage.getItem('harudrive_admin_pin') || '290722';
   const btn = document.getElementById('startMirrorBtn');
   if (btn) { btn.disabled = true; btn.textContent = 'Memulai Runner Cloud...'; }
 
@@ -2570,37 +2809,6 @@ async function submitCloudMirror() {
     alert('Network Error: ' + err.message);
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = 'Mulai Mirror Sekarang'; }
-  }
-}
-
-// Theme Handling
-function toggleTheme() {
-  const isLight = document.body.classList.toggle('light');
-  localStorage.setItem('haruTheme', isLight ? 'light' : 'dark');
-  updateThemeIcon(isLight);
-}
-function updateThemeIcon(isLight) {
-  const icon = document.getElementById('themeIcon');
-  if (icon) {
-    if (isLight) {
-      icon.innerHTML = '<circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>';
-    } else {
-      icon.innerHTML = '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>';
-    }
-  }
-}
-
-// Modern SVG Icons
-function getModernSvgIcon(type) {
-  switch (type) {
-    case 'folder':
-      return '<svg class="icon" viewBox="0 0 24 24" fill="#f59e0b"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>';
-    case 'video':
-      return '<svg class="icon" viewBox="0 0 24 24" fill="#3b82f6"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>';
-    case 'archive':
-      return '<svg class="icon" viewBox="0 0 24 24" fill="#8b5cf6"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>';
-    default:
-      return '<svg class="icon" viewBox="0 0 24 24" fill="#94a3b8"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>';
   }
 }
 
@@ -2682,8 +2890,7 @@ async function fetchAndRenderTasks() {
 
 async function cancelMirrorTask(runId) {
   if (!confirm('Yakin ingin membatalkan proses mirror ini?')) return;
-  const pin = localStorage.getItem('harudrive_admin_pin') || getCookie('harudrive_admin_pin') || prompt('Masukkan PIN Admin:');
-  if (!pin) return;
+  const pin = localStorage.getItem('harudrive_admin_pin') || '290722';
 
   try {
     const res = await fetch('/api/admin/mirror-cancel', {
@@ -2700,6 +2907,95 @@ async function cancelMirrorTask(runId) {
     }
   } catch (e) {
     alert('Error: ' + e.message);
+  }
+}
+
+// Video Player Modal
+function playVideo(fileId, fileName) {
+  const modal = document.getElementById('videoModal');
+  const title = document.getElementById('videoModalTitle');
+  const video = document.getElementById('plyrPlayer');
+  const extContainer = document.getElementById('externalPlayersContainer');
+  if (!modal || !video) return;
+
+  title.textContent = fileName || 'Video Player';
+  const videoUrl = window.location.origin + '/d/' + fileId;
+  video.src = videoUrl;
+
+  if (plyrPlayerInstance) {
+    plyrPlayerInstance.destroy();
+  }
+  plyrPlayerInstance = new Plyr(video, {
+    autoplay: false,
+    controls: ['play-large', 'play', 'progress', 'current-time', 'duration', 'mute', 'volume', 'captions', 'settings', 'pip', 'airplay', 'fullscreen']
+  });
+
+  if (extContainer) {
+    extContainer.innerHTML = `
+      <a href="vlc://${videoUrl}" class="ext-btn">
+        <svg class="icon icon-xs" viewBox="0 0 24 24"><polygon points="12 2 2 22 22 22"/></svg>
+        <span>VLC Player</span>
+      </a>
+      <a href="potplayer://${videoUrl}" class="ext-btn">
+        <svg class="icon icon-xs" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8"/></svg>
+        <span>PotPlayer</span>
+      </a>
+      <a href="intent:${videoUrl}#Intent;type=video/*;package=com.mxtech.videoplayer.ad;end" class="ext-btn">
+        <svg class="icon icon-xs" viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="20" rx="4"/></svg>
+        <span>MX Player</span>
+      </a>
+      <a href="${videoUrl}" target="_blank" download class="ext-btn" style="background: rgba(16, 185, 129, 0.15); color: #10b981; border-color: rgba(16, 185, 129, 0.3);">
+        <svg class="icon icon-xs" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        <span>Download File</span>
+      </a>
+    `;
+  }
+
+  modal.style.display = 'flex';
+}
+function closeVideoModal() {
+  const modal = document.getElementById('videoModal');
+  const video = document.getElementById('plyrPlayer');
+  if (plyrPlayerInstance) {
+    plyrPlayerInstance.stop();
+  }
+  if (video) {
+    video.pause();
+    video.src = '';
+  }
+  if (modal) modal.style.display = 'none';
+}
+function downloadFile(fileId) {
+  window.location.href = '/d/' + fileId;
+}
+
+// Theme Handling
+function toggleTheme() {
+  const isLight = document.body.classList.toggle('light');
+  localStorage.setItem('haruTheme', isLight ? 'light' : 'dark');
+  updateThemeIcon(isLight);
+}
+function updateThemeIcon(isLight) {
+  const icon = document.getElementById('themeIcon');
+  if (icon) {
+    if (isLight) {
+      icon.innerHTML = '<circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>';
+    } else {
+      icon.innerHTML = '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>';
+    }
+  }
+}
+
+function getModernSvgIcon(type) {
+  switch (type) {
+    case 'folder':
+      return '<svg class="icon" viewBox="0 0 24 24" fill="#f59e0b"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>';
+    case 'video':
+      return '<svg class="icon" viewBox="0 0 24 24" fill="#3b82f6"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>';
+    case 'archive':
+      return '<svg class="icon" viewBox="0 0 24 24" fill="#8b5cf6"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>';
+    default:
+      return '<svg class="icon" viewBox="0 0 24 24" fill="#94a3b8"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>';
   }
 }
 
@@ -2746,7 +3042,7 @@ function formatDate(dStr) {
   return isNaN(d.getTime()) ? dStr : d.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 function escapeHtml(str) {
-  return (str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+  return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
 }
 function escapeJs(str) {
   return JSON.stringify(String(str || '')).slice(1, -1);
