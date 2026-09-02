@@ -2749,7 +2749,7 @@ function escapeHtml(str) {
   return (str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
 }
 function escapeJs(str) {
-  return (str || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
+  return JSON.stringify(String(str || '')).slice(1, -1);
 }
 function debounce(fn, delay) {
   let timer = null;
