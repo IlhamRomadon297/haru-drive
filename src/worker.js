@@ -2441,12 +2441,35 @@ document.addEventListener('DOMContentLoaded', () => {
       searchClearBtn.addEventListener('click', () => { searchInput.value = ''; toggleClear(); searchInput.focus(); searchInput.dispatchEvent(new Event('input')); });
     }
   
-    document.addEventListener('keydown', (e) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault();
-        searchInput?.focus();
-      }
+  document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      searchInput?.focus();
+    }
+  });
+
+  // Table sorting for public & admin (Nama / Ukuran / Diperbarui)
+  let _sortState = { col: null, dir: 1 };
+  document.querySelectorAll('.table-header .gdi-sort-header').forEach(function(h){
+    h.addEventListener('click', function(){
+      const col = h.getAttribute('data-sort');
+      if (_sortState.col === col) _sortState.dir *= -1;
+      else { _sortState.col = col; _sortState.dir = 1; }
+      document.querySelectorAll('.table-header .gdi-sort-header').forEach(function(x){ x.classList.remove('asc','desc'); });
+      h.classList.add(_sortState.dir === 1 ? 'asc' : 'desc');
+      const list = document.getElementById('fileListContainer');
+      if (!list) return;
+      const rows = Array.from(list.children).filter(function(c){ return c.classList.contains('file-row'); });
+      rows.sort(function(a,b){
+        if (col === 'size') return _sortState.dir * ((parseFloat(a.getAttribute('data-bytes'))||0) - (parseFloat(b.getAttribute('data-bytes'))||0));
+        if (col === 'date') return _sortState.dir * (new Date(a.getAttribute('data-date')||0) - new Date(b.getAttribute('data-date')||0));
+        const an = (a.getAttribute('data-name')||'').toLowerCase();
+        const bn = (b.getAttribute('data-name')||'').toLowerCase();
+        return _sortState.dir * an.localeCompare(bn);
+      });
+      rows.forEach(function(r){ list.appendChild(r); });
     });
+  });
 
   window.addEventListener('popstate', handlePopState);
 });
@@ -2784,7 +2807,7 @@ function renderFileList() {
       ? ('copyFolderLink(' + JSON.stringify(file.id) + ', ' + JSON.stringify(file.path) + ')')
       : ('copyShortLink(' + JSON.stringify(file.id) + ', ' + JSON.stringify(file.path) + ')');
 
-    html += '<div class="file-row ' + (isDir ? 'is-folder' : '') + '">';
+    html += '<div class="file-row ' + (isDir ? 'is-folder' : '') + '" data-name="' + escapeHtml(file.name) + '" data-bytes="' + (file.size || 0) + '" data-date="' + escapeHtml(file.modifiedTime || '') + '">';
     html += '  <div class="col-cb"><input type="checkbox" ' + (isChecked ? 'checked' : '') + ' onchange="toggleItemSelect(' + JSON.stringify(file.path).replace(/"/g, '&quot;') + ', this.checked)"></div>';
     html += '  <div class="file-name-cell" onclick="' + clickAction.replace(/"/g, '&quot;') + '" title="' + (isDir ? 'Buka Folder' : (isVideo ? 'Klik untuk Putar Video' : 'Download File')) + '">';
     html += '    <div class="file-icon-box ' + iconType + '">' + getModernSvgIcon(iconType) + '</div>';
@@ -4172,10 +4195,11 @@ function publicIndexUI() {
 
     <!-- File Table -->
     <div class="file-table-wrapper glass">
-      <div class="table-header">
+      <div class="table-header" id="list-header">
         <div class="col-cb"><input type="checkbox" id="selectAllCheckbox" onchange="toggleSelectAll(this.checked)"></div>
-        <div class="col-name">Nama File / Folder</div>
-        <div class="col-size">Ukuran</div>
+        <div class="col-name gdi-sort-header" data-sort="name" style="cursor:pointer;">Nama File / Folder</div>
+        <div class="col-size gdi-sort-header" data-sort="size" style="cursor:pointer; text-align:right;">Ukuran</div>
+        <div class="col-date gdi-sort-header" data-sort="date" style="cursor:pointer; text-align:right;">Diperbarui</div>
         <div class="col-actions">Aksi</div>
       </div>
       <div id="fileListContainer">
@@ -4342,11 +4366,11 @@ function adminConsoleUI() {
 
     <!-- Table -->
     <div class="file-table-wrapper glass">
-      <div class="table-header">
+      <div class="table-header" id="list-header">
         <div class="col-cb"><input type="checkbox" id="selectAllCheckbox" onchange="toggleSelectAll(this.checked)"></div>
-        <div class="col-name">Nama File / Folder</div>
-        <div class="col-size">Ukuran</div>
-        <div class="col-date">Diperbarui</div>
+        <div class="col-name gdi-sort-header" data-sort="name" style="cursor:pointer;">Nama File / Folder</div>
+        <div class="col-size gdi-sort-header" data-sort="size" style="cursor:pointer; text-align:right;">Ukuran</div>
+        <div class="col-date gdi-sort-header" data-sort="date" style="cursor:pointer; text-align:right;">Diperbarui</div>
         <div class="col-actions">Kelola</div>
       </div>
       <div id="fileListContainer">
