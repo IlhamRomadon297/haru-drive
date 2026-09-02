@@ -12,27 +12,49 @@ export default {
     const cookie = request.headers.get('Cookie') || '';
     const isLoggedIn = cookie.includes('harudrive_auth=true');
 
-    if (url.pathname === '/login' && request.method === 'POST') {
-      const formData = await request.formData();
-      const password = formData.get('password');
-      if (password === APP_PASSWORD) {
-        return new Response('Logged in', {
-          status: 302,
-          headers: {
-            'Location': '/',
-            'Set-Cookie': 'harudrive_auth=true; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=2592000'
-          }
-        });
-      } else {
-        return new Response(htmlPage(loginUI('Password salah. Silakan coba lagi.'), env, 'login'), {
-          headers: { 'Content-Type': 'text/html;charset=UTF-8' }
-        });
-      }
+    // Already authenticated -> go straight to the file manager.
+    if (url.pathname === '/login' && isLoggedIn) {
+      return new Response(null, { status: 302, headers: { 'Location': '/' } });
     }
 
-        // Public read-only routes (No login required for guests)
+    // ---- LOGIN PAGE ----
+    if (url.pathname === '/login') {
+      if (request.method === 'POST') {
+        const formData = await request.formData();
+        const password = formData.get('password');
+        if (password === APP_PASSWORD) {
+          return new Response('Logged in', {
+            status: 302,
+            headers: {
+              'Location': '/',
+              'Set-Cookie': 'harudrive_auth=true; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=2592000'
+            }
+          });
+        } else {
+          return new Response(htmlPage(loginUI('Password salah. Silakan coba lagi.'), env, 'login'), {
+            headers: { 'Content-Type': 'text/html;charset=UTF-8' }
+          });
+        }
+      }
+      return new Response(htmlPage(loginUI(), env, 'login'), {
+        headers: { 'Content-Type': 'text/html;charset=UTF-8' }
+      });
+    }
+
+    // ---- LOGOUT ----
+    if (url.pathname === '/logout') {
+      return new Response('Logged out', {
+        status: 302,
+        headers: {
+          'Location': '/',
+          'Set-Cookie': 'harudrive_auth=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT'
+        }
+      });
+    }
+
+    // ---- PUBLIC / GUEST ROUTES (no login): shared-folder links + read-only APIs ----
     const isPublicGet = request.method === 'GET' && (
-      url.pathname === '/' ||
+      (url.pathname === '/' && url.searchParams.has('p')) ||
       url.pathname === '/api/list' ||
       url.pathname === '/api/folders' ||
       url.pathname === '/api/search' ||
@@ -45,32 +67,22 @@ export default {
       url.pathname.endsWith('.png')
     );
 
-    // Only Admin routes and write APIs require authentication
-    const requiresAdmin = !isPublicGet && (
-      url.pathname.startsWith('/admin') ||
-      url.pathname.startsWith('/api/admin/') ||
-      (url.pathname.startsWith('/api/') && request.method !== 'GET')
-    );
-
-    if (requiresAdmin && !isLoggedIn) {
-      if (url.pathname.startsWith('/api/')) {
-        return new Response(JSON.stringify({ error: 'Unauthorized. Admin login required.' }), {
-          status: 401,
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
-      return new Response(loginPageHTML(redirectParam), {
-        headers: { 'Content-Type': 'text/html;charset=UTF-8' }
+    // Page routes (GET, not public, not API) require an authenticated session.
+    // If not logged in -> bounce to the login page.
+    const isPageRoute = request.method === 'GET' && !isPublicGet && !url.pathname.startsWith('/api/');
+    if (isPageRoute && !isLoggedIn) {
+      return new Response(null, {
+        status: 302,
+        headers: { 'Location': '/login' }
       });
     }
 
-    if (url.pathname === '/logout') {
-      return new Response('Logged out', {
-        status: 302,
-        headers: {
-          'Location': '/',
-          'Set-Cookie': 'harudrive_auth=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT'
-        }
+    // Admin / write APIs require login -> 401 JSON when not authenticated.
+    const isProtectedApi = url.pathname.startsWith('/api/') && !isPublicGet;
+    if (isProtectedApi && !isLoggedIn) {
+      return new Response(JSON.stringify({ error: 'Unauthorized. Admin login required.' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' }
       });
     }
 
@@ -818,8 +830,8 @@ export default {
     }
 
     // Page Routes
-    if (url.pathname === '/admin') {
-      return new Response(htmlPage(adminConsoleUI(), env, 'admin'), {
+    if (url.pathname === '/admin' || (url.pathname === '/' && !url.searchParams.has('p'))) {
+      return new Response(htmlPage(adminConsoleUI(), env, 'admin', isLoggedIn), {
         headers: { 'Content-Type': 'text/html;charset=UTF-8' }
       });
     }
@@ -878,7 +890,7 @@ function getMimeType(filename) {
   return mimeTypes[ext] || 'application/octet-stream';
 }
 
-function htmlPage(content, env, pageMode = 'public') {
+function htmlPage(content, env, pageMode = 'public', authed = false) {
   return `<!DOCTYPE html>
 <html lang="id">
 <head>
@@ -2049,7 +2061,7 @@ function htmlPage(content, env, pageMode = 'public') {
 
 </style>
 </head>
-<body data-mode="${pageMode}">
+<body data-mode="${pageMode}" data-authed="${authed}">
   ${content}
   <script>
 let currentPath = '';
@@ -2067,6 +2079,11 @@ document.addEventListener('DOMContentLoaded', () => {
   if (localStorage.getItem('haruTheme') === 'light') {
     document.body.classList.add('light');
     updateThemeIcon(true);
+  }
+
+  // Login page: skip file-console initialization.
+  if (document.body.getAttribute('data-mode') === 'login') {
+    return;
   }
 
   if (isPageAdmin) {
@@ -2114,9 +2131,10 @@ document.addEventListener('DOMContentLoaded', () => {
 function initAdminConsole() {
   const gate = document.getElementById('adminLoginGate');
   const main = document.getElementById('adminMainContent');
+  const serverAuthed = document.body.getAttribute('data-authed') === 'true';
   const savedPin = localStorage.getItem('harudrive_admin_pin') || getCookie('harudrive_admin_pin');
 
-  if (savedPin === '290722') {
+  if (serverAuthed || savedPin === '290722') {
     if (gate) gate.style.display = 'none';
     if (main) main.style.display = 'block';
     const pathName = window.location.pathname;
@@ -2155,7 +2173,7 @@ function unlockAdminConsole() {
 function lockAdminSession() {
   localStorage.removeItem('harudrive_admin_pin');
   deleteCookie('harudrive_admin_pin');
-  window.location.reload();
+  window.location.href = '/logout';
 }
 
 // Navigation
@@ -2335,7 +2353,7 @@ function updateBreadcrumbs() {
   const nav = document.getElementById('breadcrumbNav');
   if (!nav) return;
   
-  const homeClick = isPageAdmin ? "navigateToAdmin('')" : "navigateTo('', '')";
+  const homeClick = isPageAdmin ? "navigateToAdmin('')" : "navigateTo('/', '')";
   let html = '<a href="/" class="crumb" onclick="' + homeClick + '; return false;"><svg class="icon icon-xs" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg><span>Home</span></a>';
   
   if (currentPath) {
