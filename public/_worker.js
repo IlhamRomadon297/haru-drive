@@ -2075,22 +2075,6 @@ function htmlPage(content, env, pageMode = 'public') {
   max-width: 1320px;
   margin: 24px auto 40px;
   padding: 0 18px;
-  max-height: 88vh;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-.guest-main-card {
-  display: flex;
-  flex-direction: column;
-  max-height: 100%;
-  overflow: hidden;
-}
-.guest-table-box {
-  flex: 1;
-  overflow-y: auto;
-  overflow-x: hidden;
-  scrollbar-gutter: stable;
 }
 
 .guest-main-card {
@@ -2157,7 +2141,7 @@ function htmlPage(content, env, pageMode = 'public') {
 
 .guest-table-header {
   display: grid;
-  grid-template-columns: 40px 1fr 90px 70px;
+  grid-template-columns: 40px 1fr 90px 80px;
   align-items: center;
   padding: 11px 14px;
   background: rgba(255, 255, 255, 0.04);
@@ -2168,9 +2152,15 @@ function htmlPage(content, env, pageMode = 'public') {
   color: var(--text-muted);
 }
 
+.guest-file-list {
+  max-height: 56vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+}
 .guest-file-list .file-row {
   display: grid;
-  grid-template-columns: 40px 1fr 100px 80px;
+  grid-template-columns: 40px 1fr 90px 80px;
   align-items: center;
   padding: 12px 14px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
