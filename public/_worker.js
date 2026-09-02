@@ -2894,8 +2894,8 @@ async function syncFromHF() {
     });
     const data = await res.json();
     if (res.ok && data.success) {
-      const suffix = (data.truncated ? '\n(Dibatasi ' + data.items + ' item — jalankan lagi untuk melanjutkan)' : '');
-      alert('✅ Sinkronisasi index berhasil: ' + data.items + ' file' + suffix);
+      const suffix = (data.truncated ? (' [dibatasi ' + data.items + ' item, jalankan lagi untuk melanjutkan]') : '');
+      alert('Sinkronisasi index berhasil: ' + data.items + ' file' + suffix);
       loadFolder(currentPath, currentFolderId);
       fetchFolderTree();
     } else {
