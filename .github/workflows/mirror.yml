@@ -41,7 +41,7 @@ jobs:
       - name: ⚡ Execute Mirror Sync
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          HF_REPO_ID: ${{ github.event.inputs.hf_repo || github.event.client_payload.hf_repo || secrets.HF_REPO_ID || 'harumidesu/harudrive-data' }}
+          HF_REPO_ID: ${{ github.event.inputs.hf_repo || github.event.client_payload.hf_repo || secrets.HF_REPO_ID || '' }}
           GDRIVE_URL: ${{ github.event.inputs.gdrive_url || github.event.client_payload.gdrive_url }}
           TARGET_PATH: ${{ github.event.inputs.target_path || github.event.client_payload.target_path || '' }}
           GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}

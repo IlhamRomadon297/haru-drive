@@ -2,7 +2,7 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
-    const HF_REPO_ID = env.HF_REPO_ID || 'harumidesu/harudrive-data';
+    const HF_REPO_ID = env.HF_REPO_ID || 'username/harudrive-data';
     const HF_TOKEN = env.HF_TOKEN || '';
     const APP_PASSWORD = env.APP_PASSWORD || 'HaruDrive_Desu';
     const ADMIN_PIN = env.ADMIN_PIN || '290722';

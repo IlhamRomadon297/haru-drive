@@ -105,7 +105,7 @@ def main():
     parser = argparse.ArgumentParser(description="HaruDrive High-Speed Cloud Mirror")
     parser.add_argument("--gdrive_url", default=os.getenv("GDRIVE_URL", ""))
     parser.add_argument("--target_path", default=os.getenv("TARGET_PATH", ""))
-    parser.add_argument("--hf_repo", default=os.getenv("HF_REPO_ID", "harumidesu/harudrive-data"))
+    parser.add_argument("--hf_repo", default=os.getenv("HF_REPO_ID", ""))
     parser.add_argument("--hf_token", default=os.getenv("HF_TOKEN", ""))
     parser.add_argument("--repo_type", default=os.getenv("REPO_TYPE", "dataset"))
     parser.add_argument("--client_id", default=os.getenv("GDRIVE_CLIENT_ID", ""))
