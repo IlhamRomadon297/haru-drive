@@ -10,7 +10,10 @@ export default {
     const GITHUB_REPO = env.GITHUB_REPO || 'IlhamRomadon297/haru-drive';
 
     // Best-effort background sync: keeps the D1 search index fresh automatically.
-    ctx.waitUntil(maybeAutoSync(env));
+    // Only triggered on page loads (not /api/*) to avoid D1 write contention with file listing.
+    if (!url.pathname.startsWith('/api/')) {
+      ctx.waitUntil(maybeAutoSync(env));
+    }
 
     const cookie = request.headers.get('Cookie') || '';
     const isLoggedIn = cookie.includes('harudrive_auth=true');
@@ -918,12 +921,20 @@ async function recordLastSync(env) {
 async function maybeAutoSync(env) {
   try {
     if (!env.harudrive_db) return;
+    const now = Date.now();
     await env.harudrive_db.prepare('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)').run();
-    const row = await env.harudrive_db.prepare("SELECT value FROM meta WHERE key = 'last_sync'").first();
-    const last = row ? parseInt(row.value || '0', 10) : 0;
-    if (Date.now() - last < 60 * 60 * 1000) return;
-    await syncIndex(env);
-    await recordLastSync(env);
+    // Serialize: only one background sync at a time (prevents D1 write contention).
+    const lockRow = await env.harudrive_db.prepare("SELECT value FROM meta WHERE key = 'sync_lock'").first();
+    if (lockRow && (now - parseInt(lockRow.value || '0', 10) < 2 * 60 * 1000)) return;
+    const lastRow = await env.harudrive_db.prepare("SELECT value FROM meta WHERE key = 'last_sync'").first();
+    if (lastRow && (now - parseInt(lastRow.value || '0', 10) < 55 * 60 * 1000)) return;
+    await env.harudrive_db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('sync_lock', ?)").bind(String(now)).run();
+    try {
+      await syncIndex(env);
+      await env.harudrive_db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('last_sync', ?)").bind(String(Date.now())).run();
+    } finally {
+      await env.harudrive_db.prepare("DELETE FROM meta WHERE key = 'sync_lock'").run();
+    }
   } catch (e) {}
 }
 
@@ -3334,6 +3345,10 @@ function publicIndexUI() {
         <button class="nav-btn" id="darkToggle" title="Ganti Tema">
           <svg class="icon icon-sm" id="themeIcon" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
         </button>
+        <a href="/logout" class="nav-btn" title="Keluar" style="color: #ef4444;">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+          <span class="btn-text-label">Keluar</span>
+        </a>
       </div>
     </div>
   </header>
@@ -3447,6 +3462,11 @@ function adminConsoleUI() {
           <svg class="icon icon-sm" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
           <span class="btn-text-label">Kunci Admin</span>
         </button>
+
+        <a href="/logout" class="nav-btn" title="Keluar" style="color: #ef4444;">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+          <span class="btn-text-label">Keluar</span>
+        </a>
 
         <button class="nav-btn" id="darkToggle" title="Ganti Tema">
           <svg class="icon icon-sm" id="themeIcon" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
