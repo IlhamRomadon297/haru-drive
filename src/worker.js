@@ -830,12 +830,13 @@ export default {
     }
 
     // Page Routes
-    if (url.pathname === '/admin' || (url.pathname === '/' && !url.searchParams.has('p'))) {
-      return new Response(htmlPage(adminConsoleUI(), env, 'admin', isLoggedIn), {
+    if (url.pathname === '/admin') {
+      return new Response(htmlPage(adminConsoleUI(), env, 'admin'), {
         headers: { 'Content-Type': 'text/html;charset=UTF-8' }
       });
     }
 
+    // Public index (shown after the APP_PASSWORD login) + shared-folder guest views
     return new Response(htmlPage(publicUI(), env, 'public'), {
       headers: { 'Content-Type': 'text/html;charset=UTF-8' }
     });
@@ -890,7 +891,7 @@ function getMimeType(filename) {
   return mimeTypes[ext] || 'application/octet-stream';
 }
 
-function htmlPage(content, env, pageMode = 'public', authed = false) {
+function htmlPage(content, env, pageMode = 'public') {
   return `<!DOCTYPE html>
 <html lang="id">
 <head>
@@ -2061,7 +2062,7 @@ function htmlPage(content, env, pageMode = 'public', authed = false) {
 
 </style>
 </head>
-<body data-mode="${pageMode}" data-authed="${authed}">
+<body data-mode="${pageMode}">
   ${content}
   <script>
 let currentPath = '';
@@ -2131,10 +2132,9 @@ document.addEventListener('DOMContentLoaded', () => {
 function initAdminConsole() {
   const gate = document.getElementById('adminLoginGate');
   const main = document.getElementById('adminMainContent');
-  const serverAuthed = document.body.getAttribute('data-authed') === 'true';
   const savedPin = localStorage.getItem('harudrive_admin_pin') || getCookie('harudrive_admin_pin');
 
-  if (serverAuthed || savedPin === '290722') {
+  if (savedPin === '290722') {
     if (gate) gate.style.display = 'none';
     if (main) main.style.display = 'block';
     const pathName = window.location.pathname;
@@ -2173,7 +2173,7 @@ function unlockAdminConsole() {
 function lockAdminSession() {
   localStorage.removeItem('harudrive_admin_pin');
   deleteCookie('harudrive_admin_pin');
-  window.location.href = '/logout';
+  window.location.reload();
 }
 
 // Navigation
