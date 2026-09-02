@@ -1325,6 +1325,13 @@ function htmlPage(content, env, pageMode = 'public') {
       gap: 8px;
       flex-wrap: wrap;
     }
+
+    .search-box {
+      position: relative;
+      flex: 1 1 260px;
+      min-width: 220px;
+      max-width: 480px;
+    }
     
     .btn-action-tool {
       display: inline-flex;
@@ -1768,6 +1775,11 @@ function htmlPage(content, env, pageMode = 'public') {
         gap: 8px;
         width: 100%;
       }
+      .search-box {
+        grid-column: 1 / -1;
+        min-width: 0;
+        max-width: 100%;
+      }
       .btn-action-tool {
         padding: 8px 10px;
         font-size: 0.78rem;
@@ -1786,7 +1798,9 @@ function htmlPage(content, env, pageMode = 'public') {
       body[data-mode="admin"] .col-actions { width: 105px; }
       body[data-mode="admin"] .file-actions-cell { width: 105px; gap: 3px; }
 
-      .btn-act { width: 28px; height: 28px; }
+      .btn-act { width: 24px; height: 24px; }
+      body[data-mode="admin"] .col-actions { width: 100px; }
+      body[data-mode="admin"] .file-actions-cell { width: 100px; gap: 2px; }
       .file-title { font-size: 0.84rem; }
 
       /* Mobile Bulk Toolbar - Ultra Compact Fitting */
@@ -3362,7 +3376,7 @@ function publicIndexUI() {
         </a>
       </div>
       <div class="toolbar-actions">
-        <div style="position: relative; flex: 1 1 260px; min-width: 260px; max-width: 480px;">
+        <div class="search-box">
           <svg class="icon icon-xs" viewBox="0 0 24 24" style="position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--text-dim); pointer-events: none;"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
           <input type="text" id="searchInput" class="form-input-pro" placeholder="Cari file global (Ctrl+K)" style="padding-left: 36px;">
         </div>
@@ -3503,7 +3517,7 @@ function adminConsoleUI() {
       </div>
 
       <div class="toolbar-actions">
-        <div style="position: relative; flex: 1 1 260px; min-width: 260px; max-width: 480px;">
+        <div class="search-box">
           <svg class="icon icon-xs" viewBox="0 0 24 24" style="position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--text-dim); pointer-events: none;"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
           <input type="text" id="searchInput" class="form-input-pro" placeholder="Cari file global (Ctrl+K)" style="padding-left: 36px;">
         </div>
