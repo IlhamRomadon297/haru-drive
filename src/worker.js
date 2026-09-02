@@ -477,7 +477,7 @@ worker_code = r'''export default {
       }
     }
 
-    // API: Rename
+    // API: Rename (Atomic NDJSON Protocol)
     if (url.pathname === '/api/admin/rename' && request.method === 'POST') {
       try {
         const body = await request.json();
@@ -496,40 +496,53 @@ worker_code = r'''export default {
         });
         const treeItems = treeRes.ok ? await treeRes.json() : [];
 
-        const operations = [];
+        const lines = [
+          JSON.stringify({ key: 'header', value: { summary: `Rename ${oldPath} to ${newPath} via HaruDrive`, description: '' } })
+        ];
+
+        let matched = 0;
         let isDirectory = false;
 
         treeItems.forEach(item => {
           if (item.type === 'file') {
             if (item.path === oldPath) {
-              operations.push({ key: 'deleted', value: { path: oldPath } });
-              operations.push({ key: 'copied', value: { src_path: oldPath, path: newPath } });
+              matched++;
+              lines.push(JSON.stringify({ key: 'deletedFile', value: { path: oldPath } }));
+              if (item.lfs && item.lfs.oid) {
+                lines.push(JSON.stringify({ key: 'lfsFile', value: { path: newPath, algo: 'sha256', oid: item.lfs.oid, size: item.lfs.size || item.size } }));
+              } else {
+                lines.push(JSON.stringify({ key: 'file', value: { path: newPath, content: '', encoding: 'utf-8' } }));
+              }
             } else if (item.path.startsWith(oldPath + '/')) {
+              matched++;
               isDirectory = true;
               const subPath = item.path.substring(oldPath.length + 1);
               const targetItemPath = `${newPath}/${subPath}`;
-              operations.push({ key: 'deleted', value: { path: item.path } });
-              operations.push({ key: 'copied', value: { src_path: item.path, path: targetItemPath } });
+              lines.push(JSON.stringify({ key: 'deletedFile', value: { path: item.path } }));
+              if (item.lfs && item.lfs.oid) {
+                lines.push(JSON.stringify({ key: 'lfsFile', value: { path: targetItemPath, algo: 'sha256', oid: item.lfs.oid, size: item.lfs.size || item.size } }));
+              } else {
+                lines.push(JSON.stringify({ key: 'file', value: { path: targetItemPath, content: '', encoding: 'utf-8' } }));
+              }
             }
           }
         });
 
-        if (operations.length === 0) {
-          operations.push({ key: 'deleted', value: { path: oldPath } });
-          operations.push({ key: 'copied', value: { src_path: oldPath, path: newPath } });
+        if (matched === 0) {
+          lines.push(JSON.stringify({ key: 'deletedFolder', value: { path: oldPath } }));
+          lines.push(JSON.stringify({ key: 'file', value: { path: `${newPath}/.gitkeep`, content: '', encoding: 'utf-8' } }));
         }
 
         const commitUrl = `https://huggingface.co/api/datasets/${HF_REPO_ID}/commit/main`;
+        const ndjsonBody = lines.join(String.fromCharCode(10)) + String.fromCharCode(10);
+
         const hfRes = await fetch(commitUrl, {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${HF_TOKEN}`,
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/x-ndjson'
           },
-          body: JSON.stringify({
-            summary: `Rename ${oldPath} to ${newPath} via HaruDrive`,
-            operations: operations
-          })
+          body: ndjsonBody
         });
 
         if (!hfRes.ok) {
@@ -540,11 +553,14 @@ worker_code = r'''export default {
         if (env.harudrive_db) {
           const newName = newPath.split('/').pop();
           const newShortId = await generateShortId(newPath);
-          await env.harudrive_db.prepare('DELETE FROM shortlinks WHERE file_path = ? OR file_path LIKE ?')
-            .bind(oldPath, `${oldPath}/%`).run();
-          await env.harudrive_db.prepare(
-            'INSERT OR REPLACE INTO shortlinks (short_id, file_path, name, type, size) VALUES (?, ?, ?, ?, ?)'
-          ).bind(newShortId, newPath, newName, isDirectory ? 'folder' : 'file', 0).run();
+          const oldPrefix = oldPath + '/';
+          try {
+            await env.harudrive_db.prepare('DELETE FROM shortlinks WHERE file_path = ? OR substr(file_path, 1, ?) = ?')
+              .bind(oldPath, oldPrefix.length, oldPrefix).run();
+            await env.harudrive_db.prepare(
+              'INSERT OR REPLACE INTO shortlinks (short_id, file_path, name, type, size) VALUES (?, ?, ?, ?, ?)'
+            ).bind(newShortId, newPath, newName, isDirectory ? 'folder' : 'file', 0).run();
+          } catch (e) {}
         }
 
         return new Response(JSON.stringify({ success: true, oldPath, newPath }), {
@@ -555,7 +571,7 @@ worker_code = r'''export default {
       }
     }
 
-    // API: Move
+    // API: Move (Atomic NDJSON Protocol)
     if (url.pathname === '/api/admin/move' && request.method === 'POST') {
       try {
         const body = await request.json();
@@ -574,7 +590,11 @@ worker_code = r'''export default {
         });
         const treeItems = treeRes.ok ? await treeRes.json() : [];
 
-        const operations = [];
+        const lines = [
+          JSON.stringify({ key: 'header', value: { summary: `Move ${paths.length} item(s) to /${targetFolder} via HaruDrive`, description: '' } })
+        ];
+
+        let opsCount = 0;
         for (const p of paths) {
           const cleanP = p.replace(/^\/+|\/+$/g, '');
           const filename = cleanP.split('/').pop();
@@ -586,15 +606,25 @@ worker_code = r'''export default {
                 matchedFiles++;
                 const newPath = targetFolder ? `${targetFolder}/${filename}` : filename;
                 if (cleanP !== newPath) {
-                  operations.push({ key: 'deleted', value: { path: cleanP } });
-                  operations.push({ key: 'copied', value: { src_path: cleanP, path: newPath } });
+                  opsCount++;
+                  lines.push(JSON.stringify({ key: 'deletedFile', value: { path: cleanP } }));
+                  if (item.lfs && item.lfs.oid) {
+                    lines.push(JSON.stringify({ key: 'lfsFile', value: { path: newPath, algo: 'sha256', oid: item.lfs.oid, size: item.lfs.size || item.size } }));
+                  } else {
+                    lines.push(JSON.stringify({ key: 'file', value: { path: newPath, content: '', encoding: 'utf-8' } }));
+                  }
                 }
               } else if (item.path.startsWith(cleanP + '/')) {
                 matchedFiles++;
                 const relPath = item.path.substring(cleanP.length + 1);
                 const newPath = targetFolder ? `${targetFolder}/${filename}/${relPath}` : `${filename}/${relPath}`;
-                operations.push({ key: 'deleted', value: { path: item.path } });
-                operations.push({ key: 'copied', value: { src_path: item.path, path: newPath } });
+                opsCount++;
+                lines.push(JSON.stringify({ key: 'deletedFile', value: { path: item.path } }));
+                if (item.lfs && item.lfs.oid) {
+                  lines.push(JSON.stringify({ key: 'lfsFile', value: { path: newPath, algo: 'sha256', oid: item.lfs.oid, size: item.lfs.size || item.size } }));
+                } else {
+                  lines.push(JSON.stringify({ key: 'file', value: { path: newPath, content: '', encoding: 'utf-8' } }));
+                }
               }
             }
           });
@@ -602,29 +632,29 @@ worker_code = r'''export default {
           if (matchedFiles === 0) {
             const newPath = targetFolder ? `${targetFolder}/${filename}` : filename;
             if (cleanP !== newPath) {
-              operations.push({ key: 'deleted', value: { path: cleanP } });
-              operations.push({ key: 'copied', value: { src_path: cleanP, path: newPath } });
+              opsCount++;
+              lines.push(JSON.stringify({ key: 'deletedFolder', value: { path: cleanP } }));
+              lines.push(JSON.stringify({ key: 'file', value: { path: `${newPath}/.gitkeep`, content: '', encoding: 'utf-8' } }));
             }
           }
         }
 
-        if (operations.length > 0) {
+        if (opsCount > 0) {
           const commitUrl = `https://huggingface.co/api/datasets/${HF_REPO_ID}/commit/main`;
+          const ndjsonBody = lines.join(String.fromCharCode(10)) + String.fromCharCode(10);
+
           const hfRes = await fetch(commitUrl, {
             method: 'POST',
             headers: {
               'Authorization': `Bearer ${HF_TOKEN}`,
-              'Content-Type': 'application/json'
+              'Content-Type': 'application/x-ndjson'
             },
-            body: JSON.stringify({
-              summary: `Move ${paths.length} item(s) to /${targetFolder} via HaruDrive`,
-              operations: operations
-            })
+            body: ndjsonBody
           });
 
           if (!hfRes.ok) {
             const errText = await hfRes.text();
-            return new Response(JSON.stringify({ error: `Gagal memindahkan: ${errText}` }), { status: hfRes.status });
+            return new Response(JSON.stringify({ error: `Gagal memindahkan di HF: ${errText}` }), { status: hfRes.status });
           }
 
           if (env.harudrive_db) {
@@ -633,11 +663,14 @@ worker_code = r'''export default {
               const filename = cleanP.split('/').pop();
               const newPath = targetFolder ? `${targetFolder}/${filename}` : filename;
               const newShortId = await generateShortId(newPath);
-              await env.harudrive_db.prepare('DELETE FROM shortlinks WHERE file_path = ? OR file_path LIKE ?')
-                .bind(cleanP, `${cleanP}/%`).run();
-              await env.harudrive_db.prepare(
-                'INSERT OR REPLACE INTO shortlinks (short_id, file_path, name, type, size) VALUES (?, ?, ?, ?, ?)'
-              ).bind(newShortId, newPath, filename, 'file', 0).run();
+              const cleanPrefix = cleanP + '/';
+              try {
+                await env.harudrive_db.prepare('DELETE FROM shortlinks WHERE file_path = ? OR substr(file_path, 1, ?) = ?')
+                  .bind(cleanP, cleanPrefix.length, cleanPrefix).run();
+                await env.harudrive_db.prepare(
+                  'INSERT OR REPLACE INTO shortlinks (short_id, file_path, name, type, size) VALUES (?, ?, ?, ?, ?)'
+                ).bind(newShortId, newPath, filename, 'file', 0).run();
+              } catch (e) {}
             }
           }
         }
