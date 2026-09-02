@@ -2389,6 +2389,7 @@ let currentPath = '';
 let currentFolderId = '';
 let allFiles = [];
 let currentFolderStats = null;
+let _sortState = { col: null, dir: 1 };
 let availableFolders = [''];
 let activeFilter = 'all';
 const selectedFiles = new Set();
@@ -2454,7 +2455,6 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // Table sorting for public & admin (Nama / Ukuran / Diperbarui)
-  let _sortState = { col: null, dir: 1 };
   document.querySelectorAll('.table-header .gdi-sort-header').forEach(function(h){
     h.addEventListener('click', function(){
       const col = h.getAttribute('data-sort');
@@ -2592,6 +2592,8 @@ async function loadFolder(path = '', id = '') {
   currentFolderId = id;
   selectedFiles.clear();
   updateBulkToolbar();
+  _sortState = { col: null, dir: 1 };
+  document.querySelectorAll('.table-header .gdi-sort-header').forEach(function(x){ x.classList.remove('asc','desc'); });
 
   const container = document.getElementById('fileListContainer');
   if (container) {
