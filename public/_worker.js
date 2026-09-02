@@ -3,10 +3,10 @@ export default {
     const url = new URL(request.url);
 
     const HF_REPO_ID = env.HF_REPO_ID || 'harumidesu/harudrive-data';
-    const HF_TOKEN = env.HF_TOKEN || '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';
+    const HF_TOKEN = env.HF_TOKEN || '';
     const APP_PASSWORD = env.APP_PASSWORD || 'HaruDrive_Desu';
     const ADMIN_PIN = env.ADMIN_PIN || '290722';
-    const GITHUB_PAT = env.GITHUB_PAT || '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';
+    const GITHUB_PAT = env.GITHUB_PAT || '';
     const GITHUB_REPO = env.GITHUB_REPO || 'IlhamRomadon297/haru-drive';
 
     const cookie = request.headers.get('Cookie') || '';
@@ -2037,6 +2037,68 @@ async function loadFolder(path = '', id = '') {
 }
 
 // Render File Table
+
+function copyFolderLink(id, path) {
+  const url = id ? `${window.location.origin}/folder/${id}` : `${window.location.origin}/?path=${encodeURIComponent(path)}`;
+  navigator.clipboard.writeText(url).then(() => {
+    showToast('Link folder berhasil disalin ke clipboard! 📋', 'success');
+  }).catch(() => {
+    showToast('Gagal menyalin link.', 'error');
+  });
+}
+
+function copyShortLink(id, path) {
+  const url = id ? `${window.location.origin}/d/${id}` : `${window.location.origin}/file/${encodeURIComponent(path)}`;
+  navigator.clipboard.writeText(url).then(() => {
+    showToast('Link file berhasil disalin ke clipboard! 📋', 'success');
+  }).catch(() => {
+    showToast('Gagal menyalin link.', 'error');
+  });
+}
+
+
+function handleBulkCopyLinks() {
+  if (selectedFiles.size === 0) {
+    showToast('Pilih setidaknya 1 item terlebih dahulu.', 'warning');
+    return;
+  }
+  const links = [];
+  allFiles.forEach(f => {
+    if (selectedFiles.has(f.path)) {
+      const isDir = f.mimeType === 'application/vnd.google-apps.folder';
+      if (isDir) {
+        links.push(f.id ? `${window.location.origin}/folder/${f.id}` : `${window.location.origin}/?path=${encodeURIComponent(f.path)}`);
+      } else {
+        links.push(f.id ? `${window.location.origin}/d/${f.id}` : `${window.location.origin}/file/${encodeURIComponent(f.path)}`);
+      }
+    }
+  });
+  navigator.clipboard.writeText(links.join('\n')).then(() => {
+    showToast(`${links.length} Link berhasil disalin ke clipboard! 📋`, 'success');
+  }).catch(() => {
+    showToast('Gagal menyalin link.', 'error');
+  });
+}
+
+function handleBulkDownload() {
+  const filesToDownload = allFiles.filter(f => selectedFiles.has(f.path) && f.mimeType !== 'application/vnd.google-apps.folder');
+  if (filesToDownload.length === 0) {
+    showToast('Pilih setidaknya 1 file untuk di-download.', 'warning');
+    return;
+  }
+  filesToDownload.forEach((f, idx) => {
+    setTimeout(() => {
+      const a = document.createElement('a');
+      a.href = `/d/${f.id}`;
+      a.download = f.name;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }, idx * 500);
+  });
+  showToast(`Memulai unduhan untuk ${filesToDownload.length} file... ⬇️`, 'success');
+}
+
 function renderFileList() {
   const container = document.getElementById('fileListContainer');
   if (!container) return;
