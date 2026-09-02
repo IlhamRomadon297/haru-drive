@@ -1081,6 +1081,7 @@ function htmlPage(content, env, pageMode = 'public') {
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
   
   <link rel="stylesheet" href="https://cdn.plyr.io/3.7.8/plyr.css" />
+  <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.plyr.io/3.7.8/plyr.polyfilled.js"></script>
 
   <style>
@@ -3980,11 +3981,11 @@ async function startBinaryMediaInfoScan(force) {
 }
 async function openMediaInfoModal(fileId, filePath, fileName) {
   let file = null;
-  if (window.allFiles) { file = window.allFiles.find(function(f){ return f.id === fileId || f.path === filePath; }); }
+  const _allFiles = (typeof allFiles !== 'undefined' ? allFiles : (typeof window !== 'undefined' && window.allFiles ? window.allFiles : []));
+  if (_allFiles && _allFiles.length) { file = _allFiles.find(function(f){ return f.id === fileId || f.path === filePath; }); }
   if (!file) { const fp = filePath || fileId; file = { id: fileId || fp, path: fp, name: fileName || (fp ? fp.split('/').pop() : 'video'), size: 0, mimeType: '' }; }
-  // Try to enrich size/mime from list
-  if (file && !file.size && window.allFiles) {
-    const found = window.allFiles.find(function(f){ return f.path === file.path; });
+  if (file && !file.size && _allFiles && _allFiles.length) {
+    const found = _allFiles.find(function(f){ return f.path === file.path; });
     if (found) { file.size = found.size; file.mimeType = found.mimeType; }
   }
   currentMediaInfoFile = file;
