@@ -390,6 +390,61 @@ export default {
       }
     }
 
+    // API: Sync full HF index into D1 (bulk global-search index)
+    if (url.pathname === '/api/admin/sync' && request.method === 'POST') {
+      try {
+        const body = await request.json();
+        if (body.admin_pin !== ADMIN_PIN) {
+          return new Response(JSON.stringify({ error: 'PIN Admin Salah!' }), { status: 403 });
+        }
+        if (!env.harudrive_db) {
+          return new Response(JSON.stringify({ error: 'D1 database not bound' }), { status: 500 });
+        }
+        const hfHeaders = { 'User-Agent': 'HaruDrive/1.0' };
+        if (HF_TOKEN) hfHeaders['Authorization'] = `Bearer ${HF_TOKEN}`;
+
+        let items = 0;
+        const MAX_ITEMS = 4000;
+        const seen = new Set();
+        let nextUrl = `https://huggingface.co/api/datasets/${HF_REPO_ID}/tree/main?recursive=true`;
+
+        while (nextUrl && items < MAX_ITEMS) {
+          const hfRes = await fetch(nextUrl, { headers: hfHeaders });
+          if (!hfRes.ok) {
+            const errText = await hfRes.text();
+            return new Response(JSON.stringify({ error: `Hugging Face error (${hfRes.status}): ${errText}` }), { status: hfRes.status });
+          }
+          const pageItems = await hfRes.json();
+          if (!Array.isArray(pageItems)) break;
+
+          for (const item of pageItems) {
+            const path = item.path;
+            if (!path || path.startsWith('.') || path === 'README.md' || item.type === 'directory') continue;
+            if (seen.has(path)) continue;
+            seen.add(path);
+
+            const shortId = await generateShortId(path);
+            const filename = path.split('/').pop();
+            await env.harudrive_db.prepare(
+              'INSERT OR REPLACE INTO shortlinks (short_id, file_path, name, type, size) VALUES (?, ?, ?, ?, ?)'
+            ).bind(shortId, path, filename, 'file', item.size || 0).run();
+            items++;
+            if (items >= MAX_ITEMS) break;
+          }
+
+          const linkHeader = hfRes.headers.get('Link') || '';
+          const m = linkHeader.match(/<([^>]+)>\s*;\s*rel="next"/);
+          nextUrl = m ? (m[1].startsWith('http') ? m[1] : 'https://huggingface.co' + m[1]) : '';
+        }
+
+        return new Response(JSON.stringify({ success: true, items, truncated: items >= MAX_ITEMS }), {
+          headers: { 'Content-Type': 'application/json' }
+        });
+      } catch (err) {
+        return new Response(JSON.stringify({ error: err.message }), { status: 500 });
+      }
+    }
+
     // API: Start Cloud Mirror
     if (url.pathname === '/api/admin/mirror' && request.method === 'POST') {
       try {
@@ -2517,6 +2572,26 @@ function updateBulkToolbar() {
   const dlBtnText = document.getElementById('bulkDownloadText');
   if (dlBtnText) dlBtnText.textContent = 'Download Selected (' + count + ')';
 
+  // Download is only meaningful for files, not folders.
+  const fileSelCount = allFiles.filter(f => selectedFiles.has(f.path) && f.mimeType !== 'application/vnd.google-apps.folder').length;
+  const hasFileSel = fileSelCount > 0;
+  ['bulkDownloadBtn', 'btnBulkDownload'].forEach(id => {
+    const b = document.getElementById(id);
+    if (b) {
+      b.disabled = !hasFileSel;
+      b.style.opacity = hasFileSel ? '1' : '0.45';
+      b.style.pointerEvents = hasFileSel ? 'auto' : 'none';
+    }
+  });
+
+  // Keep the header "select all" checkbox in sync with the current selection.
+  const selectAll = document.getElementById('selectAllCheckbox');
+  if (selectAll) {
+    const total = allFiles.length;
+    selectAll.checked = total > 0 && count === total;
+    selectAll.indeterminate = count > 0 && count < total;
+  }
+
   const toolbar = document.getElementById('bulkToolbar');
   if (toolbar) {
     toolbar.style.display = count > 0 ? 'flex' : 'none';
@@ -2780,7 +2855,8 @@ async function syncFromHF() {
     });
     const data = await res.json();
     if (res.ok && data.success) {
-      alert('✅ Sinkronisasi metadata index berhasil!');
+      const suffix = (data.truncated ? '\n(Dibatasi ' + data.items + ' item — jalankan lagi untuk melanjutkan)' : '');
+      alert('✅ Sinkronisasi index berhasil: ' + data.items + ' file' + suffix);
       loadFolder(currentPath, currentFolderId);
       fetchFolderTree();
     } else {
@@ -2958,10 +3034,10 @@ function playVideo(fileId, fileName) {
 
   if (extContainer) {
     let eHtml = '';
-    eHtml += '<a href="vlc://' + videoUrl + '" class="ext-btn"><svg class="icon icon-xs" viewBox="0 0 24 24"><polygon points="12 2 2 22 22 22"/></svg><span>VLC Player</span></a>';
-    eHtml += '<a href="potplayer://' + videoUrl + '" class="ext-btn"><svg class="icon icon-xs" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8"/></svg><span>PotPlayer</span></a>';
-    eHtml += '<a href="intent:' + videoUrl + '#Intent;type=video/*;package=com.mxtech.videoplayer.ad;end" class="ext-btn"><svg class="icon icon-xs" viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="20" rx="4"/></svg><span>MX Player</span></a>';
-    eHtml += '<a href="' + videoUrl + '" target="_blank" download class="ext-btn" style="background: rgba(16, 185, 129, 0.15); color: #10b981; border-color: rgba(16, 185, 129, 0.3);"><svg class="icon icon-xs" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg><span>Download File</span></a>';
+    eHtml += '<a href="vlc://' + videoUrl + '" class="btn-ext-player"><svg class="icon icon-xs" viewBox="0 0 24 24"><polygon points="12 2 2 22 22 22"/></svg><span>VLC Player</span></a>';
+    eHtml += '<a href="potplayer://' + videoUrl + '" class="btn-ext-player"><svg class="icon icon-xs" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8"/></svg><span>PotPlayer</span></a>';
+    eHtml += '<a href="intent:' + videoUrl + '#Intent;type=video/*;package=com.mxtech.videoplayer.ad;end" class="btn-ext-player"><svg class="icon icon-xs" viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="20" rx="4"/></svg><span>MX Player</span></a>';
+    eHtml += '<a href="' + videoUrl + '" target="_blank" download class="btn-ext-player" style="background: rgba(16, 185, 129, 0.15); color: #10b981; border-color: rgba(16, 185, 129, 0.3);"><svg class="icon icon-xs" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg><span>Download File</span></a>';
     extContainer.innerHTML = eHtml;
   }
 
@@ -3247,9 +3323,9 @@ function publicIndexUI() {
         </a>
       </div>
       <div class="toolbar-actions">
-        <div style="position: relative; flex: 1; min-width: 180px;">
+        <div style="position: relative; flex: 1 1 260px; min-width: 260px; max-width: 480px;">
           <svg class="icon icon-xs" viewBox="0 0 24 24" style="position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--text-dim); pointer-events: none;"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          <input type="text" id="searchInput" class="form-input-pro" placeholder="Cari file global...   (Ctrl+K)" style="padding-left: 36px;">
+          <input type="text" id="searchInput" class="form-input-pro" placeholder="Cari file global (Ctrl+K)" style="padding-left: 36px;">
         </div>
         <button class="btn-action-tool" onclick="loadFolder(currentPath, currentFolderId)" title="Refresh">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
@@ -3278,7 +3354,7 @@ function publicIndexUI() {
   <!-- FLOATING BULK TOOLBAR (PUBLIC) -->
   <div id="bulkToolbar" class="bulk-toolbar" style="display: none;">
     <span id="bulkCount" class="bulk-count-badge">0 Dipilih</span>
-    <button class="btn-bulk" style="color: #10b981;" onclick="bulkDownloadSelected()">
+    <button class="btn-bulk" id="bulkDownloadBtn" style="color: #10b981;" onclick="bulkDownloadSelected()">
       <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
       <span>Download</span>
     </button>
@@ -3383,9 +3459,9 @@ function adminConsoleUI() {
       </div>
 
       <div class="toolbar-actions">
-        <div style="position: relative; flex: 1; min-width: 180px;">
+        <div style="position: relative; flex: 1 1 260px; min-width: 260px; max-width: 480px;">
           <svg class="icon icon-xs" viewBox="0 0 24 24" style="position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--text-dim); pointer-events: none;"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          <input type="text" id="searchInput" class="form-input-pro" placeholder="Cari file global...   (Ctrl+K)" style="padding-left: 36px;">
+          <input type="text" id="searchInput" class="form-input-pro" placeholder="Cari file global (Ctrl+K)" style="padding-left: 36px;">
         </div>
         <button class="btn-action-tool" style="background: rgba(99, 102, 241, 0.15); border-color: rgba(99, 102, 241, 0.4); color: var(--primary-light);" onclick="openUploadModal()">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
@@ -3406,6 +3482,11 @@ function adminConsoleUI() {
           <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M12 2v4"/><path d="M12 18v4"/><path d="M4.93 4.93l2.83 2.83"/><path d="M16.24 16.24l2.83 2.83"/><path d="M2 12h4"/><path d="M18 12h4"/><path d="M4.93 19.07l2.83-2.83"/><path d="M16.24 7.76l2.83-2.83"/></svg>
           <span>Task Manager</span>
           <span id="taskPulseDot" style="display: none; width: 7px; height: 7px; border-radius: 50%; background: #10b981; box-shadow: 0 0 8px #10b981; position: absolute; top: 4px; right: 4px;"></span>
+        </button>
+
+        <button class="btn-action-tool" style="background: rgba(234, 179, 8, 0.12); border-color: rgba(234, 179, 8, 0.35); color: #eab308;" onclick="syncFromHF()" title="Sinkronkan seluruh index HF ke D1">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+          <span>Sync Index</span>
         </button>
 
         <button class="btn-action-tool" onclick="loadFolder(currentPath, currentFolderId)" title="Refresh">
