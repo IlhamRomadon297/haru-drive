@@ -2045,7 +2045,7 @@ function playVideo(shortId, filename) {
 
   if (window.Plyr) {
     plyrPlayerInstance = new Plyr(videoEl, {
-      autoplay: true,
+      autoplay: false,
       keyboard: { global: true, focused: true },
       tooltips: { controls: true, seek: true }
     });
