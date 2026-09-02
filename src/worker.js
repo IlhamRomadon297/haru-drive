@@ -1813,6 +1813,46 @@ function htmlPage(content, env, pageMode = 'public') {
 
 
 
+
+.guest-top-controls {
+  position: absolute;
+  top: 18px;
+  right: 24px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  z-index: 100;
+}
+
+.btn-subtle-ctrl {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 6px 12px;
+  color: var(--text-dim);
+  font-size: 0.78rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  text-decoration: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  backdrop-filter: blur(8px);
+}
+
+.btn-subtle-ctrl:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--text);
+  border-color: rgba(255, 255, 255, 0.25);
+  transform: translateY(-1px);
+}
+
+.btn-admin-entrance:hover {
+  color: #34d399;
+  border-color: rgba(52, 211, 153, 0.4);
+}
+
 /* === GUEST CARD UI (Screenshot 2 Style) === */
 .guest-card-wrapper {
   max-width: 780px;
@@ -2017,7 +2057,7 @@ let currentFolderId = '';
 let allFiles = [];
 let availableFolders = [''];
 let activeFilter = 'all';
-let selectedFiles = new Set();
+const selectedFiles = new Set();
 let plyrPlayerInstance = null;
 const isPageAdmin = document.body.getAttribute('data-mode') === 'admin';
 let selectedUploadFile = null;
@@ -2086,44 +2126,45 @@ function initAdminConsole() {
   if (savedPin === '290722') {
     if (gate) gate.style.display = 'none';
     if (main) main.style.display = 'block';
+    const pathName = window.location.pathname;
+    const urlParams = new URLSearchParams(window.location.search);
+    loadFolder(urlParams.get('p') || '', '');
   } else {
     if (gate) gate.style.display = 'flex';
     if (main) main.style.display = 'none';
-    setTimeout(() => document.getElementById('gatePinInput')?.focus(), 150);
   }
 }
 
 function unlockAdminConsole() {
-  const pinInput = document.getElementById('gatePinInput');
+  const pinInput = document.getElementById('adminPinInput');
+  const errText = document.getElementById('loginPinError');
   const pin = (pinInput?.value || '').trim();
 
   if (pin === '290722') {
-    localStorage.setItem('harudrive_admin_pin', pin);
-    setCookie('harudrive_admin_pin', pin, 30);
-    
-    document.getElementById('adminLoginGate').style.display = 'none';
-    document.getElementById('adminMainContent').style.display = 'block';
+    localStorage.setItem('harudrive_admin_pin', '290722');
+    setCookie('harudrive_admin_pin', '290722', 30);
+    if (errText) errText.style.display = 'none';
+    initAdminConsole();
     loadFolder(currentPath, currentFolderId);
     fetchFolderTree(); fetchAndRenderTasks();
   } else {
-    alert('PIN Admin Salah!');
-    pinInput?.focus();
-    pinInput?.select();
+    if (errText) {
+      errText.textContent = 'PIN Admin salah. Silakan coba lagi.';
+      errText.style.display = 'block';
+    }
   }
 }
 
 function lockAdminSession() {
   localStorage.removeItem('harudrive_admin_pin');
   deleteCookie('harudrive_admin_pin');
-  document.getElementById('adminLoginGate').style.display = 'flex';
-  document.getElementById('adminMainContent').style.display = 'none';
-  alert('Console Admin telah dikunci.');
+  window.location.href = '/';
 }
 
 // Navigation
 function navigateTo(path, id = '', pushHistory = true) {
   if (pushHistory) {
-    const targetUrl = id ? \`/folder/\${id}\` : (path ? \`/?p=\${encodeURIComponent(path)}\` : '/');
+    const targetUrl = id ? ('/folder/' + id) : (path ? ('/?p=' + encodeURIComponent(path)) : '/');
     window.history.pushState({ path, id }, '', targetUrl);
   }
   loadFolder(path, id);
@@ -2163,23 +2204,15 @@ function renderFolderPickerUI(containerId, inputId, selectedValue = '') {
 
   hiddenInput.value = selectedValue;
   let html = '';
-  
-  const folders = Array.from(new Set(['', ...availableFolders]));
-
-  folders.forEach(f => {
-    const isSelected = f === selectedValue;
-    const displayName = f ? \`/\${f}\` : 'Root (/)';
-    const indent = f ? (f.split('/').length - 1) * 14 : 0;
-
-    html += \`
-      <div class="folder-tree-item \${isSelected ? 'selected' : ''}" style="margin-left: \${indent}px;" onclick="selectFolderPickerItem('\${containerId}', '\${inputId}', '\${escapeJs(f)}')">
-        <svg class="icon icon-sm" style="color: #f59e0b;" viewBox="0 0 24 24"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>
-        <span>\${escapeHtml(displayName)}</span>
-        \${isSelected ? '<span style="margin-left: auto; font-size: 0.8rem; color: #ec4899;">✓</span>' : ''}
-      </div>
-    \`;
+  availableFolders.forEach(f => {
+    const isSel = f === selectedValue;
+    const displayName = f ? ('/' + f) : 'Root (/)';
+    const click = 'selectFolderPickerItem(' + JSON.stringify(containerId) + ', ' + JSON.stringify(inputId) + ', ' + JSON.stringify(f) + ')';
+    html += '<div class="picker-item ' + (isSel ? 'active' : '') + '" onclick="' + click.replace(/"/g, '&quot;') + '">';
+    html += '  <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>';
+    html += '  <span>' + escapeHtml(displayName) + '</span>';
+    html += '</div>';
   });
-
   container.innerHTML = html;
 }
 
@@ -2187,7 +2220,7 @@ function selectFolderPickerItem(containerId, inputId, folderPath) {
   renderFolderPickerUI(containerId, inputId, folderPath);
 }
 
-// Load Folder Files
+// Core File Loader
 async function loadFolder(path = '', id = '') {
   currentPath = path;
   currentFolderId = id;
@@ -2196,23 +2229,19 @@ async function loadFolder(path = '', id = '') {
 
   const container = document.getElementById('fileListContainer');
   if (container) {
-    container.innerHTML = \`
-      <div style="text-align: center; padding: 40px; color: var(--text-muted);">
-        <div class="pulse-dot" style="margin: 0 auto 12px; width: 12px; height: 12px;"></div>
-        <p>Memuat daftar file...</p>
-      </div>\`;
+    container.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--text-muted);"><div class="pulse-dot" style="margin: 0 auto 12px; width: 12px; height: 12px;"></div><p>Memuat daftar file...</p></div>';
   }
 
   try {
-    let fetchUrl = \`/api/list\`;
+    let fetchUrl = '/api/list';
     if (id) {
-      fetchUrl += \`?id=\${encodeURIComponent(id)}\`;
+      fetchUrl += '?id=' + encodeURIComponent(id);
     } else if (path) {
-      fetchUrl += \`?path=\${encodeURIComponent(path)}\`;
+      fetchUrl += '?path=' + encodeURIComponent(path);
     }
 
     const res = await fetch(fetchUrl);
-    if (!res.ok) throw new Error(\`HTTP Error \${res.status}\`);
+    if (!res.ok) throw new Error('HTTP Error ' + res.status);
     const data = await res.json();
 
     currentPath = data.currentPath || '';
@@ -2223,79 +2252,12 @@ async function loadFolder(path = '', id = '') {
     renderFileList();
   } catch (err) {
     if (container) {
-      container.innerHTML = \`
-        <div style="text-align: center; padding: 40px; color: #ef4444;">
-          <p>Gagal memuat: \${err.message}</p>
-          <button class="nav-btn" style="margin-top: 12px;" onclick="loadFolder(currentPath, currentFolderId)">Coba Lagi</button>
-        </div>\`;
+      container.innerHTML = '<div style="text-align: center; padding: 40px; color: #ef4444;"><p>Gagal memuat: ' + escapeHtml(err.message) + '</p><button class="nav-btn" style="margin-top: 12px;" onclick="loadFolder(currentPath, currentFolderId)">Coba Lagi</button></div>';
     }
   }
 }
 
-// Render File Table & Link Helpers
-
-function copyFolderLink(id, path) {
-  const url = id ? \`\${window.location.origin}/folder/\${id}\` : \`\${window.location.origin}/?path=\${encodeURIComponent(path)}\`;
-  navigator.clipboard.writeText(url).then(() => {
-    showToast('Link folder berhasil disalin ke clipboard! 📋', 'success');
-  }).catch(() => {
-    prompt('Salin link folder:', url);
-  });
-}
-
-function copyShortLink(id, path) {
-  const url = id ? \`\${window.location.origin}/file/\${id}\` : \`\${window.location.origin}/d/\${encodeURIComponent(path)}\`;
-  navigator.clipboard.writeText(url).then(() => {
-    showToast('Link file berhasil disalin ke clipboard! 📋', 'success');
-  }).catch(() => {
-    prompt('Salin link file:', url);
-  });
-}
-
-function bulkCopyLinks() {
-  if (selectedFiles.size === 0) {
-    showToast('Pilih setidaknya 1 item terlebih dahulu.', 'warning');
-    return;
-  }
-  const links = [];
-  allFiles.forEach(f => {
-    if (selectedFiles.has(f.path)) {
-      const isDir = f.mimeType === 'application/vnd.google-apps.folder';
-      if (isDir) {
-        links.push(f.id ? \`\${window.location.origin}/folder/\${f.id}\` : \`\${window.location.origin}/?path=\${encodeURIComponent(f.path)}\`);
-      } else {
-        links.push(f.id ? \`\${window.location.origin}/file/\${f.id}\` : \`\${window.location.origin}/d/\${encodeURIComponent(f.path)}\`);
-      }
-    }
-  });
-  const textToCopy = links.join('\n');
-  navigator.clipboard.writeText(textToCopy).then(() => {
-    showToast(\`\${links.length} Link berhasil disalin ke clipboard! 📋\`, 'success');
-  }).catch(() => {
-    prompt('Salin link:', textToCopy);
-  });
-}
-
-function bulkDownloadSelected() {
-  const filesToDownload = allFiles.filter(f => selectedFiles.has(f.path) && f.mimeType !== 'application/vnd.google-apps.folder');
-  if (filesToDownload.length === 0) {
-    showToast('Pilih setidaknya 1 file untuk di-download.', 'warning');
-    return;
-  }
-  filesToDownload.forEach((f, idx) => {
-    setTimeout(() => {
-      const a = document.createElement('a');
-      a.href = \`/d/\${f.id}\`;
-      a.download = f.name;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-    }, idx * 500);
-  });
-  showToast(\`Memulai unduhan untuk \${filesToDownload.length} file... ⬇️\`, 'success');
-}
-
-
+// Copy Toast Notification
 function showCopyToast(message) {
   const badge = document.getElementById('toastCopiedBadge');
   const text = document.getElementById('toastCopiedText');
@@ -2303,7 +2265,7 @@ function showCopyToast(message) {
     text.textContent = message || 'Link copied';
     badge.classList.add('show');
     clearTimeout(window._copyToastTimer);
-    window._copyToastTimer = setTimeout(function() {
+    window._copyToastTimer = setTimeout(() => {
       badge.classList.remove('show');
     }, 2400);
   }
@@ -2311,18 +2273,18 @@ function showCopyToast(message) {
 
 function copyFolderLink(id, path) {
   const url = id ? (window.location.origin + '/folder/' + id) : (window.location.origin + '/?path=' + encodeURIComponent(path));
-  navigator.clipboard.writeText(url).then(function() {
+  navigator.clipboard.writeText(url).then(() => {
     showCopyToast('Link folder disalin');
-  }).catch(function() {
+  }).catch(() => {
     prompt('Salin link folder:', url);
   });
 }
 
 function copyShortLink(id, path) {
   const url = id ? (window.location.origin + '/file/' + id) : (window.location.origin + '/d/' + encodeURIComponent(path));
-  navigator.clipboard.writeText(url).then(function() {
+  navigator.clipboard.writeText(url).then(() => {
     showCopyToast('1 link copied');
-  }).catch(function() {
+  }).catch(() => {
     prompt('Salin link file:', url);
   });
 }
@@ -2333,7 +2295,7 @@ function bulkCopyLinks() {
     return;
   }
   const links = [];
-  allFiles.forEach(function(f) {
+  allFiles.forEach(f => {
     if (selectedFiles.has(f.path)) {
       const isDir = f.mimeType === 'application/vnd.google-apps.folder';
       if (isDir) {
@@ -2344,24 +2306,22 @@ function bulkCopyLinks() {
     }
   });
 
-  const textToCopy = links.join('\n');
-  navigator.clipboard.writeText(textToCopy).then(function() {
+  const textToCopy = links.join(String.fromCharCode(10));
+  navigator.clipboard.writeText(textToCopy).then(() => {
     showCopyToast(links.length + ' links copied');
-  }).catch(function() {
+  }).catch(() => {
     prompt('Salin link:', textToCopy);
   });
 }
 
 function bulkDownloadSelected() {
-  const filesToDownload = allFiles.filter(function(f) {
-    return selectedFiles.has(f.path) && f.mimeType !== 'application/vnd.google-apps.folder';
-  });
+  const filesToDownload = allFiles.filter(f => selectedFiles.has(f.path) && f.mimeType !== 'application/vnd.google-apps.folder');
   if (filesToDownload.length === 0) {
     alert('Pilih setidaknya 1 file untuk di-download.');
     return;
   }
-  filesToDownload.forEach(function(f, idx) {
-    setTimeout(function() {
+  filesToDownload.forEach((f, idx) => {
+    setTimeout(() => {
       const a = document.createElement('a');
       a.href = '/d/' + f.id;
       a.download = f.name;
@@ -2372,11 +2332,35 @@ function bulkDownloadSelected() {
   });
 }
 
+function updateBreadcrumbs() {
+  const nav = document.getElementById('breadcrumbNav');
+  if (!nav) return;
+  
+  const homeClick = isPageAdmin ? "navigateToAdmin('')" : "navigateTo('', '')";
+  let html = '<a href="/" class="crumb" onclick="' + homeClick + '; return false;"><svg class="icon icon-xs" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg><span>Home</span></a>';
+  
+  if (currentPath) {
+    const parts = currentPath.split('/').filter(Boolean);
+    let accum = '';
+    parts.forEach((part, idx) => {
+      accum = accum ? (accum + '/' + part) : part;
+      const isLast = idx === parts.length - 1;
+      html += '<span class="crumb-separator" style="margin: 0 4px; color: var(--text-dim);">/</span>';
+      if (isLast) {
+        html += '<span class="crumb active" style="color: var(--text); font-weight: 600;">' + escapeHtml(part) + '</span>';
+      } else {
+        const click = isPageAdmin ? ('navigateToAdmin(' + JSON.stringify(accum) + ')') : ('navigateTo(' + JSON.stringify(accum) + ', "")');
+        html += '<a href="javascript:void(0)" class="crumb" onclick="' + click.replace(/"/g, '&quot;') + '; return false;">' + escapeHtml(part) + '</a>';
+      }
+    });
+  }
+  nav.innerHTML = html;
+}
+
 function renderFileList() {
   const container = document.getElementById('fileListContainer');
   if (!container) return;
 
-  // Update Guest Card Header Title & Stats (e.g. "31 files — 29.46 GB")
   const cardTitle = document.getElementById('guestCardTitle');
   const cardStats = document.getElementById('guestCardStats');
   if (cardTitle) {
@@ -2391,7 +2375,7 @@ function renderFileList() {
     let fCount = 0;
     let fileCount = 0;
     let totalBytes = 0;
-    allFiles.forEach(function(f) {
+    allFiles.forEach(f => {
       if (f.mimeType === 'application/vnd.google-apps.folder') {
         fCount++;
       } else {
@@ -2413,7 +2397,7 @@ function renderFileList() {
     cardStats.textContent = sList.join('');
   }
 
-  const filtered = allFiles.filter(function(item) {
+  const filtered = allFiles.filter(item => {
     if (activeFilter === 'all') return true;
     if (activeFilter === 'folder') return item.mimeType === 'application/vnd.google-apps.folder';
     if (activeFilter === 'video') return item.mimeType.startsWith('video/');
@@ -2428,25 +2412,32 @@ function renderFileList() {
   }
 
   let html = '';
-  filtered.forEach(function(file) {
+  filtered.forEach(file => {
     const isDir = file.mimeType === 'application/vnd.google-apps.folder';
     const isVideo = file.mimeType.startsWith('video/');
     const iconType = isDir ? 'folder' : (isVideo ? 'video' : (file.mimeType.includes('zip') ? 'archive' : 'file'));
     const isChecked = selectedFiles.has(file.path);
 
-    const clickAction = isDir 
-      ? (isPageAdmin ? "navigateToAdmin('" + escapeJs(file.path) + "')" : "navigateTo('" + escapeJs(file.path) + "', '" + file.id + "')")
-      : (isVideo ? "playVideo('" + file.id + "', '" + escapeJs(file.name) + "')" : "downloadFile('" + file.id + "')");
+    const safeName = escapeHtml(file.name);
 
-    const copyFunc = isDir
-      ? "copyFolderLink('" + file.id + "', '" + escapeJs(file.path) + "')"
-      : "copyShortLink('" + file.id + "', '" + escapeJs(file.path) + "')";
+    let clickAction = '';
+    if (isDir) {
+      clickAction = isPageAdmin ? ('navigateToAdmin(' + JSON.stringify(file.path) + ')') : ('navigateTo(' + JSON.stringify(file.path) + ', ' + JSON.stringify(file.id) + ')');
+    } else if (isVideo) {
+      clickAction = 'playVideo(' + JSON.stringify(file.id) + ', ' + JSON.stringify(file.name) + ')';
+    } else {
+      clickAction = 'downloadFile(' + JSON.stringify(file.id) + ')';
+    }
+
+    let copyFunc = isDir
+      ? ('copyFolderLink(' + JSON.stringify(file.id) + ', ' + JSON.stringify(file.path) + ')')
+      : ('copyShortLink(' + JSON.stringify(file.id) + ', ' + JSON.stringify(file.path) + ')');
 
     html += '<div class="file-row ' + (isDir ? 'is-folder' : '') + '">';
-    html += '  <div class="col-cb"><input type="checkbox" ' + (isChecked ? 'checked' : '') + ' onchange="toggleItemSelect(\'' + escapeJs(file.path) + '\', this.checked)"></div>';
-    html += '  <div class="file-name-cell" onclick="' + clickAction + '" title="' + (isDir ? 'Buka Folder' : (isVideo ? 'Klik untuk Putar Video' : 'Download File')) + '">';
+    html += '  <div class="col-cb"><input type="checkbox" ' + (isChecked ? 'checked' : '') + ' onchange="toggleItemSelect(' + JSON.stringify(file.path).replace(/"/g, '&quot;') + ', this.checked)"></div>';
+    html += '  <div class="file-name-cell" onclick="' + clickAction.replace(/"/g, '&quot;') + '" title="' + (isDir ? 'Buka Folder' : (isVideo ? 'Klik untuk Putar Video' : 'Download File')) + '">';
     html += '    <div class="file-icon-box ' + iconType + '">' + getModernSvgIcon(iconType) + '</div>';
-    html += '    <span class="file-title" title="' + escapeHtml(file.name) + '">' + escapeHtml(file.name) + '</span>';
+    html += '    <span class="file-title" title="' + safeName + '">' + safeName + '</span>';
     html += '  </div>';
     html += '  <div class="file-size-cell" style="text-align: right;">' + (isDir ? '-' : formatBytes(file.size)) + '</div>';
     html += '  <div class="file-actions-cell" style="text-align: center;">';
@@ -2454,14 +2445,14 @@ function renderFileList() {
     if (!isPageAdmin) {
       if (!isDir) {
         html += '    <a class="btn-act" href="/d/' + file.id + '" title="Download File"><svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></a>';
-        html += '    <button class="btn-act" onclick="' + copyFunc + '" title="Salin Link File"><svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>';
+        html += '    <button class="btn-act" onclick="' + copyFunc.replace(/"/g, '&quot;') + '" title="Salin Link File"><svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>';
       } else {
-        html += '    <button class="btn-act" onclick="' + copyFunc + '" title="Salin Link Folder"><svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>';
+        html += '    <button class="btn-act" onclick="' + copyFunc.replace(/"/g, '&quot;') + '" title="Salin Link Folder"><svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>';
       }
     } else {
-      html += '    <button class="btn-act" onclick="openRenameModal(\'' + escapeJs(file.path) + '\', \'' + escapeJs(file.name) + '\')" title="Ubah Nama"><svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>';
-      html += '    <button class="btn-act" onclick="openMoveModalSingle(\'' + escapeJs(file.path) + '\')" title="Pindahkan"><svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="5 9 2 12 5 15"/><polyline points="9 5 12 2 15 5"/><polyline points="15 19 12 22 9 19"/><polyline points="19 9 22 12 19 15"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="12" y1="2" x2="12" y2="22"/></svg></button>';
-      html += '    <button class="btn-act btn-act-danger" onclick="deleteItem(\'' + escapeJs(file.path) + '\')" title="Hapus"><svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>';
+      html += '    <button class="btn-act" onclick="openRenameModal(' + JSON.stringify(file.path).replace(/"/g, '&quot;') + ', ' + JSON.stringify(file.name).replace(/"/g, '&quot;') + ')" title="Ubah Nama"><svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>';
+      html += '    <button class="btn-act" onclick="openMoveModalSingle(' + JSON.stringify(file.path).replace(/"/g, '&quot;') + ')" title="Pindahkan"><svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="5 9 2 12 5 15"/><polyline points="9 5 12 2 15 5"/><polyline points="15 19 12 22 9 19"/><polyline points="19 9 22 12 19 15"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="12" y1="2" x2="12" y2="22"/></svg></button>';
+      html += '    <button class="btn-act btn-act-danger" onclick="deleteItem(' + JSON.stringify(file.path).replace(/"/g, '&quot;') + ')" title="Hapus"><svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>';
     }
     
     html += '  </div>';
@@ -2478,42 +2469,49 @@ function toggleItemSelect(itemPath, checked) {
 }
 
 function toggleSelectAll(checked) {
-  allFiles.forEach(f => {
-    if (checked) selectedFiles.add(f.path);
-    else selectedFiles.delete(f.path);
-  });
+  if (checked) {
+    allFiles.forEach(f => selectedFiles.add(f.path));
+  } else {
+    selectedFiles.clear();
+  }
   renderFileList();
   updateBulkToolbar();
 }
 
 function updateBulkToolbar() {
-  const bar = document.getElementById('bulkToolbar');
-  const countEl = document.getElementById('bulkCount');
-  if (!bar) return;
+  const count = selectedFiles.size;
+  const countSpan = document.getElementById('bulkCount');
+  if (countSpan) countSpan.textContent = count + ' Dipilih';
+  
+  const dlBtnText = document.getElementById('bulkDownloadText');
+  if (dlBtnText) dlBtnText.textContent = 'Download Selected (' + count + ')';
 
-  if (selectedFiles.size > 0) {
-    bar.style.display = 'flex';
-    if (countEl) countEl.textContent = \`\${selectedFiles.size} Item\`;
-  } else {
-    bar.style.display = 'none';
+  const toolbar = document.getElementById('bulkToolbar');
+  if (toolbar) {
+    toolbar.style.display = count > 0 ? 'flex' : 'none';
   }
 }
 
 function clearBulkSelection() {
   selectedFiles.clear();
+  const selectAll = document.getElementById('selectAllCheckbox');
+  if (selectAll) selectAll.checked = false;
   renderFileList();
   updateBulkToolbar();
 }
 
 async function bulkDeleteSelected() {
-  if (!confirm(\`Hapus permanent \${selectedFiles.size} item yang dipilih?\`)) return;
-  const pin = localStorage.getItem('harudrive_admin_pin') || getCookie('harudrive_admin_pin') || '290722';
+  if (selectedFiles.size === 0) return;
+  if (!confirm('Yakin ingin menghapus ' + selectedFiles.size + ' item yang dipilih?')) return;
+
+  const pin = localStorage.getItem('harudrive_admin_pin') || getCookie('harudrive_admin_pin') || prompt('Masukkan PIN Admin:');
+  if (!pin) return;
 
   try {
-    const res = await fetch('/api/admin/delete', {
+    const res = await fetch('/api/admin/bulk-delete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ paths: Array.from(selectedFiles), admin_pin: pin })
+      body: JSON.stringify({ paths: Array.from(selectedFiles), pin })
     });
     const data = await res.json();
     if (res.ok && data.success) {
@@ -2527,7 +2525,6 @@ async function bulkDeleteSelected() {
     alert('Error: ' + e.message);
   }
 }
-
 
 // Cloud Mirror Modal
 async function openMirrorModal() {
@@ -2558,23 +2555,25 @@ async function submitCloudMirror() {
     const res = await fetch('/api/admin/mirror', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ gdrive_url: gdriveUrl, target_path: targetPath, admin_pin: pin })
+      body: JSON.stringify({ gdrive_url: gdriveUrl, target_path: targetPath, pin: pin })
     });
     const data = await res.json();
     if (res.ok && data.success) {
+      alert('Tugas mirror berhasil dijadwalkan di Cloudflare & GitHub Actions! ⚡');
       closeMirrorModal();
+      if (urlInput) urlInput.value = '';
       openTaskManagerModal();
     } else {
-      alert('Gagal: ' + (data.error || 'Akses Ditolak'));
+      alert('Gagal: ' + (data.error || 'Error scheduling mirror'));
     }
-  } catch (e) {
-    alert('Error: ' + e.message);
+  } catch (err) {
+    alert('Network Error: ' + err.message);
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = 'Mulai Mirror'; }
+    if (btn) { btn.disabled = false; btn.textContent = 'Mulai Mirror Sekarang'; }
   }
 }
 
-// Theme
+// Theme Handling
 function toggleTheme() {
   const isLight = document.body.classList.toggle('light');
   localStorage.setItem('haruTheme', isLight ? 'light' : 'dark');
@@ -2583,130 +2582,121 @@ function toggleTheme() {
 function updateThemeIcon(isLight) {
   const icon = document.getElementById('themeIcon');
   if (icon) {
-    icon.innerHTML = isLight 
-      ? '<circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>'
-      : '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>';
+    if (isLight) {
+      icon.innerHTML = '<circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>';
+    } else {
+      icon.innerHTML = '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>';
+    }
   }
 }
 
 // Modern SVG Icons
 function getModernSvgIcon(type) {
-  if (type === 'folder') {
-    return \`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>\`;
+  switch (type) {
+    case 'folder':
+      return '<svg class="icon" viewBox="0 0 24 24" fill="#f59e0b"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>';
+    case 'video':
+      return '<svg class="icon" viewBox="0 0 24 24" fill="#3b82f6"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>';
+    case 'archive':
+      return '<svg class="icon" viewBox="0 0 24 24" fill="#8b5cf6"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>';
+    default:
+      return '<svg class="icon" viewBox="0 0 24 24" fill="#94a3b8"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>';
   }
-  if (type === 'video') {
-    return \`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ec4899" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"/></svg>\`;
-  }
-  if (type === 'archive') {
-    return \`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#a855f7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="20" x="2" y="2" rx="5" ry="5"/><path d="M10 2v20"/><path d="M14 2v20"/><path d="M2 12h20"/></svg>\`;
-  }
-  return \`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#818cf8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><polyline points="14 2 14 8 20 8"/></svg>\`;
 }
 
-
-let taskPollInterval = null;
-
+// Live Task Manager Modal
 async function openTaskManagerModal() {
   const m = document.getElementById('taskManagerModal');
-  if (!m) return;
-  m.style.display = 'flex';
-  await fetchAndRenderTasks();
-  if (!taskPollInterval) {
-    taskPollInterval = setInterval(fetchAndRenderTasks, 5000);
+  if (m) {
+    m.style.display = 'flex';
+    fetchAndRenderTasks();
+    if (!window.taskInterval) {
+      window.taskInterval = setInterval(fetchAndRenderTasks, 5000);
+    }
   }
 }
-
 function closeTaskManagerModal() {
   const m = document.getElementById('taskManagerModal');
-  if (m) m.style.display = 'none';
-  if (taskPollInterval) {
-    clearInterval(taskPollInterval);
-    taskPollInterval = null;
+  if (m) {
+    m.style.display = 'none';
+    if (window.taskInterval) {
+      clearInterval(window.taskInterval);
+      window.taskInterval = null;
+    }
   }
 }
-
 async function fetchAndRenderTasks() {
-  const listEl = document.getElementById('taskManagerList');
-  const dotEl = document.getElementById('taskPulseDot');
+  const container = document.getElementById('taskManagerList');
+  if (!container) return;
 
   try {
     const res = await fetch('/api/admin/mirror-tasks');
-    if (!res.ok) throw new Error('HTTP ' + res.status);
+    if (!res.ok) return;
     const data = await res.json();
     const runs = data.runs || [];
 
-    if (dotEl) {
-      dotEl.style.display = data.hasActive ? 'block' : 'none';
-    }
-
-    if (!listEl) return;
-
     if (runs.length === 0) {
-      listEl.innerHTML = '<div style="text-align: center; padding: 30px; color: var(--text-muted);"><p style="font-size: 0.85rem;">Belum ada task Cloud Mirror yang dijalankan.</p></div>';
+      container.innerHTML = '<div style="text-align: center; padding: 24px; color: var(--text-dim);">Belum ada antrean mirroring aktif.</div>';
       return;
     }
 
-    let html = '<div style="display: flex; flex-direction: column; gap: 8px;">';
+    let html = '';
+    runs.forEach(r => {
+      const isRunning = r.status === 'in_progress' || r.status === 'queued';
+      const isSuccess = r.conclusion === 'success';
+      const isFailed = r.conclusion === 'failure';
+      const isCancelled = r.conclusion === 'cancelled';
 
-    runs.forEach(run => {
-      const isRunning = run.status === 'in_progress' || run.status === 'queued';
-      const isSuccess = run.conclusion === 'success';
-      const isFailed = run.conclusion === 'failure' || run.conclusion === 'cancelled' || run.conclusion === 'timed_out';
-
-      let statusBadge = '';
-      if (isRunning) {
-        statusBadge = '<span style="display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border-radius: 12px; font-size: 0.72rem; font-weight: 700; background: rgba(245, 158, 11, 0.15); border: 1px solid rgba(245, 158, 11, 0.35); color: #f59e0b;"><span class="pulse-dot" style="width: 6px; height: 6px; background: #f59e0b; box-shadow: 0 0 6px #f59e0b;"></span>' + (run.status === 'queued' ? 'Antre...' : 'Sedang Berjalan...') + '</span>';
+      let statusBadge = '<span class="task-badge badge-warning">Dalam Antrean</span>';
+      if (r.status === 'in_progress') {
+        statusBadge = '<span class="task-badge badge-info"><span class="pulse-dot" style="display:inline-block; width:6px; height:6px; margin-right:4px;"></span>Sedang Berjalan</span>';
       } else if (isSuccess) {
-        statusBadge = '<span style="display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 12px; font-size: 0.72rem; font-weight: 700; background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.35); color: #10b981;">✓ Selesai</span>';
-      } else {
-        statusBadge = '<span style="display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 12px; font-size: 0.72rem; font-weight: 700; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.35); color: #ef4444;">✕ ' + (run.conclusion || 'Gagal') + '</span>';
+        statusBadge = '<span class="task-badge badge-success">Selesai 100%</span>';
+      } else if (isFailed) {
+        statusBadge = '<span class="task-badge badge-danger">Gagal</span>';
+      } else if (isCancelled) {
+        statusBadge = '<span class="task-badge badge-secondary">Dibatalkan</span>';
       }
 
-      const timeAgo = formatTimeAgo(run.created_at);
-
-      html += '<div style="background: var(--bg-surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px; display: flex; flex-direction: column; gap: 8px; transition: all 0.2s;">' +
-        '<div style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">' +
-          '<div style="display: flex; align-items: center; gap: 6px; min-width: 0;">' +
-            '<svg class="icon icon-sm" style="color: var(--primary-light);" viewBox="0 0 24 24"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/><polyline points="12 13 12 7 9 10"/><polyline points="12 7 15 10"/></svg>' +
-            '<span style="font-size: 0.85rem; font-weight: 700; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">' + escapeHtml(run.display_title || 'Mirror Job #' + run.id) + '</span>' +
-          '</div>' +
-          statusBadge +
-        '</div>' +
-        '<div style="display: flex; align-items: center; justify-content: space-between; font-size: 0.75rem; color: var(--text-dim);">' +
-          '<span>Mulai: ' + timeAgo + '</span>' +
-          '<div style="display: flex; align-items: center; gap: 6px;">' +
-            (isRunning ? '<button class="nav-btn" style="padding: 3px 8px; font-size: 0.72rem; color: #ef4444; border-color: rgba(239,68,68,0.3); background: rgba(239,68,68,0.1);" onclick="cancelMirrorTask(' + run.id + ')">Batalkan</button>' : '') +
-            '<a href="' + run.html_url + '" target="_blank" rel="noopener noreferrer" class="nav-btn" style="padding: 3px 8px; font-size: 0.72rem;">Logs ↗</a>' +
-          '</div>' +
-        '</div>' +
-      '</div>';
+      html += '<div class="task-card-item">';
+      html += '  <div class="task-card-header">';
+      html += '    <div style="font-weight: 600; font-size: 0.85rem; color: var(--text);">' + escapeHtml(r.title || 'Mirroring Task') + '</div>';
+      html += '    <div>' + statusBadge + '</div>';
+      html += '  </div>';
+      html += '  <div class="task-card-meta">';
+      html += '    <span>ID: #' + r.id + '</span>';
+      html += '    <span>Dimulai: ' + formatTimeAgo(r.created_at) + '</span>';
+      html += '    <a href="' + r.html_url + '" target="_blank" style="color: var(--accent-cyan); text-decoration: underline;">Buka Live Logs ↗</a>';
+      html += '  </div>';
+      if (isRunning) {
+        html += '  <div style="margin-top: 8px; text-align: right;">';
+        html += '    <button class="btn-ctrl-sm btn-act-danger" onclick="cancelMirrorTask(' + r.id + ')">Batalkan Task</button>';
+        html += '  </div>';
+      }
+      html += '</div>';
     });
 
-    html += '</div>';
-    listEl.innerHTML = html;
-  } catch (err) {
-    if (listEl) {
-      listEl.innerHTML = '<div style="text-align: center; padding: 20px; color: #ef4444; font-size: 0.85rem;">Gagal memuat task: ' + err.message + '</div>';
-    }
-  }
+    container.innerHTML = html;
+  } catch (err) {}
 }
 
 async function cancelMirrorTask(runId) {
-  if (!confirm('Yakin ingin membatalkan task #' + runId + '?')) return;
-  const pin = localStorage.getItem('harudrive_admin_pin') || getCookie('harudrive_admin_pin') || '290722';
+  if (!confirm('Yakin ingin membatalkan proses mirror ini?')) return;
+  const pin = localStorage.getItem('harudrive_admin_pin') || getCookie('harudrive_admin_pin') || prompt('Masukkan PIN Admin:');
+  if (!pin) return;
 
   try {
-    const res = await fetch('/api/admin/cancel-task', {
+    const res = await fetch('/api/admin/mirror-cancel', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ run_id: runId, admin_pin: pin })
+      body: JSON.stringify({ run_id: runId, pin: pin })
     });
     const data = await res.json();
     if (res.ok && data.success) {
-      alert('Task berhasil dibatalkan!');
+      alert('Task berhasil dibatalkan.');
       fetchAndRenderTasks();
     } else {
-      alert('Gagal membatalkan task: ' + (data.error || 'Akses ditolak'));
+      alert('Gagal: ' + (data.error || 'Error'));
     }
   } catch (e) {
     alert('Error: ' + e.message);
@@ -2714,75 +2704,78 @@ async function cancelMirrorTask(runId) {
 }
 
 function formatTimeAgo(dateStr) {
-  if (!dateStr) return '-';
-  const diff = (Date.now() - new Date(dateStr).getTime()) / 1000;
-  if (diff < 60) return Math.floor(diff) + ' dtk lalu';
-  if (diff < 3600) return Math.floor(diff / 60) + ' mnt lalu';
-  if (diff < 86400) return Math.floor(diff / 3600) + ' jam lalu';
-  return Math.floor(diff / 86400) + ' hari lalu';
+  const d = new Date(dateStr);
+  const diffSec = Math.floor((new Date() - d) / 1000);
+  if (diffSec < 60) return diffSec + ' detik lalu';
+  if (diffSec < 3600) return Math.floor(diffSec / 60) + ' menit lalu';
+  return Math.floor(diffSec / 3600) + ' jam lalu';
 }
 
-// Helpers
 function setCookie(name, value, days) {
-  let expires = "";
+  let expires = '';
   if (days) {
     const date = new Date();
-    date.setTime(date.getTime() + (days*24*60*60*1000));
-    expires = "; expires=" + date.toUTCString();
+    date.setTime(date.getTime() + (days * 24 * 60 * 60 * 1000));
+    expires = '; expires=' + date.toUTCString();
   }
-  document.cookie = name + "=" + (value || "")  + expires + "; path=/; SameSite=Lax";
+  document.cookie = name + '=' + (value || '') + expires + '; path=/';
 }
 function getCookie(name) {
-  const nameEQ = name + "=";
+  const nameEQ = name + '=';
   const ca = document.cookie.split(';');
-  for(let i=0;i < ca.length;i++) {
+  for (let i = 0; i < ca.length; i++) {
     let c = ca[i];
-    while (c.charAt(0)==' ') c = c.substring(1,c.length);
-    if (c.indexOf(nameEQ) == 0) return c.substring(nameEQ.length,c.length);
+    while (c.charAt(0) === ' ') c = c.substring(1, c.length);
+    if (c.indexOf(nameEQ) === 0) return c.substring(nameEQ.length, c.length);
   }
   return null;
 }
 function deleteCookie(name) {
-  document.cookie = name +'=; Path=/; Expires=Thu, 01 Jan 1970 00:00:01 GMT;';
+  document.cookie = name + '=; Path=/; Expires=Thu, 01 Jan 1970 00:00:01 GMT;';
 }
 
 function formatBytes(bytes) {
-  if (!bytes || bytes === 0) return '0 B';
+  if (bytes === 0) return '0 B';
   const k = 1024;
   const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 function formatDate(dStr) {
-  if (!dStr) return '-';
   const d = new Date(dStr);
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  return isNaN(d.getTime()) ? dStr : d.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 function escapeHtml(str) {
-  return (str || '').replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
+  return (str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
 }
 function escapeJs(str) {
-  return (str || '').replace(/\\\\/g, '\\\\\\\\').replace(/'/g, "\\\\'");
+  return (str || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
 }
 function debounce(fn, delay) {
-  let timeout;
-  return (...args) => {
-    clearTimeout(timeout);
-    timeout = setTimeout(() => fn(...args), delay);
+  let timer = null;
+  return function(...args) {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn.apply(this, args), delay);
   };
 }
+
 async function handleSearch(e) {
   const q = (e.target.value || '').trim();
   if (!q) {
     loadFolder(currentPath, currentFolderId);
     return;
   }
+  const container = document.getElementById('fileListContainer');
+  if (container) {
+    container.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--text-dim);"><p>Mencari "' + escapeHtml(q) + '"...</p></div>';
+  }
   try {
-    const res = await fetch(\`/api/search?q=\${encodeURIComponent(q)}\`);
-    if (!res.ok) return;
-    const data = await res.json();
-    allFiles = data.files || [];
-    renderFileList();
+    const res = await fetch('/api/search?q=' + encodeURIComponent(q));
+    if (res.ok) {
+      const data = await res.json();
+      allFiles = data.files || [];
+      renderFileList();
+    }
   } catch (err) {}
 }
 </script>
@@ -2812,6 +2805,17 @@ function loginUI(errorMsg = '') {
 
 function publicUI() {
   return `
+    <!-- TOP FLOATING BAR (Subtle Admin & Theme Controls) -->
+  <div class="guest-top-controls">
+    <button class="btn-subtle-ctrl" id="darkToggle" title="Ganti Tema">
+      <svg class="icon icon-xs" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+    </button>
+    <a href="/admin" class="btn-subtle-ctrl btn-admin-entrance" title="Masuk ke Admin Console">
+      <svg class="icon icon-xs" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+      <span>Admin</span>
+    </a>
+  </div>
+
   <!-- GUEST CENTERED CARD (Clean Headerless Index - Screenshot 2 Style) -->
   <main class="guest-card-wrapper">
     <div class="guest-main-card glass">
