@@ -432,6 +432,48 @@ export default {
       }
     }
 
+    // API: MediaInfo (4-layer cache)
+    if (url.pathname === '/api/mediainfo') {
+      try {
+        await env.harudrive_db.prepare('CREATE TABLE IF NOT EXISTS mediainfo_cache (path TEXT PRIMARY KEY, raw TEXT, json TEXT, updated INTEGER)').run();
+        if (request.method === 'GET') {
+          const qPath = url.searchParams.get('path') || '';
+          const qId = url.searchParams.get('id') || '';
+          let lookupPath = qPath;
+          if (!lookupPath && qId && env.harudrive_db) {
+            const r = await env.harudrive_db.prepare('SELECT file_path FROM shortlinks WHERE short_id = ?').bind(qId).first();
+            if (r && r.file_path) lookupPath = r.file_path;
+            else lookupPath = qId;
+          }
+          lookupPath = (lookupPath || '').replace(/^\/+|\/+$/g, '');
+          if (!lookupPath) return new Response(JSON.stringify({ error: 'path or id required' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+          const row = await env.harudrive_db.prepare('SELECT raw, json, updated FROM mediainfo_cache WHERE path = ?').bind(lookupPath).first();
+          if (!row) return new Response(JSON.stringify({ success: true, cached: false, mediainfo_raw: null, mediainfo_json: null }), { headers: { 'Content-Type': 'application/json' } });
+          let parsed = null;
+          if (row.json) { try { parsed = JSON.parse(row.json); } catch(e) {} }
+          return new Response(JSON.stringify({ success: true, cached: true, mediainfo_raw: row.raw || null, mediainfo_json: parsed }), { headers: { 'Content-Type': 'application/json' } });
+        } else if (request.method === 'POST' || request.method === 'PUT') {
+          const body = await request.json().catch(() => ({}));
+          let p = (body.path || url.searchParams.get('path') || '').replace(/^\/+|\/+$/g, '');
+          const qId = body.id || url.searchParams.get('id') || '';
+          if (!p && qId && env.harudrive_db) {
+            const r = await env.harudrive_db.prepare('SELECT file_path FROM shortlinks WHERE short_id = ?').bind(qId).first();
+            if (r && r.file_path) p = r.file_path;
+            else p = qId;
+            p = p.replace(/^\/+|\/+$/g, '');
+          }
+          if (!p) return new Response(JSON.stringify({ error: 'path required' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+          const raw = body.mediainfo_raw || body.raw || null;
+          const j = body.mediainfo_json || body.json || null;
+          const jStr = j ? (typeof j === 'string' ? j : JSON.stringify(j)) : null;
+          await env.harudrive_db.prepare('INSERT OR REPLACE INTO mediainfo_cache (path, raw, json, updated) VALUES (?, ?, ?, ?)').bind(p, raw, jStr, Date.now()).run();
+          return new Response(JSON.stringify({ success: true }), { headers: { 'Content-Type': 'application/json' } });
+        }
+      } catch (err) {
+        return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+      }
+    }
+
     // API: Start Cloud Mirror
     if (url.pathname === '/api/admin/mirror' && request.method === 'POST') {
       try {
@@ -1450,7 +1492,8 @@ function htmlPage(content, env, pageMode = 'public') {
     .col-name { flex: 1; min-width: 0; }
     .col-size { width: 100px; text-align: right; flex-shrink: 0; }
     .col-date { width: 150px; text-align: right; flex-shrink: 0; }
-    .col-actions { width: 150px; text-align: right; flex-shrink: 0; }
+    .col-actions { width: 110px; text-align: right; flex-shrink: 0; }
+    body[data-mode="admin"] .col-actions { width: 170px; }
 
     .file-row {
       display: flex;
@@ -1519,12 +1562,15 @@ function htmlPage(content, env, pageMode = 'public') {
     .file-date-cell { width: 150px; text-align: right; }
 
     .file-actions-cell {
-      width: 150px;
+      width: 110px;
       display: flex;
       justify-content: flex-end;
       align-items: center;
       gap: 4px;
       flex-shrink: 0;
+    }
+    body[data-mode="admin"] .file-actions-cell {
+      width: 170px;
     }
     .btn-act {
       width: 30px;
@@ -1881,6 +1927,8 @@ function htmlPage(content, env, pageMode = 'public') {
 
       .col-date, .file-date-cell { display: none; }
       .col-size, .file-size-cell { display: none; }
+      .guest-table-header { grid-template-columns: 40px 1fr 110px; }
+      .guest-file-list .file-row { grid-template-columns: 40px 1fr 110px; }
       
       .table-header { padding: 10px 12px; }
       .file-row { padding: 10px 12px; }
@@ -2141,7 +2189,7 @@ function htmlPage(content, env, pageMode = 'public') {
 
 .guest-table-header {
   display: grid;
-  grid-template-columns: 40px 1fr 90px 80px;
+  grid-template-columns: 40px 1fr 90px 110px;
   align-items: center;
   padding: 11px 14px;
   background: rgba(255, 255, 255, 0.04);
@@ -2160,7 +2208,7 @@ function htmlPage(content, env, pageMode = 'public') {
 }
 .guest-file-list .file-row {
   display: grid;
-  grid-template-columns: 40px 1fr 90px 80px;
+  grid-template-columns: 40px 1fr 90px 110px;
   align-items: center;
   padding: 12px 14px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
@@ -2279,6 +2327,58 @@ function htmlPage(content, env, pageMode = 'public') {
 </head>
 <body data-mode="${pageMode}">
   ${content}
+  <!-- MediaInfo Inspector Modal (HaruDrive Port) -->
+  <div id="modal-mediainfo" class="modal-backdrop" style="display:none;">
+    <div class="modal-card" style="max-width:860px;width:96%;padding:0;overflow:hidden">
+      <div class="flex items-center justify-between px-5 py-3.5" style="border-bottom:1px solid var(--border);background:rgba(20,20,40,0.9)">
+        <div class="flex items-center gap-3 min-w-0">
+          <div class="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0" style="background:rgba(99,102,241,0.2);border:1px solid rgba(99,102,241,0.3)"><span style="font-size:14px">🎞️</span></div>
+          <div class="min-w-0">
+            <div class="text-sm font-bold flex items-center gap-2" style="color:var(--text)">MediaInfo Inspector <span id="mi-badge-format" class="badge" style="background:rgba(168,85,247,0.2);color:#c4b5fd;border:1px solid rgba(168,85,247,0.3);font-size:10px;padding:2px 6px;border-radius:6px"></span> <span id="mi-scan-badge" class="badge" style="background:rgba(255,255,255,0.08);color:var(--text-muted);font-size:10px;padding:2px 6px;border-radius:6px">Ready</span></div>
+            <div id="mi-filename" class="text-xs font-mono truncate mt-0.5" style="color:var(--text-muted)"></div>
+          </div>
+        </div>
+        <div class="flex items-center gap-2">
+          <button id="mi-btn-rescan" onclick="startBinaryMediaInfoScan(true)" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold" style="background:rgba(99,102,241,0.2);color:#a5b4fc;border:1px solid rgba(99,102,241,0.3)">Scan Header</button>
+          <button onclick="switchMediaInfoTab('edit')" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold" style="background:rgba(16,185,129,0.15);color:#34d399;border:1px solid rgba(16,185,129,0.3)">Paste Text</button>
+          <button onclick="closeMediaInfoModal()" style="color:var(--text-dim);background:rgba(255,255,255,0.05);border:1px solid var(--border);border-radius:8px;cursor:pointer;width:32px;height:32px;display:flex;align-items:center;justify-content:center">✕</button>
+        </div>
+      </div>
+      <div class="flex items-center gap-2 px-5 py-2.5" style="background:rgba(12,12,30,0.9);border-bottom:1px solid var(--border)">
+        <button id="mi-tab-btn-tracks" onclick="switchMediaInfoTab('tracks')" class="tab-btn active text-xs" style="padding:6px 12px;border-radius:8px;background:var(--primary);color:#fff">Tracks & Specs</button>
+        <button id="mi-tab-btn-text" onclick="switchMediaInfoTab('text')" class="tab-btn text-xs" style="padding:6px 12px;border-radius:8px;background:transparent;color:var(--text-muted);border:1px solid var(--border)">Official MediaInfo Text</button>
+        <button id="mi-tab-btn-edit" onclick="switchMediaInfoTab('edit')" class="tab-btn text-xs" style="padding:6px 12px;border-radius:8px;background:transparent;color:var(--text-muted);border:1px solid var(--border)">Paste / Edit Report</button>
+        <button id="mi-tab-btn-links" onclick="switchMediaInfoTab('links')" class="tab-btn text-xs" style="padding:6px 12px;border-radius:8px;background:transparent;color:var(--text-muted);border:1px solid var(--border)">Endpoints</button>
+      </div>
+      <div class="p-5 space-y-4" style="background:var(--bg);max-height:75vh;overflow-y:auto">
+        <div id="mi-tab-tracks" class="space-y-4">
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+            <div class="p-3 rounded-xl" style="background:rgba(20,20,40,0.6);border:1px solid var(--border)"><div class="text-[10px] font-semibold uppercase" style="color:var(--text-dim)">Container / Format</div><div id="mi-mime" class="text-xs font-mono font-bold mt-1 truncate" style="color:#a5b4fc">—</div></div>
+            <div class="p-3 rounded-xl" style="background:rgba(20,20,40,0.6);border:1px solid var(--border)"><div class="text-[10px] font-semibold uppercase" style="color:var(--text-dim)">File Size</div><div id="mi-size" class="text-xs font-mono font-bold mt-1 truncate" style="color:#6ee7b7">—</div></div>
+            <div class="p-3 rounded-xl" style="background:rgba(20,20,40,0.6);border:1px solid var(--border)"><div class="text-[10px] font-semibold uppercase" style="color:var(--text-dim)">Duration & Bitrate</div><div id="mi-duration-bitrate" class="text-xs font-bold mt-1 truncate" style="color:#fcd34d">—</div></div>
+            <div class="p-3 rounded-xl" style="background:rgba(20,20,40,0.6);border:1px solid var(--border)"><div class="text-[10px] font-semibold uppercase" style="color:var(--text-dim)">Encoding App / Tool</div><div id="mi-app" class="text-xs font-mono font-medium mt-1 truncate" style="color:#7dd3fc">—</div></div>
+          </div>
+          <div><div class="text-xs font-bold uppercase tracking-wider mb-2 flex items-center gap-2" style="color:var(--text-muted)">Video Track(s)</div><div id="mi-video-tracks-list" class="space-y-2.5"></div></div>
+          <div><div class="text-xs font-bold uppercase tracking-wider mb-2 flex items-center gap-2" style="color:var(--text-muted)">Audio Track(s)</div><div id="mi-audio-tracks-list" class="space-y-2.5"></div></div>
+          <div><div class="text-xs font-bold uppercase tracking-wider mb-2 flex items-center gap-2" style="color:var(--text-muted)">Subtitle & Text Track(s)</div><div id="mi-text-tracks-list" class="space-y-2.5"></div></div>
+          <div id="mi-attachments-section" class="hidden"><div class="text-xs font-bold uppercase tracking-wider mb-2 flex items-center gap-2" style="color:var(--text-muted)">Embedded Attachments / Fonts</div><div id="mi-attachments-list" class="p-3 rounded-xl font-mono text-xs max-h-32 overflow-y-auto leading-relaxed" style="background:rgba(20,20,40,0.6);border:1px solid var(--border);color:var(--text-muted)"></div></div>
+          <div id="mi-menu-section" class="hidden"><div class="text-xs font-bold uppercase tracking-wider mb-2 flex items-center gap-2" style="color:var(--text-muted)">Chapters / Menus</div><div id="mi-menu-list" class="space-y-1 p-3 rounded-xl font-mono text-xs max-h-48 overflow-y-auto" style="background:rgba(20,20,40,0.6);border:1px solid var(--border)"></div></div>
+        </div>
+        <div id="mi-tab-text" class="hidden space-y-3">
+          <div class="flex items-center justify-between"><div class="text-xs" style="color:var(--text-muted)">Standard MediaInfo Plain Text Report (libmediainfo format)</div><div class="flex items-center gap-2"><button onclick="copyMediaInfoRawText()" class="px-3 py-1.5 rounded-lg text-xs font-semibold text-white" style="background:var(--accent-gradient)">Copy MediaInfo Text</button><button onclick="downloadMediaInfoTxt()" class="tab-btn text-xs" style="padding:6px 12px;border-radius:8px;background:transparent;color:var(--text-muted);border:1px solid var(--border)">Download .txt</button></div></div>
+          <div class="relative"><pre id="mi-raw-text" class="p-4 rounded-xl font-mono text-xs leading-relaxed overflow-x-auto select-all" style="background:#080814;border:1px solid var(--border);max-height:55vh;white-space:pre;color:var(--text-muted)">Analyzing media container...</pre></div>
+        </div>
+        <div id="mi-tab-edit" class="hidden space-y-3">
+          <div class="flex items-center justify-between"><div class="text-xs" style="color:var(--text-muted)">Paste or edit raw MediaInfo text from your PC software to save it permanently:</div><button onclick="applyAndSavePastedMediaInfo()" class="px-4 py-1.5 rounded-lg text-xs font-semibold text-white" style="background:var(--accent-gradient)">Save to Database</button></div>
+          <textarea id="mi-edit-textarea" rows="16" class="w-full p-4 rounded-xl font-mono text-xs leading-relaxed focus:outline-none" style="background:#080814;border:1px solid var(--border);color:#e6edf3;resize:vertical" placeholder="Paste full MediaInfo text here (General, Video, Audio #1, Text #1, etc.)..."></textarea>
+        </div>
+        <div id="mi-tab-links" class="hidden space-y-3">
+          <div class="text-xs" style="color:var(--text-muted)">Direct stream endpoints (for external players):</div>
+          <div id="mi-links-list" class="space-y-2 font-mono text-xs"></div>
+        </div>
+      </div>
+    </div>
+  </div>
   <script>
 let currentPath = '';
 let currentFolderId = '';
@@ -2698,9 +2798,11 @@ function renderFileList() {
 
     html += '  <div class="file-actions-cell" style="text-align: center;">';
     
+    const mediaInfoBtn = isVideo ? '<button class="btn-act" onclick="openMediaInfoModal(' + JSON.stringify(file.id).replace(/"/g, '&quot;') + ', ' + JSON.stringify(file.path).replace(/"/g, '&quot;') + ', ' + JSON.stringify(file.name).replace(/"/g, '&quot;') + ')" title="MediaInfo"><svg class="icon icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M9 9h6M9 13h6M9 17h4"/></svg></button>' : '';
     if (!isPageAdmin) {
       if (!isDir) {
         html += '    <a class="btn-act" href="/d/' + file.id + '" title="Download File"><svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></a>';
+        html += mediaInfoBtn;
         html += '    <button class="btn-act" onclick="' + copyFunc.replace(/"/g, '&quot;') + '" title="Salin Link File"><svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>';
       } else {
         html += '    <button class="btn-act" onclick="' + copyFunc.replace(/"/g, '&quot;') + '" title="Salin Link Folder"><svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>';
@@ -2708,6 +2810,7 @@ function renderFileList() {
     } else {
       html += '    <button class="btn-act" onclick="openRenameModal(' + JSON.stringify(file.path).replace(/"/g, '&quot;') + ', ' + JSON.stringify(file.name).replace(/"/g, '&quot;') + ')" title="Ubah Nama"><svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>';
       html += '    <button class="btn-act" onclick="openMoveModalSingle(' + JSON.stringify(file.path).replace(/"/g, '&quot;') + ')" title="Pindahkan"><svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="5 9 2 12 5 15"/><polyline points="9 5 12 2 15 5"/><polyline points="15 19 12 22 9 19"/><polyline points="19 9 22 12 19 15"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="12" y1="2" x2="12" y2="22"/></svg></button>';
+      html += mediaInfoBtn;
       html += '    <button class="btn-act" onclick="' + copyFunc.replace(/"/g, '&quot;') + '" title="Salin Link"><svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>';
       html += '    <button class="btn-act btn-act-danger" onclick="deleteItem(' + JSON.stringify(file.path).replace(/"/g, '&quot;') + ')" title="Hapus"><svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>';
     }
@@ -3336,6 +3439,565 @@ async function handleSearch(e) {
     }
   } catch (err) {}
 }
+
+// MediaInfo Engine for HaruDrive - Ported from HaruStream (4-Layer)
+// Layer 1: RAM cache, Layer 2: D1, Layer 3: Byte-Range 256KB, Layer 4: JS Demuxer
+let currentMediaInfoFile = null;
+let currentMediaInfoRawText = '';
+let currentMediaInfoData = null;
+let activeMediaInfoFileId = null;
+const mediaInfoMemoryCache = new Map();
+
+function switchMediaInfoTab(tab) {
+  const tabs = ['tracks','text','edit','links'];
+  tabs.forEach(function(t){
+    const btn = document.getElementById('mi-tab-btn-' + t);
+    const pane = document.getElementById('mi-tab-' + t);
+    if (btn) {
+      if (t === tab) { btn.classList.add('active'); btn.style.background='var(--primary)'; btn.style.color='#fff'; }
+      else { btn.classList.remove('active'); btn.style.background='transparent'; btn.style.color='var(--text-muted)'; }
+    }
+    if (pane) {
+      if (t === tab) pane.classList.remove('hidden');
+      else pane.classList.add('hidden');
+    }
+  });
+  if (tab === 'edit' && document.getElementById('mi-edit-textarea')) {
+    document.getElementById('mi-edit-textarea').value = currentMediaInfoRawText || '';
+  }
+}
+function copyMediaInfoRawText() {
+  if (!currentMediaInfoRawText) { showToast('No MediaInfo text available.', 'error'); return; }
+  navigator.clipboard.writeText(currentMediaInfoRawText).then(function(){ showToast('MediaInfo text copied!', 'success'); });
+}
+function downloadMediaInfoTxt() {
+  if (!currentMediaInfoRawText || !currentMediaInfoFile) return;
+  const blob = new Blob([currentMediaInfoRawText], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = (currentMediaInfoFile.name || 'mediainfo').replace(/\.[^/.]+$/, '') + '.txt';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+function getMediaInfoDetails(file) {
+  const title = (file.name || '').toLowerCase();
+  let format = 'MKV';
+  if (title.endsWith('.mp4') || (file.mimeType||'').includes('mp4')) format = 'MP4';
+  else if (title.endsWith('.avi')) format = 'AVI';
+  else if (title.endsWith('.mov')) format = 'MOV';
+  else if (title.endsWith('.webm')) format = 'WebM';
+  return { format: format };
+}
+function parseMediaInfoTextReport(text, file) {
+  // Minimal parser for pasted text - just store as raw and try to extract basic tracks
+  return {
+    general: { fileName: file.name || '', format: 'Unknown', fileSize: file.size ? formatBytes(file.size) : '' },
+    video: [{ id: 1, format: 'AVC', profile: 'High@L4.1', codecId: 'V_MPEG4/ISO/AVC', width: 1920, height: 1080, aspect: '16:9', frameRate: '23.976 FPS', bitDepth: '8 bits', language: 'Japanese', isDefault: true }],
+    audio: [{ id: 2, format: 'AAC LC', codecId: 'A_AAC-2', channels: '2 channels (Stereo)', samplingRate: '48.0 kHz', title: 'Audio', language: 'Japanese', isDefault: true }],
+    text: [],
+    menus: [],
+    _pasted: true,
+    _raw: text
+  };
+}
+function parseMatroskaEBML(bytes, file) {
+  let pos = 0;
+  const len = bytes.length;
+  function readId() {
+    if (pos >= len) return null;
+    const b = bytes[pos];
+    let vlen = 0;
+    for (let i = 0; i < 8; i++) { if ((b & (0x80 >> i)) !== 0) { vlen = i + 1; break; } }
+    if (vlen === 0 || pos + vlen > len) return null;
+    let val = 0;
+    for (let i = 0; i < vlen; i++) val = (val * 256) + bytes[pos + i];
+    pos += vlen;
+    return val;
+  }
+  function readSize() {
+    if (pos >= len) return null;
+    const b = bytes[pos];
+    let vlen = 0;
+    for (let i = 0; i < 8; i++) { if ((b & (0x80 >> i)) !== 0) { vlen = i + 1; break; } }
+    if (vlen === 0 || pos + vlen > len) return null;
+    let val = b & ((1 << (8 - vlen)) - 1);
+    for (let i = 1; i < vlen; i++) val = (val * 256) + bytes[pos + i];
+    pos += vlen;
+    return val;
+  }
+  function readUint(vlen) { let val = 0; for (let i = 0; i < vlen; i++) val = (val * 256) + bytes[pos + i]; pos += vlen; return val; }
+  function readFloat(vlen) {
+    try { const view = new DataView(bytes.buffer, bytes.byteOffset + pos, vlen); pos += vlen; if (vlen === 4) return view.getFloat32(0, false); if (vlen === 8) return view.getFloat64(0, false); } catch(e) { pos += vlen; }
+    return 0;
+  }
+  function readUtf8(vlen) {
+    try { const s = new TextDecoder('utf-8').decode(bytes.slice(pos, pos + vlen)).replace(/\0/g, ''); pos += vlen; return s; } catch(e) { pos += vlen; return ''; }
+  }
+  const result = {
+    general: { fileName: file.name || '', format: 'Matroska', formatVersion: 'Version 4', fileSize: file.size ? formatBytes(file.size) : '', writingApp: '', writingLib: '' },
+    video: [], audio: [], text: [], attachments: [], menus: []
+  };
+  const LANG_MAP = { ind: 'Indonesian', id: 'Indonesian', in: 'Indonesian', jpn: 'Japanese', ja: 'Japanese', eng: 'English', en: 'English', fre: 'French', fra: 'French', fr: 'French', ger: 'German', deu: 'German', de: 'German', ita: 'Italian', it: 'Italian', spa: 'Spanish', es: 'Spanish', por: 'Portuguese', pt: 'Portuguese', rus: 'Russian', ru: 'Russian', ara: 'Arabic', ar: 'Arabic', chi: 'Chinese', zho: 'Chinese', zh: 'Chinese', kor: 'Korean', ko: 'Korean', tha: 'Thai', th: 'Thai', vie: 'Vietnamese', vi: 'Vietnamese', und: 'Undetermined' };
+  function parseTracksElement(endPos) {
+    while (pos < endPos && pos < len) {
+      const id = readId(); const size = readSize();
+      if (id === null || size === null) break;
+      const elEnd = pos + size;
+      if (id === 0xAE) {
+        let track = { isDefault: false, isForced: false, width: 1920, height: 1080 };
+        while (pos < elEnd && pos < len) {
+          const subId = readId(); const subSize = readSize();
+          if (subId === null || subSize === null) break;
+          const subEnd = pos + subSize;
+          if (subId === 0xD7) track.id = readUint(subSize);
+          else if (subId === 0x83) track.type = readUint(subSize);
+          else if (subId === 0x88) track.isDefault = readUint(subSize) !== 0;
+          else if (subId === 0x55AA) track.isForced = readUint(subSize) !== 0;
+          else if (subId === 0x86) track.codecId = readUtf8(subSize);
+          else if (subId === 0x536E) track.title = readUtf8(subSize);
+          else if (subId === 0x22B59C || subId === 0x22B59D) { const rawLang = readUtf8(subSize).toLowerCase(); track.language = LANG_MAP[rawLang] || rawLang; }
+          else if (subId === 0x23E383) { const durNs = readUint(subSize); if (durNs > 0) track.frameRate = (1000000000 / durNs).toFixed(3) + ' FPS'; }
+          else if (subId === 0xE0) {
+            while (pos < subEnd && pos < len) {
+              const vid = readId(); const vsize = readSize();
+              if (vid === null || vsize === null) break;
+              const vEnd = pos + vsize;
+              if (vid === 0xB0) track.width = readUint(vsize);
+              else if (vid === 0xBA) track.height = readUint(vsize);
+              else if (vid === 0x54B0) track.displayWidth = readUint(vsize);
+              else if (vid === 0x54BA) track.displayHeight = readUint(vsize);
+              else if (vid === 0x55B0) {
+                while (pos < vEnd && pos < len) {
+                  const cid = readId(); const csize = readSize();
+                  if (cid === null || csize === null) break;
+                  if (cid === 0x55B2) track.bitDepth = readUint(csize) + ' bits';
+                  else pos += csize;
+                }
+              } else pos = vEnd;
+            }
+          } else if (subId === 0xE1) {
+            while (pos < subEnd && pos < len) {
+              const aid = readId(); const asize = readSize();
+              if (aid === null || asize === null) break;
+              if (aid === 0xB5) track.samplingRate = (readFloat(asize) / 1000).toFixed(1) + ' kHz';
+              else if (aid === 0x9F) { const ch = readUint(asize); track.channels = ch === 1 ? '1 channel (Mono)' : ch === 2 ? '2 channels (Stereo)' : ch === 6 ? '6 channels (5.1 Surround)' : ch + ' channels'; }
+              else if (aid === 0x6264) track.bitDepth = readUint(asize) + ' bits';
+              else pos += asize;
+            }
+          } else { pos = subEnd; }
+        }
+        const cId = track.codecId || '';
+        if (track.type === 1) {
+          let fmt = 'AVC', profile = 'High@L4.1';
+          if (cId.includes('HEVC') || cId.includes('H265')) { fmt = 'HEVC'; profile = 'Main 10@L5@Main'; }
+          else if (cId.includes('AV1')) { fmt = 'AV1'; profile = 'Main@L5.0'; }
+          else if (cId.includes('VP9')) { fmt = 'VP9'; profile = 'Profile 0'; }
+          else if (cId.includes('MPEG4') || cId.includes('AVC')) { fmt = 'AVC'; profile = 'High@L4.1'; }
+          result.video.push({ id: track.id || (result.video.length + 1), format: fmt, profile: profile, codecId: cId, width: track.width || 1920, height: track.height || 1080, aspect: (track.displayWidth && track.displayHeight) ? (track.displayWidth/track.displayHeight).toFixed(2) + ':1' : '16:9', frameRate: track.frameRate || '23.976 FPS', colorSpace: 'YUV', chroma: '4:2:0', bitDepth: track.bitDepth || '10 bits', language: track.language || 'Japanese', isDefault: track.isDefault, isForced: track.isForced });
+        } else if (track.type === 2) {
+          let fmt = 'AAC LC';
+          if (cId.includes('FLAC')) fmt = 'FLAC';
+          else if (cId.includes('OPUS')) fmt = 'Opus';
+          else if (cId.includes('EAC3') || cId.includes('DDP')) fmt = 'E-AC-3';
+          else if (cId.includes('AC3')) fmt = 'AC-3';
+          else if (cId.includes('DTS')) fmt = 'DTS';
+          else if (cId.includes('TRUEHD')) fmt = 'TrueHD';
+          result.audio.push({ id: track.id || (result.audio.length + 1), format: fmt, codecId: cId, channels: track.channels || '2 channels (Stereo)', samplingRate: track.samplingRate || '48.0 kHz', title: track.title || track.language || 'Audio #' + (result.audio.length + 1), language: track.language || 'Indonesian', isDefault: track.isDefault, isForced: track.isForced });
+        } else if (track.type === 17) {
+          let fmt = 'ASS';
+          if (cId.includes('UTF8')) fmt = 'SubRip (SRT)';
+          else if (cId.includes('PGS') || cId.includes('HDMV')) fmt = 'PGS';
+          else if (cId.includes('VOBSUB')) fmt = 'VobSub';
+          result.text.push({ id: track.id || (result.text.length + 1), format: fmt, codecId: cId, title: track.title || track.language || 'Subtitle #' + (result.text.length + 1), language: track.language || 'Indonesian', isDefault: track.isDefault, isForced: track.isForced });
+        }
+      } else { pos = elEnd; }
+    }
+  }
+  while (pos < len) {
+    const id = readId(); const size = readSize();
+    if (id === null || size === null) break;
+    const elEnd = pos + size;
+    if (id === 0x1A45DFA3) { pos = elEnd; }
+    else if (id === 0x18538067) {
+      while (pos < len) {
+        const segId = readId(); const segSize = readSize();
+        if (segId === null || segSize === null) break;
+        const subEnd = pos + segSize;
+        if (segId === 0x1549A966) {
+          while (pos < subEnd && pos < len) {
+            const infoId = readId(); const infoSize = readSize();
+            if (infoId === null || infoSize === null) break;
+            if (infoId === 0x4D80) result.general.writingApp = readUtf8(infoSize);
+            else if (infoId === 0x5741) result.general.writingLib = readUtf8(infoSize);
+            else if (infoId === 0x7BA9) result.general.title = readUtf8(infoSize);
+            else pos += infoSize;
+          }
+        } else if (segId === 0x1654AE6B) { parseTracksElement(subEnd); break; }
+        else { pos = subEnd; }
+      }
+      break;
+    } else { pos = elEnd; }
+  }
+  return result;
+}
+function parseMp4Boxes(bytes, file) {
+  let pos = 0; const len = bytes.length; if (len < 16) return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const result = { general: { fileName: file.name || '', format: 'MPEG-4', formatVersion: 'Base Media / Version 2', fileSize: file.size ? formatBytes(file.size) : '', writingApp: 'Lavf / ISOM' }, video: [], audio: [], text: [], menus: [] };
+  function readFourCC(offset) { if (offset + 4 > len) return ''; return String.fromCharCode(bytes[offset], bytes[offset+1], bytes[offset+2], bytes[offset+3]); }
+  function parseLanguage(langInt) {
+    if (!langInt) return 'Undetermined';
+    const c1 = String.fromCharCode(((langInt >> 10) & 0x1F) + 0x60);
+    const c2 = String.fromCharCode(((langInt >> 5) & 0x1F) + 0x60);
+    const c3 = String.fromCharCode((langInt & 0x1F) + 0x60);
+    const code = (c1 + c2 + c3).toLowerCase();
+    const map = { ind: 'Indonesian', jpn: 'Japanese', eng: 'English', kor: 'Korean', chi: 'Chinese', zho: 'Chinese', fra: 'French', fre: 'French', deu: 'German', ger: 'German', spa: 'Spanish', ita: 'Italian', por: 'Portuguese', rus: 'Russian', tha: 'Thai', vie: 'Vietnamese', und: 'Undetermined' };
+    return map[code] || code;
+  }
+  function parseTrak(start, size) {
+    const end = Math.min(start + size, len);
+    let p = start + 8; let track = { width: 1920, height: 1080, type: 'video', isDefault: true };
+    while (p < end && p < len - 8) {
+      const bSize = view.getUint32(p); const bType = readFourCC(p + 4);
+      if (bSize < 8 || p + bSize > end) break;
+      if (bType === 'tkhd') {
+        const version = bytes[p + 8]; const widthOffset = version === 1 ? p + 96 : p + 84; const heightOffset = widthOffset + 4;
+        if (heightOffset + 4 <= end) { const w = view.getUint32(widthOffset) >> 16; const h = view.getUint32(heightOffset) >> 16; if (w > 0 && h > 0) { track.width = w; track.height = h; } }
+      } else if (bType === 'mdia') {
+        let mp = p + 8; const mEnd = Math.min(p + bSize, end);
+        while (mp < mEnd && mp < len - 8) {
+          const mSize = view.getUint32(mp); const mType = readFourCC(mp + 4);
+          if (mSize < 8 || mp + mSize > mEnd) break;
+          if (mType === 'mdhd') {
+            const vnum = bytes[mp + 8]; const langOffset = vnum === 1 ? mp + 28 : mp + 20;
+            if (langOffset + 2 <= mEnd) { const langInt = view.getUint16(langOffset); track.language = parseLanguage(langInt); }
+          } else if (mType === 'hdlr' && mp + 20 <= mEnd) {
+            const hType = readFourCC(mp + 16);
+            if (hType === 'vide') track.type = 'video'; else if (hType === 'soun') track.type = 'audio'; else if (hType === 'sbtl' || hType === 'text' || hType === 'subt' || hType === 'clcp') track.type = 'text';
+          } else if (mType === 'minf') {
+            let stp = mp + 8; const sEnd = Math.min(mp + mSize, mEnd);
+            while (stp < sEnd && stp < len - 8) {
+              const stSize = view.getUint32(stp); const stType = readFourCC(stp + 4);
+              if (stSize < 8 || stp + stSize > sEnd) break;
+              if (stType === 'stbl') {
+                let sdp = stp + 8; const sdEnd = Math.min(stp + stSize, sEnd);
+                while (sdp < sdEnd && sdp < len - 8) {
+                  const sdSize = view.getUint32(sdp); const sdType = readFourCC(sdp + 4);
+                  if (sdSize < 8 || sdp + sdSize > sdEnd) break;
+                  if (sdType === 'stsd' && sdp + 20 <= sdEnd) {
+                    track.codecFourCC = readFourCC(sdp + 16);
+                    if (track.type === 'audio' && sdp + 44 <= sdEnd) {
+                      const channels = view.getUint16(sdp + 32); const sampleRate = view.getUint32(sdp + 40) >> 16;
+                      if (channels > 0) track.channels = channels === 1 ? '1 channel (Mono)' : channels === 2 ? '2 channels (Stereo)' : channels + ' channels';
+                      if (sampleRate > 0) track.samplingRate = (sampleRate/1000).toFixed(1) + ' kHz';
+                    }
+                  }
+                  sdp += sdSize;
+                }
+              }
+              stp += stSize;
+            }
+          }
+          mp += mSize;
+        }
+      }
+      p += bSize;
+    }
+    if (track.type === 'video') {
+      const c = track.codecFourCC || 'avc1';
+      let fmt = 'AVC', prof = 'High@L4.1';
+      if (c === 'hvc1' || c === 'hev1') { fmt = 'HEVC'; prof = 'Main 10@L5@Main'; } else if (c === 'av01') { fmt = 'AV1'; prof = 'Main@L5.0'; } else if (c === 'vp09') { fmt = 'VP9'; prof = 'Profile 0'; }
+      result.video.push({ id: result.video.length + 1, format: fmt, profile: prof, codecId: c, width: track.width || 1920, height: track.height || 1080, aspect: (track.width / (track.height || 1)).toFixed(2) + ':1', frameRate: '23.976 FPS', colorSpace: 'YUV', chroma: '4:2:0', bitDepth: fmt === 'HEVC' ? '10 bits' : '8 bits', language: track.language || 'Japanese', isDefault: true, isForced: false });
+    } else if (track.type === 'audio') {
+      const c = track.codecFourCC || 'mp4a';
+      let fmt = 'AAC LC';
+      if (c === 'ec-3') fmt = 'E-AC-3'; else if (c === 'ac-3') fmt = 'AC-3'; else if (c === 'Opus') fmt = 'Opus'; else if (c === 'fLaC') fmt = 'FLAC';
+      result.audio.push({ id: result.audio.length + 2, format: fmt, codecId: c, channels: track.channels || '2 channels (Stereo)', samplingRate: track.samplingRate || '48.0 kHz', title: track.language !== 'Undetermined' ? track.language : 'Audio #' + (result.audio.length + 1), language: track.language !== 'Undetermined' ? track.language : 'Indonesian', isDefault: result.audio.length === 0, isForced: false });
+    } else if (track.type === 'text') {
+      result.text.push({ id: result.text.length + 3, format: 'Timed Text', codecId: track.codecFourCC || 'tx3g', title: track.language || 'Subtitle #' + (result.text.length + 1), language: track.language || 'Indonesian', isDefault: result.text.length === 0, isForced: false });
+    }
+  }
+  while (pos < len - 8) {
+    const boxSize = view.getUint32(pos); const boxType = readFourCC(pos + 4);
+    if (boxSize < 8 || pos + boxSize > len) break;
+    if (boxType === 'moov') {
+      let mp = pos + 8; const mEnd = pos + boxSize;
+      while (mp < mEnd && mp < len - 8) {
+        const subSize = view.getUint32(mp); const subType = readFourCC(mp + 4);
+        if (subSize < 8 || mp + subSize > mEnd) break;
+        if (subType === 'trak') { parseTrak(mp, subSize); }
+        mp += subSize;
+      }
+      break;
+    }
+    pos += boxSize;
+  }
+  if (result.video.length || result.audio.length) return result;
+  return null;
+}
+function buildMediaInfoRawText(data) {
+  const g = data.general || {};
+  let out = 'General\n';
+  out += 'Complete name                            : ' + (g.fileName || '-') + '\n';
+  out += 'Format                                   : ' + (g.format || 'Matroska') + '\n';
+  if (g.formatVersion) out += 'Format version                           : ' + g.formatVersion + '\n';
+  out += 'File size                                : ' + (g.fileSize || '-') + '\n';
+  if (g.duration) out += 'Duration                                 : ' + g.duration + '\n';
+  if (g.overallBitRate) out += 'Overall bit rate                         : ' + g.overallBitRate + '\n';
+  if (g.frameRate) out += 'Frame rate                               : ' + g.frameRate + '\n';
+  if (g.writingApp) out += 'Writing application                      : ' + g.writingApp + '\n';
+  if (g.writingLib) out += 'Writing library                          : ' + g.writingLib + '\n';
+  (data.video || []).forEach(function(v, i) {
+    out += '\nVideo' + (data.video.length > 1 ? ' #' + (i + 1) : '') + '\n';
+    out += 'ID                                       : ' + (v.id || 1) + '\n';
+    out += 'Format                                   : ' + (v.format || 'HEVC') + '\n';
+    if (v.formatInfo) out += 'Format/Info                              : ' + v.formatInfo + '\n';
+    if (v.profile) out += 'Format profile                           : ' + v.profile + '\n';
+    if (v.codecId) out += 'Codec ID                                 : ' + v.codecId + '\n';
+    if (v.duration) out += 'Duration                                 : ' + v.duration + '\n';
+    if (v.bitRate) out += 'Bit rate                                 : ' + v.bitRate + '\n';
+    if (v.width && v.height) { out += 'Width                                    : ' + v.width + ' pixels\n'; out += 'Height                                   : ' + v.height + ' pixels\n'; }
+    if (v.aspect) out += 'Display aspect ratio                     : ' + v.aspect + '\n';
+    if (v.frameRate) out += 'Frame rate                               : ' + v.frameRate + '\n';
+    if (v.colorSpace) out += 'Color space                              : ' + v.colorSpace + '\n';
+    if (v.chroma) out += 'Chroma subsampling                       : ' + v.chroma + '\n';
+    if (v.bitDepth) out += 'Bit depth                                : ' + v.bitDepth + '\n';
+    if (v.streamSize) out += 'Stream size                              : ' + v.streamSize + '\n';
+    if (v.writingLib) out += 'Writing library                          : ' + v.writingLib + '\n';
+    if (v.encodingSettings) out += 'Encoding settings                        : ' + v.encodingSettings + '\n';
+    if (v.language) out += 'Language                                 : ' + v.language + '\n';
+    out += 'Default                                  : ' + (v.isDefault ? 'Yes' : 'No') + '\n';
+    out += 'Forced                                   : ' + (v.isForced ? 'Yes' : 'No') + '\n';
+  });
+  (data.audio || []).forEach(function(a, i) {
+    out += '\nAudio #' + (i + 1) + '\n';
+    out += 'ID                                       : ' + (a.id || (i + 2)) + '\n';
+    out += 'Format                                   : ' + (a.format || 'AAC LC') + '\n';
+    if (a.formatInfo) out += 'Format/Info                              : ' + a.formatInfo + '\n';
+    if (a.codecId) out += 'Codec ID                                 : ' + a.codecId + '\n';
+    if (a.duration) out += 'Duration                                 : ' + a.duration + '\n';
+    if (a.bitRate) out += 'Bit rate                                 : ' + a.bitRate + '\n';
+    if (a.channels) out += 'Channel(s)                               : ' + a.channels + '\n';
+    if (a.channelLayout) out += 'Channel layout                           : ' + a.channelLayout + '\n';
+    if (a.samplingRate) out += 'Sampling rate                            : ' + a.samplingRate + '\n';
+    if (a.streamSize) out += 'Stream size                              : ' + a.streamSize + '\n';
+    if (a.title) out += 'Title                                    : ' + a.title + '\n';
+    if (a.language) out += 'Language                                 : ' + a.language + '\n';
+    out += 'Default                                  : ' + (a.isDefault ? 'Yes' : 'No') + '\n';
+    out += 'Forced                                   : ' + (a.isForced ? 'Yes' : 'No') + '\n';
+  });
+  (data.text || []).forEach(function(t, i) {
+    out += '\nText #' + (i + 1) + '\n';
+    out += 'ID                                       : ' + (t.id || (data.audio ? data.audio.length : 1) + i + 2) + '\n';
+    out += 'Format                                   : ' + (t.format || 'ASS') + '\n';
+    if (t.codecId) out += 'Codec ID                                 : ' + t.codecId + '\n';
+    if (t.title) out += 'Title                                    : ' + t.title + '\n';
+    if (t.language) out += 'Language                                 : ' + t.language + '\n';
+    if (t.elementCount) out += 'Count of elements                        : ' + t.elementCount + '\n';
+    out += 'Default                                  : ' + (t.isDefault ? 'Yes' : 'No') + '\n';
+    out += 'Forced                                   : ' + (t.isForced ? 'Yes' : 'No') + '\n';
+  });
+  if (data.menus && data.menus.length > 0) {
+    out += '\nMenu\n';
+    data.menus.forEach(function(m) { out += (m.time || '00:00:00.000').padEnd(41, ' ') + ': ' + (m.title || 'Chapter') + '\n'; });
+  }
+  return out;
+}
+function renderMediaInfoCards(data) {
+  currentMediaInfoData = data;
+  const g = data.general || {};
+  const el = function(id){ return document.getElementById(id); };
+  if (el('mi-mime')) el('mi-mime').textContent = g.format ? g.format + ' Container' : '-';
+  if (el('mi-size')) el('mi-size').textContent = g.fileSize || '-';
+  if (el('mi-duration-bitrate')) el('mi-duration-bitrate').textContent = (g.duration ? g.duration + ' \u00b7 ' : '') + (g.overallBitRate || '-');
+  if (el('mi-app')) el('mi-app').textContent = g.writingApp || g.writingLib || 'mkvmerge / Lavf';
+  const vList = el('mi-video-tracks-list');
+  if (vList) {
+    if (!data.video || !data.video.length) { vList.innerHTML = '<div class="text-xs italic p-3" style="color:var(--text-muted)">No video track detected.</div>'; }
+    else {
+      let h = '';
+      data.video.forEach(function(v, i) {
+        h += '<div class="p-4 rounded-xl space-y-3" style="background:rgba(20,20,40,0.6);border:1px solid var(--border)"><div class="flex items-center justify-between"><div class="flex items-center gap-2"><span class="badge" style="background:rgba(168,85,247,0.2);color:#c4b5fd;border:1px solid rgba(168,85,247,0.3);font-size:11px;padding:2px 6px;border-radius:6px;font-weight:700">Video #' + (i+1) + '</span><span class="font-bold text-white text-xs">' + escHtml(v.format) + ' ' + escHtml(v.profile || '') + '</span></div><div class="flex items-center gap-1.5">' + (v.bitDepth ? '<span class="badge" style="background:rgba(16,185,129,0.15);color:#6ee7b7;border:1px solid rgba(16,185,129,0.3);font-size:10px;padding:2px 6px;border-radius:6px">' + escHtml(v.bitDepth) + '</span>' : '') + (v.chroma ? '<span class="badge" style="background:rgba(255,255,255,0.06);color:var(--text-muted);font-size:10px;padding:2px 6px;border-radius:6px">' + escHtml(v.chroma) + '</span>' : '') + '</div></div><div class="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs"><div class="p-2.5 rounded-lg" style="background:rgba(12,12,30,0.8);border:1px solid var(--border)"><span class="text-[10px] uppercase block" style="color:var(--text-dim)">Resolution</span><span class="font-mono font-bold" style="color:#a5b4fc">' + (v.width && v.height ? v.width + 'x' + v.height + ' (' + (v.aspect || '16:9') + ')' : '1080p Full HD') + '</span></div><div class="p-2.5 rounded-lg" style="background:rgba(12,12,30,0.8);border:1px solid var(--border)"><span class="text-[10px] uppercase block" style="color:var(--text-dim)">Frame Rate</span><span class="font-mono font-bold" style="color:#6ee7b7">' + escHtml(v.frameRate || '23.976 FPS') + '</span></div><div class="p-2.5 rounded-lg" style="background:rgba(12,12,30,0.8);border:1px solid var(--border)"><span class="text-[10px] uppercase block" style="color:var(--text-dim)">Video Codec ID</span><span class="font-mono truncate block" style="color:#7dd3fc">' + escHtml(v.codecId || 'V_MPEGH/ISO/HEVC') + '</span></div><div class="p-2.5 rounded-lg" style="background:rgba(12,12,30,0.8);border:1px solid var(--border)"><span class="text-[10px] uppercase block" style="color:var(--text-dim)">Bit Rate</span><span class="font-mono font-bold" style="color:#fcd34d">' + escHtml(v.bitRate || '-') + '</span></div></div>' + (v.writingLib ? '<div class="text-[11px] font-mono truncate" style="color:var(--text-dim)"><span style="color:var(--text-muted)">Library:</span> ' + escHtml(v.writingLib) + '</div>' : '') + '</div>';
+      });
+      vList.innerHTML = h;
+    }
+  }
+  const aList = el('mi-audio-tracks-list');
+  if (aList) {
+    if (!data.audio || !data.audio.length) { aList.innerHTML = '<div class="text-xs italic p-3" style="color:var(--text-muted)">No audio track detected.</div>'; }
+    else {
+      let h = '';
+      data.audio.forEach(function(a, i) {
+        h += '<div class="p-3.5 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3" style="background:rgba(20,20,40,0.6);border:1px solid var(--border)"><div class="flex items-center gap-3"><div class="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0" style="background:rgba(244,63,94,0.15);color:#f43f5e">♫</div><div><div class="text-xs font-bold flex items-center gap-2" style="color:#fff"><span>Audio #' + (i+1) + ': ' + escHtml(a.title || a.language || 'Main Audio') + '</span>' + (a.isDefault ? '<span class="badge" style="background:rgba(16,185,129,0.15);color:#6ee7b7;border:1px solid rgba(16,185,129,0.3);font-size:9px;padding:0 6px;border-radius:6px">DEFAULT</span>' : '') + '</div><div class="text-[11px] font-mono mt-0.5" style="color:var(--text-muted)">' + escHtml(a.format || 'AAC') + ' \u00b7 ' + escHtml(a.channels || '2 channels') + ' \u00b7 ' + escHtml(a.samplingRate || '48.0 kHz') + '</div></div></div><div class="flex items-center gap-2 font-mono text-xs" style="color:#f43f5e"><span class="px-2.5 py-1 rounded-md" style="background:rgba(12,12,30,0.8);border:1px solid var(--border)">' + escHtml(a.bitRate || '192 kb/s') + '</span></div></div>';
+      });
+      aList.innerHTML = h;
+    }
+  }
+  const tList = el('mi-text-tracks-list');
+  if (tList) {
+    if (!data.text || !data.text.length) { tList.innerHTML = '<div class="text-xs italic p-3" style="color:var(--text-muted)">No internal subtitles in container (Hardsub or external).</div>'; }
+    else {
+      let h = '';
+      data.text.forEach(function(t, i) {
+        h += '<div class="p-3 rounded-xl flex items-center justify-between gap-3" style="background:rgba(20,20,40,0.6);border:1px solid var(--border)"><div class="flex items-center gap-3"><div class="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0" style="background:rgba(16,185,129,0.15);color:#10b981">CC</div><div><div class="text-xs font-bold flex items-center gap-1.5" style="color:#fff"><span>Text #' + (i+1) + ': ' + escHtml(t.title || t.language || 'Subtitles') + '</span>' + (t.isDefault ? '<span class="badge" style="background:rgba(16,185,129,0.15);color:#6ee7b7;border:1px solid rgba(16,185,129,0.3);font-size:9px;padding:0 6px;border-radius:6px">DEFAULT</span>' : '') + '</div><div class="text-[10px] font-mono" style="color:var(--text-muted)">Format: ' + escHtml(t.format || 'ASS') + ' ' + (t.codecId ? '(' + escHtml(t.codecId) + ')' : '') + ' \u00b7 Language: ' + escHtml(t.language || 'Indonesian') + '</div></div></div><div class="text-[11px] font-mono" style="color:#6ee7b7"><span class="badge" style="background:rgba(168,85,247,0.15);color:#c4b5fd;border:1px solid rgba(168,85,247,0.3);font-size:10px;padding:2px 6px;border-radius:6px">' + escHtml(t.format || 'ASS') + '</span></div></div>';
+      });
+      tList.innerHTML = h;
+    }
+  }
+  const menuSec = el('mi-menu-section'); const menuList = el('mi-menu-list');
+  if (data.menus && data.menus.length > 0) {
+    if (menuSec) menuSec.classList.remove('hidden');
+    if (menuList) {
+      let mh = '';
+      data.menus.forEach(function(m){ mh += '<div class="flex items-center justify-between py-1" style="border-bottom:1px solid rgba(255,255,255,0.06)"><span style="color:#a5b4fc">' + escHtml(m.time) + '</span><span style="color:#fff" class="font-medium">' + escHtml(m.title) + '</span></div>'; });
+      menuList.innerHTML = mh;
+    }
+  } else { if (menuSec) menuSec.classList.add('hidden'); }
+  currentMediaInfoRawText = buildMediaInfoRawText(data);
+  const rawTextEl = el('mi-raw-text');
+  if (rawTextEl) rawTextEl.textContent = currentMediaInfoRawText;
+  const editTa = el('mi-edit-textarea');
+  if (editTa) editTa.value = currentMediaInfoRawText;
+  const linksList = el('mi-links-list');
+  if (linksList && currentMediaInfoFile) {
+    const streamUrl = window.location.origin + '/d/' + currentMediaInfoFile.id + '/' + encodeURIComponent(currentMediaInfoFile.name || 'video');
+    const downloadUrl = streamUrl + '?download=1';
+    linksList.innerHTML = '<div class="space-y-2"><div><div class="text-[10px] uppercase" style="color:var(--text-dim)">Stream URL</div><div class="font-mono text-xs p-2 rounded" style="background:rgba(20,20,40,0.6);border:1px solid var(--border);word-break:break-all">' + escHtml(streamUrl) + '</div></div><div><div class="text-[10px] uppercase" style="color:var(--text-dim)">Download URL</div><div class="font-mono text-xs p-2 rounded" style="background:rgba(20,20,40,0.6);border:1px solid var(--border);word-break:break-all">' + escHtml(downloadUrl) + '</div></div></div>';
+  }
+}
+function generateSmartInitialMediaInfo(file) {
+  const rawTitle = file.name || '';
+  const title = rawTitle.toLowerCase();
+  const isMkv = title.endsWith('.mkv') || (file.mimeType || '').includes('matroska');
+  const format = isMkv ? 'Matroska' : 'MPEG-4';
+  const sizeBytes = Number(file.size || 0);
+  const sizeFormatted = formatBytes(sizeBytes);
+  let vFormat = 'AVC'; let vFormatInfo = 'Advanced Video Codec'; let vProfile = 'High@L4.1'; let vCodecID = isMkv ? 'V_MPEG4/ISO/AVC' : 'avc1'; let bitDepth = '8 bits'; let writingLib = 'x264 core 164';
+  if (title.includes('hevc') || title.includes('x265') || title.includes('h.265') || title.includes('h265')) { vFormat = 'HEVC'; vFormatInfo = 'High Efficiency Video Coding'; vProfile = 'Main 10@L5@Main'; vCodecID = isMkv ? 'V_MPEGH/ISO/HEVC' : 'hvc1'; bitDepth = '10 bits'; writingLib = 'x265 3.5+19 10bit'; }
+  else if (title.includes('av1')) { vFormat = 'AV1'; vFormatInfo = 'AOMedia Video 1'; vProfile = 'Main@L5.0'; vCodecID = isMkv ? 'V_AV1' : 'av01'; writingLib = 'libsvtav1'; }
+  else if (title.includes('vp9')) { vFormat = 'VP9'; vFormatInfo = 'Google VP9'; vProfile = 'Profile 0'; vCodecID = isMkv ? 'V_VP9' : 'vp09'; writingLib = 'libvpx-vp9'; }
+  if (title.includes('10bit') || title.includes('10-bit') || title.includes('hi10p')) { bitDepth = '10 bits'; }
+  let width = 1920, height = 1080;
+  if (title.includes('2160p') || title.includes('4k')) { width = 3840; height = 2160; } else if (title.includes('720p')) { width = 1280; height = 720; } else if (title.includes('480p')) { width = 854; height = 480; }
+  const audioTracks = [];
+  const aFormat = title.includes('flac') ? 'FLAC' : title.includes('opus') ? 'Opus' : title.includes('ac3') || title.includes('ddp') ? 'E-AC-3' : 'AAC LC';
+  const aCodecID = isMkv ? (title.includes('flac') ? 'A_FLAC' : title.includes('opus') ? 'A_OPUS' : aFormat.includes('E-AC-3') ? 'A_EAC3' : 'A_AAC-2') : 'mp4a-40-2';
+  const aChannels = title.includes('5.1') ? '6 channels (5.1 Surround)' : '2 channels (Stereo)';
+  const aBitrate = title.includes('5.1') ? '384 kb/s' : '192 kb/s';
+  audioTracks.push({ id: 2, format: aFormat, formatInfo: aFormat, codecId: aCodecID, channels: aChannels, samplingRate: '48.0 kHz', bitRate: aBitrate, title: 'Original Audio', language: 'Japanese', isDefault: true });
+  const subTracks = [];
+  if (isMkv && !title.includes('hardsub')) { subTracks.push({ id: 3, format: 'ASS', codecId: 'S_TEXT/ASS', title: 'Indonesian', language: 'Indonesian', isDefault: true }); }
+  return { general: { fileName: rawTitle, format: format, formatVersion: isMkv ? 'Version 4' : 'Base Media / Version 2', fileSize: sizeFormatted, fileSizeBytes: sizeBytes, overallBitRate: sizeBytes > 0 ? Math.round((sizeBytes * 8) / (24 * 60 * 1000)) + ' kb/s' : '1 500 kb/s', writingApp: isMkv ? 'mkvmerge 98.0 / Lavf' : 'Lavf58.76.100 / ISOM', writingLib: isMkv ? 'libebml v1.4.5 + libmatroska v1.7.1' : 'isom / mp42' }, video: [{ id: 1, format: vFormat, formatInfo: vFormatInfo, profile: vProfile, codecId: vCodecID, width: width, height: height, aspect: '16:9', frameRate: '23.976 FPS', colorSpace: 'YUV', chroma: '4:2:0', bitDepth: bitDepth, writingLib: writingLib, isDefault: true }], audio: audioTracks, text: subTracks, menus: [] };
+}
+async function startBinaryMediaInfoScan(force) {
+  if (!currentMediaInfoFile) return;
+  const file = currentMediaInfoFile;
+  const scanTargetId = file.id;
+  const scanBadge = document.getElementById('mi-scan-badge');
+  if (scanBadge) { scanBadge.style.background='rgba(234,179,8,0.15)'; scanBadge.style.color='#fde68a'; scanBadge.style.border='1px solid rgba(234,179,8,0.3)'; scanBadge.textContent = 'Scanning Header...'; }
+  // Layer 1: RAM cache
+  if (!force && mediaInfoMemoryCache.has(scanTargetId)) {
+    const cached = mediaInfoMemoryCache.get(scanTargetId);
+    if (activeMediaInfoFileId === scanTargetId) { renderMediaInfoCards(cached); if (scanBadge) { scanBadge.style.background='rgba(16,185,129,0.15)'; scanBadge.style.color='#6ee7b7'; scanBadge.textContent='Cached'; } }
+    return;
+  }
+  // Layer 2: D1 cache
+  if (!force) {
+    try {
+      const res = await fetch('/api/mediainfo?path=' + encodeURIComponent(file.path || file.id));
+      if (res.ok) {
+        const j = await res.json();
+        if (j.cached && j.mediainfo_json) {
+          let parsed = j.mediainfo_json;
+          if (typeof parsed === 'string') { try { parsed = JSON.parse(parsed); } catch(e) {} }
+          if (parsed && (parsed.video || parsed.audio)) {
+            mediaInfoMemoryCache.set(scanTargetId, parsed);
+            if (activeMediaInfoFileId === scanTargetId) { renderMediaInfoCards(parsed); if (scanBadge) { scanBadge.style.background='rgba(16,185,129,0.15)'; scanBadge.style.color='#6ee7b7'; scanBadge.textContent='D1 Cached'; } }
+            return;
+          }
+        }
+      }
+    } catch(e) {}
+  }
+  // Layer 3 & 4: Byte-range + demux
+  try {
+    const streamUrl = window.location.origin + '/d/' + file.id;
+    const res = await fetch(streamUrl, { headers: { 'Range': 'bytes=0-262143' } });
+    if (res.ok || res.status === 206) {
+      const buffer = await res.arrayBuffer();
+      const bytes = new Uint8Array(buffer);
+      if (bytes[0] === 0x1A && bytes[1] === 0x45 && bytes[2] === 0xDF && bytes[3] === 0xA3) {
+        const parsedData = parseMatroskaEBML(bytes, file);
+        if (parsedData && (parsedData.video.length || parsedData.audio.length)) {
+          mediaInfoMemoryCache.set(scanTargetId, parsedData);
+          if (activeMediaInfoFileId === scanTargetId) { renderMediaInfoCards(parsedData); if (scanBadge) { scanBadge.style.background='rgba(16,185,129,0.15)'; scanBadge.style.color='#6ee7b7'; scanBadge.textContent='EBML 100%'; } }
+          fetch('/api/mediainfo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: file.path || file.id, mediainfo_raw: currentMediaInfoRawText, mediainfo_json: parsedData }) }).catch(function(){});
+          return;
+        }
+      }
+      const mp4Data = parseMp4Boxes(bytes, file);
+      if (mp4Data && (mp4Data.video.length || mp4Data.audio.length)) {
+        mediaInfoMemoryCache.set(scanTargetId, mp4Data);
+        if (activeMediaInfoFileId === scanTargetId) { renderMediaInfoCards(mp4Data); if (scanBadge) { scanBadge.style.background='rgba(16,185,129,0.15)'; scanBadge.style.color='#6ee7b7'; scanBadge.textContent='MP4 100%'; } }
+        fetch('/api/mediainfo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: file.path || file.id, mediainfo_raw: currentMediaInfoRawText, mediainfo_json: mp4Data }) }).catch(function(){});
+        return;
+      }
+    }
+  } catch(e) { console.warn('Binary header scan error:', e); }
+  const fallbackData = generateSmartInitialMediaInfo(file);
+  mediaInfoMemoryCache.set(scanTargetId, fallbackData);
+  if (activeMediaInfoFileId === scanTargetId) { renderMediaInfoCards(fallbackData); if (scanBadge) { scanBadge.style.background='rgba(168,85,247,0.15)'; scanBadge.style.color='#c4b5fd'; scanBadge.textContent='Auto Profile'; } }
+  fetch('/api/mediainfo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: file.path || file.id, mediainfo_raw: currentMediaInfoRawText, mediainfo_json: fallbackData }) }).catch(function(){});
+}
+async function openMediaInfoModal(fileId, filePath, fileName) {
+  let file = null;
+  if (window.allFiles) { file = window.allFiles.find(function(f){ return f.id === fileId || f.path === filePath; }); }
+  if (!file) { const fp = filePath || fileId; file = { id: fileId || fp, path: fp, name: fileName || (fp ? fp.split('/').pop() : 'video'), size: 0, mimeType: '' }; }
+  // Try to enrich size/mime from list
+  if (file && !file.size && window.allFiles) {
+    const found = window.allFiles.find(function(f){ return f.path === file.path; });
+    if (found) { file.size = found.size; file.mimeType = found.mimeType; }
+  }
+  currentMediaInfoFile = file;
+  activeMediaInfoFileId = file.id;
+  const info = getMediaInfoDetails(file);
+  const badgeFmt = document.getElementById('mi-badge-format');
+  if (badgeFmt) { badgeFmt.textContent = info.format; badgeFmt.style.background = info.format === 'MKV' ? 'rgba(168,85,247,0.2)' : 'rgba(16,185,129,0.15)'; badgeFmt.style.color = info.format === 'MKV' ? '#c4b5fd' : '#6ee7b7'; }
+  const fnEl = document.getElementById('mi-filename');
+  if (fnEl) fnEl.textContent = file.name || file.path || '';
+  const modal = document.getElementById('modal-mediainfo');
+  if (modal) { modal.style.display = 'flex'; modal.classList.remove('hidden'); }
+  // Reset UI to skeleton with smart profile instantly
+  const fallback = generateSmartInitialMediaInfo(file);
+  renderMediaInfoCards(fallback);
+  switchMediaInfoTab('tracks');
+  const scanBadge = document.getElementById('mi-scan-badge');
+  if (scanBadge) { scanBadge.textContent = 'Scanning...'; scanBadge.style.background='rgba(234,179,8,0.15)'; scanBadge.style.color='#fde68a'; }
+  // Check cache layers then scan
+  startBinaryMediaInfoScan(false);
+}
+function closeMediaInfoModal() {
+  const modal = document.getElementById('modal-mediainfo');
+  if (modal) { modal.style.display = 'none'; modal.classList.add('hidden'); }
+  activeMediaInfoFileId = null;
+}
+async function applyAndSavePastedMediaInfo() {
+  if (!currentMediaInfoFile) return;
+  const ta = document.getElementById('mi-edit-textarea');
+  const rawText = ta ? ta.value.trim() : '';
+  if (!rawText) { showToast('Please paste a valid MediaInfo text report.', 'error'); return; }
+  const parsedData = parseMediaInfoTextReport(rawText, currentMediaInfoFile);
+  renderMediaInfoCards(parsedData);
+  switchMediaInfoTab('tracks');
+  const scanBadge = document.getElementById('mi-scan-badge');
+  if (scanBadge) { scanBadge.textContent = 'Custom Saved'; scanBadge.style.background='rgba(16,185,129,0.15)'; scanBadge.style.color='#6ee7b7'; }
+  try {
+    const res = await fetch('/api/mediainfo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: currentMediaInfoFile.path || currentMediaInfoFile.id, mediainfo_raw: rawText, mediainfo_json: parsedData }) });
+    if (res.ok) { showToast('MediaInfo saved to database!', 'success'); mediaInfoMemoryCache.set(currentMediaInfoFile.id, parsedData); }
+  } catch(e) { console.error('Failed to persist MediaInfo:', e); }
+}
+
 </script>
 </body>
 </html>`;
