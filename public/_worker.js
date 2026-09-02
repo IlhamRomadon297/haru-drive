@@ -2153,7 +2153,7 @@ function initAdminConsole() {
 }
 
 function unlockAdminConsole() {
-  const pinInput = document.getElementById('adminPinInput');
+  const pinInput = document.getElementById('gatePinInput');
   const errText = document.getElementById('loginPinError');
   const pin = (pinInput?.value || '').trim();
 
@@ -3247,8 +3247,9 @@ function adminConsoleUI() {
       <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 20px;">Masukkan PIN Admin untuk mengelola storage:</p>
       
       <div style="display: flex; flex-direction: column; gap: 14px;">
-        <input type="text" id="gatePinInput" inputmode="numeric" placeholder="••••••" maxlength="10" autocomplete="off" data-lpignore="true" data-1p-ignore="true" class="form-input-pro pin-input-stealth">
+        <input type="text" id="gatePinInput" inputmode="numeric" placeholder="••••••" maxlength="10" autocomplete="off" data-lpignore="true" data-1p-ignore="true" class="form-input-pro pin-input-stealth" onkeydown="if(event.key==='Enter')unlockAdminConsole()">
         <button class="nav-btn" style="width: 100%; justify-content: center; padding: 12px; background: var(--accent-gradient); color: white; border: none; font-size: 0.95rem; font-weight: 700;" onclick="unlockAdminConsole()">Buka Console Admin</button>
+        <div id="loginPinError" style="display: none; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.4); color: #f87171; padding: 9px 12px; border-radius: 10px; font-size: 0.82rem;"></div>
       </div>
     </div>
   </div>
