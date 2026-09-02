@@ -1113,6 +1113,7 @@ function htmlPage(content, env, pageMode = 'public') {
       width: 22px;
       height: 22px;
       display: block;
+      overflow: visible;
       fill: #ec4899;
       filter: drop-shadow(0 0 6px rgba(236, 72, 153, 0.6));
       flex-shrink: 0;
@@ -1158,6 +1159,8 @@ function htmlPage(content, env, pageMode = 'public') {
     .logo-glow-wrap {
       width: 38px;
       height: 38px;
+      overflow: visible;
+      flex-shrink: 0;
       border-radius: 12px;
       background: rgba(236, 72, 153, 0.15);
       border: 1px solid rgba(236, 72, 153, 0.4);
@@ -1338,6 +1341,8 @@ function htmlPage(content, env, pageMode = 'public') {
       justify-content: space-between;
       gap: 12px;
       flex-wrap: wrap;
+      min-width: 0;
+      overflow: hidden;
     }
     .crumb-group {
       display: flex;
@@ -1345,8 +1350,15 @@ function htmlPage(content, env, pageMode = 'public') {
       gap: 6px;
       font-size: 0.88rem;
       font-weight: 600;
-      flex-wrap: wrap;
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      scrollbar-width: none;
+      -ms-overflow-style: none;
     }
+    .crumb-group::-webkit-scrollbar { display: none; }
     .crumb {
       color: var(--primary-light);
       cursor: pointer;
@@ -1354,6 +1366,15 @@ function htmlPage(content, env, pageMode = 'public') {
       display: inline-flex;
       align-items: center;
       gap: 4px;
+      max-width: 180px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex-shrink: 1;
+      min-width: 0;
+    }
+    .crumb.active {
+      max-width: 260px;
     }
     .crumb:hover { text-decoration: underline; }
     .crumb-sep { color: var(--text-dim); }
@@ -1368,10 +1389,11 @@ function htmlPage(content, env, pageMode = 'public') {
 
     .search-box {
       position: relative;
-      flex: 1 1 260px;
-      min-width: 220px;
-      max-width: 480px;
+      flex: 1 1 0;
+      min-width: 140px;
+      max-width: 360px;
     }
+    .search-clear-btn:hover { background: rgba(236,72,153,0.15); border-color: rgba(236,72,153,0.4); color: #ec4899; }
     
     .btn-action-tool {
       display: inline-flex;
@@ -1733,6 +1755,7 @@ function htmlPage(content, env, pageMode = 'public') {
       background: rgba(11, 15, 25, 0.5);
       max-height: 180px;
       overflow-y: auto;
+      overflow-x: hidden;
       padding: 6px;
       display: flex;
       flex-direction: column;
@@ -1755,6 +1778,25 @@ function htmlPage(content, env, pageMode = 'public') {
       background: rgba(99, 102, 241, 0.1);
       color: var(--text);
     }
+    .picker-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.86rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      transition: all 0.15s;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      min-width: 0;
+      flex-shrink: 0;
+    }
+    .picker-item:hover { background: rgba(99, 102, 241, 0.1); color: var(--text); }
+    .picker-item.active { background: rgba(236, 72, 153, 0.15); border: 1px solid rgba(236, 72, 153, 0.4); color: #ec4899; font-weight: 700; }
     .folder-tree-item.selected {
       background: rgba(236, 72, 153, 0.15);
       border: 1px solid rgba(236, 72, 153, 0.4);
@@ -1818,18 +1860,21 @@ function htmlPage(content, env, pageMode = 'public') {
       }
       .toolbar-actions {
         display: flex;
-        flex-wrap: wrap;
+        flex-wrap: nowrap;
         gap: 8px;
         width: 100%;
+        align-items: center;
       }
       .search-box {
-        flex: 1 1 200px;
+        flex: 1 1 0;
         min-width: 0;
-        max-width: 100%;
+        max-width: none;
       }
       .btn-action-tool {
         padding: 8px 10px;
         font-size: 0.78rem;
+        flex-shrink: 0;
+        white-space: nowrap;
       }
 
       .col-date, .file-date-cell { display: none; }
@@ -2276,17 +2321,24 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  const searchInput = document.getElementById('searchInput');
-  if (searchInput) {
-    searchInput.addEventListener('input', debounce(handleSearch, 300));
-  }
-
-  document.addEventListener('keydown', (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
-      e.preventDefault();
-      searchInput?.focus();
+    const searchInput = document.getElementById('searchInput');
+    if (searchInput) {
+      searchInput.addEventListener('input', debounce(handleSearch, 300));
     }
-  });
+    const searchClearBtn = document.getElementById('searchClearBtn');
+    if (searchInput && searchClearBtn) {
+      const toggleClear = () => { searchClearBtn.style.display = searchInput.value ? 'flex' : 'none'; };
+      searchInput.addEventListener('input', toggleClear);
+      toggleClear();
+      searchClearBtn.addEventListener('click', () => { searchInput.value = ''; toggleClear(); searchInput.focus(); searchInput.dispatchEvent(new Event('input')); });
+    }
+  
+    document.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        searchInput?.focus();
+      }
+    });
 
   window.addEventListener('popstate', handlePopState);
 });
@@ -3436,7 +3488,8 @@ function publicIndexUI() {
       <div class="toolbar-actions">
         <div class="search-box">
           <svg class="icon icon-xs" viewBox="0 0 24 24" style="position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--text-dim); pointer-events: none;"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          <input type="text" id="searchInput" class="form-input-pro" placeholder="Cari file global (Ctrl+K)" style="padding-left: 36px;">
+          <input type="text" id="searchInput" class="form-input-pro" placeholder="Cari file global (Ctrl+K)" style="padding-left: 36px; padding-right: 36px;">
+          <button id="searchClearBtn" class="search-clear-btn" title="Hapus pencarian" style="position:absolute; right:8px; top:50%; transform:translateY(-50%); display:none; background:rgba(255,255,255,0.08); border:1px solid var(--border); border-radius:50%; width:22px; height:22px; align-items:center; justify-content:center; cursor:pointer; color:var(--text-dim);"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
         </div>
         <button class="btn-action-tool" onclick="loadFolder(currentPath, currentFolderId)" title="Refresh">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
@@ -3579,7 +3632,8 @@ function adminConsoleUI() {
       <div class="toolbar-actions">
         <div class="search-box">
           <svg class="icon icon-xs" viewBox="0 0 24 24" style="position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--text-dim); pointer-events: none;"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          <input type="text" id="searchInput" class="form-input-pro" placeholder="Cari file global (Ctrl+K)" style="padding-left: 36px;">
+          <input type="text" id="searchInput" class="form-input-pro" placeholder="Cari file global (Ctrl+K)" style="padding-left: 36px; padding-right: 36px;">
+          <button id="searchClearBtn" class="search-clear-btn" title="Hapus pencarian" style="position:absolute; right:8px; top:50%; transform:translateY(-50%); display:none; background:rgba(255,255,255,0.08); border:1px solid var(--border); border-radius:50%; width:22px; height:22px; align-items:center; justify-content:center; cursor:pointer; color:var(--text-dim);"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
         </div>
         <button class="btn-action-tool" style="background: rgba(99, 102, 241, 0.15); border-color: rgba(99, 102, 241, 0.4); color: var(--primary-light);" onclick="openUploadModal()">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
