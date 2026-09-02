@@ -1155,6 +1155,8 @@ function htmlPage(content, env, pageMode = 'public') {
       text-decoration: none;
       user-select: none;
       cursor: pointer;
+      overflow: visible;
+      flex-shrink: 0;
     }
     .logo-glow-wrap {
       width: 38px;
@@ -1447,8 +1449,8 @@ function htmlPage(content, env, pageMode = 'public') {
     .col-cb { width: 34px; display: flex; align-items: center; flex-shrink: 0; }
     .col-name { flex: 1; min-width: 0; }
     .col-size { width: 100px; text-align: right; flex-shrink: 0; }
-    .col-date { width: 130px; text-align: right; flex-shrink: 0; }
-    .col-actions { width: 130px; text-align: right; flex-shrink: 0; }
+    .col-date { width: 150px; text-align: right; flex-shrink: 0; }
+    .col-actions { width: 150px; text-align: right; flex-shrink: 0; }
 
     .file-row {
       display: flex;
@@ -1514,10 +1516,10 @@ function htmlPage(content, env, pageMode = 'public') {
       flex-shrink: 0;
     }
     .file-size-cell { width: 100px; text-align: right; }
-    .file-date-cell { width: 130px; text-align: right; }
+    .file-date-cell { width: 150px; text-align: right; }
 
     .file-actions-cell {
-      width: 130px;
+      width: 150px;
       display: flex;
       justify-content: flex-end;
       align-items: center;
@@ -1890,8 +1892,8 @@ function htmlPage(content, env, pageMode = 'public') {
       body[data-mode="admin"] .file-actions-cell { width: 105px; gap: 3px; }
 
       .btn-act { width: 24px; height: 24px; }
-      body[data-mode="admin"] .col-actions { width: 100px; }
-      body[data-mode="admin"] .file-actions-cell { width: 100px; gap: 2px; }
+      body[data-mode="admin"] .col-actions { width: 120px; }
+      body[data-mode="admin"] .file-actions-cell { width: 120px; gap: 2px; }
       .file-title { font-size: 0.84rem; }
 
       /* Mobile Bulk Toolbar - Ultra Compact Fitting */
@@ -3197,9 +3199,9 @@ function playVideo(fileId, fileName) {
 
   if (extContainer) {
     let eHtml = '';
-    eHtml += '<a href="vlc://' + videoUrl + '" class="btn-ext-player"><svg class="icon icon-xs" viewBox="0 0 24 24"><polygon points="12 2 2 22 22 22"/></svg><span>VLC Player</span></a>';
-    eHtml += '<a href="potplayer://' + videoUrl + '" class="btn-ext-player"><svg class="icon icon-xs" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8"/></svg><span>PotPlayer</span></a>';
-    eHtml += '<a href="intent:' + videoUrl + '#Intent;type=video/*;package=com.mxtech.videoplayer.ad;end" class="btn-ext-player"><svg class="icon icon-xs" viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="20" rx="4"/></svg><span>MX Player</span></a>';
+    eHtml += '<a href="vlc://' + videoUrl + '" class="btn-ext-player"><svg class="icon icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 2 L19 9 L12 22 L5 9 Z"/><line x1="8" y1="9" x2="16" y2="9" stroke-width="1.2"/></svg><span>VLC Player</span></a>';
+    eHtml += '<a href="potplayer://' + videoUrl + '" class="btn-ext-player"><svg class="icon icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg><span>PotPlayer</span></a>';
+    eHtml += '<a href="intent:' + videoUrl + '#Intent;type=video/*;package=com.mxtech.videoplayer.ad;end" class="btn-ext-player"><svg class="icon icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="7" y="2" width="10" height="20" rx="2" ry="2"/><circle cx="12" cy="18" r="1" fill="currentColor" stroke="none"/></svg><span>MX Player</span></a>';
     eHtml += '<a href="' + videoUrl + '" target="_blank" download class="btn-ext-player" style="background: rgba(16, 185, 129, 0.15); color: #10b981; border-color: rgba(16, 185, 129, 0.3);"><svg class="icon icon-xs" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg><span>Download File</span></a>';
     extContainer.innerHTML = eHtml;
   }
