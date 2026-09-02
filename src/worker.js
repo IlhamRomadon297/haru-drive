@@ -1812,11 +1812,12 @@ function htmlPage(content, env, pageMode = 'public') {
 }
 
 
+
 /* === GUEST CARD UI (Screenshot 2 Style) === */
 .guest-card-wrapper {
-  max-width: 760px;
+  max-width: 780px;
   width: 100%;
-  margin: 32px auto 60px;
+  margin: 48px auto 80px;
   padding: 0 16px;
 }
 
@@ -1824,46 +1825,47 @@ function htmlPage(content, env, pageMode = 'public') {
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: 20px;
-  padding: 32px 28px 28px;
-  box-shadow: 0 25px 60px rgba(0, 0, 0, 0.45);
+  padding: 36px 32px 30px;
+  box-shadow: 0 25px 60px rgba(0, 0, 0, 0.5);
 }
 
 .guest-header-box {
   text-align: center;
-  margin-bottom: 22px;
+  margin-bottom: 24px;
 }
 
 .guest-folder-icon-large {
-  width: 58px;
-  height: 58px;
-  margin: 0 auto 12px;
+  width: 64px;
+  height: 64px;
+  margin: 0 auto 14px;
   background: rgba(245, 158, 11, 0.12);
   border: 1px solid rgba(245, 158, 11, 0.25);
-  border-radius: 16px;
+  border-radius: 18px;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 8px 24px rgba(245, 158, 11, 0.15);
+  box-shadow: 0 10px 30px rgba(245, 158, 11, 0.15);
 }
 
 .guest-folder-icon-large svg {
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
 }
 
 .guest-card-title {
-  font-size: 1.18rem;
+  font-size: 1.25rem;
   font-weight: 700;
   color: var(--text);
-  line-height: 1.4;
+  line-height: 1.45;
   margin-bottom: 6px;
   word-break: break-word;
 }
 
 .guest-card-stats {
-  font-size: 0.84rem;
+  font-size: 0.88rem;
   color: var(--text-dim);
   font-weight: 500;
+  letter-spacing: 0.02em;
 }
 
 .guest-breadcrumb-strip {
@@ -1878,17 +1880,17 @@ function htmlPage(content, env, pageMode = 'public') {
   border: 1px solid var(--border);
   border-radius: 12px;
   overflow: hidden;
-  background: rgba(0, 0, 0, 0.15);
+  background: rgba(0, 0, 0, 0.18);
 }
 
 .guest-table-header {
   display: grid;
-  grid-template-columns: 36px 1fr 90px 75px;
+  grid-template-columns: 40px 1fr 100px 80px;
   align-items: center;
-  padding: 10px 14px;
+  padding: 11px 14px;
   background: rgba(255, 255, 255, 0.04);
   border-bottom: 1px solid var(--border);
-  font-size: 0.72rem;
+  font-size: 0.74rem;
   font-weight: 700;
   letter-spacing: 0.05em;
   color: var(--text-muted);
@@ -1896,9 +1898,9 @@ function htmlPage(content, env, pageMode = 'public') {
 
 .guest-file-list .file-row {
   display: grid;
-  grid-template-columns: 36px 1fr 90px 75px;
+  grid-template-columns: 40px 1fr 100px 80px;
   align-items: center;
-  padding: 11px 14px;
+  padding: 12px 14px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
   transition: background 0.15s ease;
 }
@@ -1915,7 +1917,7 @@ function htmlPage(content, env, pageMode = 'public') {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  margin-top: 22px;
+  margin-top: 24px;
 }
 
 .btn-bulk-download-green {
@@ -1925,7 +1927,7 @@ function htmlPage(content, env, pageMode = 'public') {
   color: #ffffff;
   border: none;
   border-radius: 12px;
-  font-size: 0.94rem;
+  font-size: 0.95rem;
   font-weight: 600;
   cursor: pointer;
   display: flex;
@@ -1961,6 +1963,48 @@ function htmlPage(content, env, pageMode = 'public') {
 .btn-bulk-copy-subtle:hover {
   background: rgba(255, 255, 255, 0.08);
   color: var(--text);
+}
+
+/* === ANIMATED BOTTOM-RIGHT TOAST (Screenshot 2 Style) === */
+.toast-copied-badge {
+  position: fixed;
+  bottom: 32px;
+  right: 32px;
+  background: #059669;
+  color: #ffffff;
+  padding: 12px 22px;
+  border-radius: 14px;
+  font-size: 0.92rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  box-shadow: 0 12px 32px rgba(5, 150, 105, 0.45);
+  transform: translateY(30px) scale(0.92);
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 0.32s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.25s ease;
+  z-index: 10000;
+}
+
+.toast-copied-badge.show {
+  transform: translateY(0) scale(1);
+  opacity: 1;
+}
+
+.toast-check-icon {
+  width: 22px;
+  height: 22px;
+  background: rgba(255, 255, 255, 0.25);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.toast-check-icon svg {
+  width: 13px;
+  height: 13px;
 }
 
 </style>
@@ -2252,31 +2296,124 @@ function bulkDownloadSelected() {
 }
 
 
+function showCopyToast(message) {
+  const badge = document.getElementById('toastCopiedBadge');
+  const text = document.getElementById('toastCopiedText');
+  if (badge && text) {
+    text.textContent = message || 'Link copied';
+    badge.classList.add('show');
+    clearTimeout(window._copyToastTimer);
+    window._copyToastTimer = setTimeout(function() {
+      badge.classList.remove('show');
+    }, 2400);
+  }
+}
+
+function copyFolderLink(id, path) {
+  const url = id ? (window.location.origin + '/folder/' + id) : (window.location.origin + '/?path=' + encodeURIComponent(path));
+  navigator.clipboard.writeText(url).then(function() {
+    showCopyToast('Link folder disalin');
+  }).catch(function() {
+    prompt('Salin link folder:', url);
+  });
+}
+
+function copyShortLink(id, path) {
+  const url = id ? (window.location.origin + '/file/' + id) : (window.location.origin + '/d/' + encodeURIComponent(path));
+  navigator.clipboard.writeText(url).then(function() {
+    showCopyToast('1 link copied');
+  }).catch(function() {
+    prompt('Salin link file:', url);
+  });
+}
+
+function bulkCopyLinks() {
+  if (selectedFiles.size === 0) {
+    showCopyToast('Pilih setidaknya 1 item');
+    return;
+  }
+  const links = [];
+  allFiles.forEach(function(f) {
+    if (selectedFiles.has(f.path)) {
+      const isDir = f.mimeType === 'application/vnd.google-apps.folder';
+      if (isDir) {
+        links.push(f.id ? (window.location.origin + '/folder/' + f.id) : (window.location.origin + '/?path=' + encodeURIComponent(f.path)));
+      } else {
+        links.push(f.id ? (window.location.origin + '/file/' + f.id) : (window.location.origin + '/d/' + encodeURIComponent(f.path)));
+      }
+    }
+  });
+
+  const textToCopy = links.join('\n');
+  navigator.clipboard.writeText(textToCopy).then(function() {
+    showCopyToast(links.length + ' links copied');
+  }).catch(function() {
+    prompt('Salin link:', textToCopy);
+  });
+}
+
+function bulkDownloadSelected() {
+  const filesToDownload = allFiles.filter(function(f) {
+    return selectedFiles.has(f.path) && f.mimeType !== 'application/vnd.google-apps.folder';
+  });
+  if (filesToDownload.length === 0) {
+    alert('Pilih setidaknya 1 file untuk di-download.');
+    return;
+  }
+  filesToDownload.forEach(function(f, idx) {
+    setTimeout(function() {
+      const a = document.createElement('a');
+      a.href = '/d/' + f.id;
+      a.download = f.name;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }, idx * 500);
+  });
+}
+
 function renderFileList() {
   const container = document.getElementById('fileListContainer');
   if (!container) return;
 
-  // Update Guest Card Header Title & Stats
+  // Update Guest Card Header Title & Stats (e.g. "31 files — 29.46 GB")
   const cardTitle = document.getElementById('guestCardTitle');
   const cardStats = document.getElementById('guestCardStats');
   if (cardTitle) {
     if (!currentPath) {
-      cardTitle.textContent = 'HaruDrive Cloud Storage';
+      cardTitle.textContent = 'HaruDrive Storage';
     } else {
       const parts = currentPath.split('/');
       cardTitle.textContent = parts[parts.length - 1];
     }
   }
   if (cardStats) {
-    const fCount = allFiles.filter(f => f.mimeType === 'application/vnd.google-apps.folder').length;
-    const fileCount = allFiles.filter(f => f.mimeType !== 'application/vnd.google-apps.folder').length;
+    let fCount = 0;
+    let fileCount = 0;
+    let totalBytes = 0;
+    allFiles.forEach(function(f) {
+      if (f.mimeType === 'application/vnd.google-apps.folder') {
+        fCount++;
+      } else {
+        fileCount++;
+        totalBytes += (f.size || 0);
+      }
+    });
+
     let sList = [];
-    if (fCount > 0) sList.push(fCount + ' folders');
-    if (fileCount > 0) sList.push(fileCount + ' files');
-    cardStats.textContent = sList.length > 0 ? sList.join(' • ') : 'Folder kosong';
+    if (fCount > 0 && fileCount > 0) {
+      sList.push(fCount + ' folders • ' + fileCount + ' files — ' + formatBytes(totalBytes));
+    } else if (fileCount > 0) {
+      sList.push(fileCount + ' files — ' + formatBytes(totalBytes));
+    } else if (fCount > 0) {
+      sList.push(fCount + ' folders');
+    } else {
+      sList.push('Folder kosong');
+    }
+    cardStats.textContent = sList.join('');
   }
 
-  const filtered = allFiles.filter(item => {
+  const filtered = allFiles.filter(function(item) {
     if (activeFilter === 'all') return true;
     if (activeFilter === 'folder') return item.mimeType === 'application/vnd.google-apps.folder';
     if (activeFilter === 'video') return item.mimeType.startsWith('video/');
@@ -2291,7 +2428,7 @@ function renderFileList() {
   }
 
   let html = '';
-  filtered.forEach(file => {
+  filtered.forEach(function(file) {
     const isDir = file.mimeType === 'application/vnd.google-apps.folder';
     const isVideo = file.mimeType.startsWith('video/');
     const iconType = isDir ? 'folder' : (isVideo ? 'video' : (file.mimeType.includes('zip') ? 'archive' : 'file'));
@@ -2675,45 +2812,7 @@ function loginUI(errorMsg = '') {
 
 function publicUI() {
   return `
-  <!-- TOP NAVBAR -->
-  <header class="navbar-cyber glass">
-    <div class="nav-container">
-      <div class="nav-left">
-        <a href="/" class="brand-logo" id="logoLink" onclick="navigateTo('/'); return false;">
-          <div class="logo-glow-wrap">
-            <svg class="sakura-icon-svg" viewBox="0 0 24 24"><path d="M12 2a4 4 0 0 0-3.5 6 4 4 0 0 0-6 3.5 4 4 0 0 0 3.5 6 4 4 0 0 0 6 3.5 4 4 0 0 0 6-3.5 4 4 0 0 0 3.5-6 4 4 0 0 0-3.5-6 4 4 0 0 0-6-3.5z"/><circle cx="12" cy="12" r="2.5" fill="#ffffff"/></svg>
-          </div>
-          <div class="brand-info">
-            <span class="brand-title">HaruDrive</span>
-            <span class="brand-subtag">Cloud Storage</span>
-          </div>
-        </a>
-      </div>
-
-      <div class="nav-center">
-        <div class="spotlight-search">
-          <svg class="icon spotlight-icon icon-sm" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          <input type="text" id="searchInput" placeholder="Cari file & media..." autocomplete="off">
-          <span class="shortcut-badge">Ctrl K</span>
-        </div>
-      </div>
-
-      <div class="nav-right">
-        <button class="nav-btn" id="refreshBtn" title="Refresh File" onclick="loadFolder(currentPath, currentFolderId)">
-          <svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
-        </button>
-        <button class="nav-btn" id="darkToggle" title="Ganti Tema">
-          <svg class="icon icon-sm" id="themeIcon" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
-        </button>
-        <a href="/admin" class="nav-btn btn-admin-nav" title="Buka Console Admin">
-          <svg class="icon icon-sm" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-          <span class="btn-text-label">Admin</span>
-        </a>
-      </div>
-    </div>
-  </header>
-
-  <!-- GUEST CENTERED CARD (Screenshot 2 Style) -->
+  <!-- GUEST CENTERED CARD (Clean Headerless Index - Screenshot 2 Style) -->
   <main class="guest-card-wrapper">
     <div class="guest-main-card glass">
       
@@ -2722,7 +2821,7 @@ function publicUI() {
         <div class="guest-folder-icon-large">
           <svg viewBox="0 0 24 24" fill="#f59e0b"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
         </div>
-        <h1 class="guest-card-title" id="guestCardTitle">HaruDrive Cloud Storage</h1>
+        <h1 class="guest-card-title" id="guestCardTitle">HaruDrive Storage</h1>
         <div class="guest-card-stats" id="guestCardStats">Memuat isi folder...</div>
       </div>
 
@@ -2766,6 +2865,14 @@ function publicUI() {
 
     </div>
   </main>
+
+  <!-- BOTTOM-RIGHT TOAST NOTIFICATION (Exact screenshot style) -->
+  <div id="toastCopiedBadge" class="toast-copied-badge">
+    <div class="toast-check-icon">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+    </div>
+    <span id="toastCopiedText">31 links copied</span>
+  </div>
 
   <!-- THEATER PLYR VIDEO MODAL -->
   <div id="videoModal" class="modal-backdrop" style="display: none;">
