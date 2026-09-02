@@ -141,3 +141,8 @@ bower_components/
 .next/
 .nuxt/
 .vuepress/dist
+
+# Local deploy secrets
+.env*
+*.env
+.env.deploy
