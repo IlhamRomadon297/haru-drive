@@ -1811,6 +1811,158 @@ function htmlPage(content, env, pageMode = 'public') {
   color: var(--text);
 }
 
+
+/* === GUEST CARD UI (Screenshot 2 Style) === */
+.guest-card-wrapper {
+  max-width: 760px;
+  width: 100%;
+  margin: 32px auto 60px;
+  padding: 0 16px;
+}
+
+.guest-main-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 32px 28px 28px;
+  box-shadow: 0 25px 60px rgba(0, 0, 0, 0.45);
+}
+
+.guest-header-box {
+  text-align: center;
+  margin-bottom: 22px;
+}
+
+.guest-folder-icon-large {
+  width: 58px;
+  height: 58px;
+  margin: 0 auto 12px;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 8px 24px rgba(245, 158, 11, 0.15);
+}
+
+.guest-folder-icon-large svg {
+  width: 32px;
+  height: 32px;
+}
+
+.guest-card-title {
+  font-size: 1.18rem;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.4;
+  margin-bottom: 6px;
+  word-break: break-word;
+}
+
+.guest-card-stats {
+  font-size: 0.84rem;
+  color: var(--text-dim);
+  font-weight: 500;
+}
+
+.guest-breadcrumb-strip {
+  margin-bottom: 16px;
+  padding: 6px 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.guest-table-box {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.guest-table-header {
+  display: grid;
+  grid-template-columns: 36px 1fr 90px 75px;
+  align-items: center;
+  padding: 10px 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border-bottom: 1px solid var(--border);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.guest-file-list .file-row {
+  display: grid;
+  grid-template-columns: 36px 1fr 90px 75px;
+  align-items: center;
+  padding: 11px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  transition: background 0.15s ease;
+}
+
+.guest-file-list .file-row:last-child {
+  border-bottom: none;
+}
+
+.guest-file-list .file-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.guest-bottom-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 22px;
+}
+
+.btn-bulk-download-green {
+  width: 100%;
+  padding: 14px 20px;
+  background: #059669;
+  color: #ffffff;
+  border: none;
+  border-radius: 12px;
+  font-size: 0.94rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: all 0.2s ease;
+  box-shadow: 0 4px 16px rgba(5, 150, 105, 0.3);
+}
+
+.btn-bulk-download-green:hover {
+  background: #047857;
+  transform: translateY(-1px);
+}
+
+.btn-bulk-copy-subtle {
+  width: 100%;
+  padding: 12px 20px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: all 0.2s ease;
+}
+
+.btn-bulk-copy-subtle:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+
 </style>
 </head>
 <body data-mode="${pageMode}">
@@ -2099,9 +2251,30 @@ function handleBulkDownload() {
   showToast(`Memulai unduhan untuk ${filesToDownload.length} file... ⬇️`, 'success');
 }
 
+
 function renderFileList() {
   const container = document.getElementById('fileListContainer');
   if (!container) return;
+
+  // Update Guest Card Header Title & Stats
+  const cardTitle = document.getElementById('guestCardTitle');
+  const cardStats = document.getElementById('guestCardStats');
+  if (cardTitle) {
+    if (!currentPath) {
+      cardTitle.textContent = 'HaruDrive Cloud Storage';
+    } else {
+      const parts = currentPath.split('/');
+      cardTitle.textContent = parts[parts.length - 1];
+    }
+  }
+  if (cardStats) {
+    const fCount = allFiles.filter(f => f.mimeType === 'application/vnd.google-apps.folder').length;
+    const fileCount = allFiles.filter(f => f.mimeType !== 'application/vnd.google-apps.folder').length;
+    let sList = [];
+    if (fCount > 0) sList.push(`${fCount} folders`);
+    if (fileCount > 0) sList.push(`${fileCount} files`);
+    cardStats.textContent = sList.length > 0 ? sList.join(' • ') : 'Folder kosong';
+  }
 
   const filtered = allFiles.filter(item => {
     if (activeFilter === 'all') return true;
@@ -2113,10 +2286,10 @@ function renderFileList() {
   });
 
   if (filtered.length === 0) {
-    container.innerHTML = \`
+    container.innerHTML = `
       <div style="text-align: center; padding: 40px; color: var(--text-muted);">
         <p>Tidak ada file di direktori ini.</p>
-      </div>\`;
+      </div>`;
     return;
   }
 
@@ -2127,376 +2300,59 @@ function renderFileList() {
     const iconType = isDir ? 'folder' : (isVideo ? 'video' : (file.mimeType.includes('zip') ? 'archive' : 'file'));
     const isChecked = selectedFiles.has(file.path);
 
-    const downloadShortLink = \`/d/\${file.id}\`;
-
     const clickAction = isDir 
-      ? (isPageAdmin ? \`navigateToAdmin('\${escapeJs(file.path)}')\` : \`navigateTo('\${escapeJs(file.path)}', '\${file.id}')\`)
-      : (isVideo ? \`playVideo('\${file.id}', '\${escapeJs(file.name)}')\` : \`downloadFile('\${file.id}')\`);
+      ? (isPageAdmin ? `navigateToAdmin('${escapeJs(file.path)}')` : `navigateTo('${escapeJs(file.path)}', '${file.id}')`)
+      : (isVideo ? `playVideo('${file.id}', '${escapeJs(file.name)}')` : `downloadFile('${file.id}')`);
 
-    html += \`
-    <div class="file-row \${isDir ? 'is-folder' : ''}">
+    const copyFunc = isDir
+      ? `copyFolderLink('${file.id}', '${escapeJs(file.path)}')`
+      : `copyShortLink('${file.id}', '${escapeJs(file.path)}')`;
+
+    html += `
+    <div class="file-row ${isDir ? 'is-folder' : ''}">
       <div class="col-cb">
-        <input type="checkbox" \${isChecked ? 'checked' : ''} onchange="toggleItemSelect('\${escapeJs(file.path)}', this.checked)">
+        <input type="checkbox" ${isChecked ? 'checked' : ''} onchange="toggleItemSelect('${escapeJs(file.path)}', this.checked)">
       </div>
-      <div class="file-name-cell" onclick="\${clickAction}" title="\${isDir ? 'Buka Folder' : (isVideo ? 'Klik untuk Putar Video' : 'Download File')}">
-        <div class="file-icon-box \${iconType}">
-          \${getModernSvgIcon(iconType)}
+      <div class="file-name-cell" onclick="${clickAction}" title="${isDir ? 'Buka Folder' : (isVideo ? 'Klik untuk Putar Video' : 'Download File')}">
+        <div class="file-icon-box ${iconType}">
+          ${getModernSvgIcon(iconType)}
         </div>
-        <span class="file-title" title="\${escapeHtml(file.name)}">\${escapeHtml(file.name)}</span>
+        <span class="file-title" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span>
       </div>
-      <div class="file-size-cell">\${isDir ? '-' : formatBytes(file.size)}</div>
-      <div class="file-date-cell">\${formatDate(file.modifiedTime)}</div>
-      <div class="file-actions-cell">
-        \${!isPageAdmin ? \`
-          \${!isDir ? \`
-            <a class="btn-act" href="\${downloadShortLink}" title="Download">
+      <div class="file-size-cell" style="text-align: right;">${isDir ? '-' : formatBytes(file.size)}</div>
+      <div class="file-actions-cell" style="text-align: center;">
+        ${!isPageAdmin ? `
+          ${!isDir ? `
+            <a class="btn-act" href="/d/${file.id}" title="Download File">
               <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             </a>
-            <button class="btn-act" onclick="copyShortLink('\${file.id}')" title="Salin Shortlink">
+            <button class="btn-act" onclick="${copyFunc}" title="Salin Link File">
               <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
             </button>
-          \` : ''}
-        \` : \`
-          <button class="btn-act" onclick="openRenameModal('\${escapeJs(file.path)}', '\${escapeJs(file.name)}')" title="Ubah Nama">
-            <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
+          ` : `
+            <button class="btn-act" onclick="${copyFunc}" title="Salin Link Folder">
+              <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+            </button>
+          `}
+        ` : `
+          <button class="btn-act" onclick="openRenameModal('${escapeJs(file.path)}', '${escapeJs(file.name)}')" title="Ubah Nama">
+            <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
           </button>
-          <button class="btn-act" onclick="openMoveModalSingle('\${escapeJs(file.path)}')" title="Pindahkan">
-            <svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/><path d="M3 12h12"/></svg>
+          <button class="btn-act" onclick="openMoveModalSingle('${escapeJs(file.path)}')" title="Pindahkan">
+            <svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="5 9 2 12 5 15"/><polyline points="9 5 12 2 15 5"/><polyline points="15 19 12 22 9 19"/><polyline points="19 9 22 12 19 15"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="12" y1="2" x2="12" y2="22"/></svg>
           </button>
-          <button class="btn-act btn-delete" onclick="deleteSingleItem('\${escapeJs(file.path)}')" title="Hapus Permanen">
+          <button class="btn-act btn-act-danger" onclick="deleteItem('${escapeJs(file.path)}')" title="Hapus">
             <svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
           </button>
-        \`}
+        `}
       </div>
-    </div>\`;
+    </div>`;
   });
 
   container.innerHTML = html;
 }
 
-// Breadcrumbs
-function updateBreadcrumbs() {
-  const nav = document.getElementById('breadcrumbNav');
-  if (!nav) return;
 
-  let html = \`
-    <a href="javascript:void(0)" class="crumb" onclick="\${isPageAdmin ? \`navigateToAdmin('')\` : \`navigateTo('')\`}; return false;">
-      <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
-      <span>Home</span>
-    </a>\`;
-
-  if (currentPath) {
-    const parts = currentPath.split('/');
-    let accum = '';
-    parts.forEach((p, idx) => {
-      accum = accum ? \`\${accum}/\${p}\` : p;
-      const isLast = idx === parts.length - 1;
-      html += \`<span class="crumb-sep">/</span>\`;
-      if (isLast) {
-        html += \`<span class="crumb-current">\${escapeHtml(p)}</span>\`;
-      } else {
-        html += \`<a href="javascript:void(0)" class="crumb" onclick="\${isPageAdmin ? \`navigateToAdmin('\${escapeJs(accum)}')\` : \`navigateTo('\${escapeJs(accum)}')\`}; return false;">\${escapeHtml(p)}</a>\`;
-      }
-    });
-  }
-
-  nav.innerHTML = html;
-}
-
-// PLYR Video Player Modal
-function playVideo(shortId, filename) {
-  const modal = document.getElementById('videoModal');
-  const videoEl = document.getElementById('plyrPlayer');
-  const titleEl = document.getElementById('videoModalTitle');
-  const extEl = document.getElementById('externalPlayersContainer');
-  if (!modal || !videoEl) return;
-
-  const streamUrl = \`\${window.location.origin}/file/\${shortId}\`;
-  titleEl.textContent = filename;
-
-  extEl.innerHTML = \`
-    <a href="vlc://\${streamUrl}" class="btn-ext-player" title="Buka di VLC">VLC</a>
-    <a href="potplayer://\${streamUrl}" class="btn-ext-player" title="Buka di PotPlayer">PotPlayer</a>
-    <a href="iina://weblink?url=\${encodeURIComponent(streamUrl)}" class="btn-ext-player" title="Buka di IINA">IINA</a>
-    <a href="intent:\${streamUrl}#Intent;package=com.mxtech.videoplayer.ad;type=video/*;end" class="btn-ext-player" title="Buka di MX Player">MX Player</a>
-    <a href="/d/\${shortId}" class="btn-ext-player" style="margin-left: auto; background: var(--primary); color: white; border: none;">Download File</a>
-  \`;
-
-  if (plyrPlayerInstance) {
-    try { plyrPlayerInstance.destroy(); } catch (e) {}
-  }
-
-  videoEl.src = streamUrl;
-  modal.style.display = 'flex';
-  document.body.classList.add('modal-open');
-
-  if (window.Plyr) {
-    plyrPlayerInstance = new Plyr(videoEl, {
-      autoplay: false,
-      keyboard: { global: true, focused: true },
-      tooltips: { controls: true, seek: true }
-    });
-  }
-}
-
-function closeVideoModal() {
-  const modal = document.getElementById('videoModal');
-  const videoEl = document.getElementById('plyrPlayer');
-  if (modal) modal.style.display = 'none';
-  document.body.classList.remove('modal-open');
-
-  if (plyrPlayerInstance) {
-    try { plyrPlayerInstance.destroy(); } catch (e) {}
-    plyrPlayerInstance = null;
-  }
-  if (videoEl) {
-    videoEl.pause();
-    videoEl.src = '';
-  }
-}
-
-function copyShortLink(shortId) {
-  const link = \`\${window.location.origin}/file/\${shortId}\`;
-  navigator.clipboard.writeText(link).then(() => {
-    alert(\`Shortlink berhasil disalin!\\n\${link}\`);
-  }).catch(() => {
-    prompt('Salin link ini:', link);
-  });
-}
-
-function downloadFile(shortId) {
-  window.location.href = \`/d/\${shortId}\`;
-}
-
-// Manual Upload Modal (Admin)
-async function openUploadModal() {
-  const m = document.getElementById('uploadModal');
-  if (!m) return;
-
-  await fetchFolderTree(); fetchAndRenderTasks();
-  renderFolderPickerUI('uploadFolderPicker', 'uploadTargetDirInput', currentPath);
-  selectedUploadFile = null;
-  document.getElementById('selectedFileInfo').style.display = 'none';
-  document.getElementById('uploadProgressBox').style.display = 'none';
-  m.style.display = 'flex';
-}
-function closeUploadModal() {
-  const m = document.getElementById('uploadModal');
-  if (m) m.style.display = 'none';
-}
-function handleFileSelected(files) {
-  if (files && files.length > 0) {
-    selectedUploadFile = files[0];
-    document.getElementById('selectedFileName').textContent = \`\${selectedUploadFile.name} (\${formatBytes(selectedUploadFile.size)})\`;
-    document.getElementById('selectedFileInfo').style.display = 'block';
-  }
-}
-async function submitManualUpload() {
-  if (!selectedUploadFile) return alert('Silakan pilih file terlebih dahulu!');
-  const targetDir = (document.getElementById('uploadTargetDirInput').value || '').trim();
-  const pin = localStorage.getItem('harudrive_admin_pin') || getCookie('harudrive_admin_pin') || '290722';
-
-  const progressBox = document.getElementById('uploadProgressBox');
-  const progressBar = document.getElementById('uploadProgressBar');
-  const statusText = document.getElementById('uploadStatusText');
-  const btn = document.getElementById('startUploadBtn');
-
-  progressBox.style.display = 'block';
-  progressBar.style.width = '45%';
-  statusText.textContent = \`Mengupload \${selectedUploadFile.name}...\`;
-  btn.disabled = true;
-
-  const formData = new FormData();
-  formData.append('file', selectedUploadFile);
-  formData.append('target_dir', targetDir);
-  formData.append('admin_pin', pin);
-
-  try {
-    const res = await fetch('/api/admin/upload', {
-      method: 'POST',
-      body: formData
-    });
-    progressBar.style.width = '100%';
-    const data = await res.json();
-    if (res.ok && data.success) {
-      closeUploadModal();
-      loadFolder(currentPath, currentFolderId);
-      fetchFolderTree(); fetchAndRenderTasks();
-      alert(\`File berhasil diunggah ke /\${data.path}\`);
-    } else {
-      alert('Gagal upload: ' + (data.error || 'Terjadi kesalahan'));
-    }
-  } catch (err) {
-    alert('Upload error: ' + err.message);
-  } finally {
-    btn.disabled = false;
-    progressBox.style.display = 'none';
-  }
-}
-
-// Rename Modal
-function openRenameModal(oldPath, oldName) {
-  const m = document.getElementById('renameModal');
-  const oldPathInput = document.getElementById('renameOldPath');
-  const newNameInput = document.getElementById('renameNewNameInput');
-  if (!m) return;
-
-  oldPathInput.value = oldPath;
-  newNameInput.value = oldName;
-  m.style.display = 'flex';
-  newNameInput.focus();
-}
-function closeRenameModal() {
-  const m = document.getElementById('renameModal');
-  if (m) m.style.display = 'none';
-}
-async function submitRename() {
-  const oldPath = document.getElementById('renameOldPath').value;
-  const newName = (document.getElementById('renameNewNameInput').value || '').trim();
-  if (!newName) return alert('Nama baru tidak boleh kosong!');
-
-  const pathParts = oldPath.split('/');
-  pathParts.pop();
-  const newPath = pathParts.length ? \`\${pathParts.join('/')}/\${newName}\` : newName;
-  const pin = localStorage.getItem('harudrive_admin_pin') || getCookie('harudrive_admin_pin') || '290722';
-
-  try {
-    const res = await fetch('/api/admin/rename', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ old_path: oldPath, new_path: newPath, admin_pin: pin })
-    });
-    const data = await res.json();
-    if (res.ok && data.success) {
-      closeRenameModal();
-      loadFolder(currentPath, currentFolderId);
-      fetchFolderTree(); fetchAndRenderTasks();
-    } else {
-      alert('Gagal rename: ' + (data.error || 'Terjadi kesalahan'));
-    }
-  } catch (e) {
-    alert('Error: ' + e.message);
-  }
-}
-
-// Move Modal
-let moveItemsQueue = [];
-function openMoveModalSingle(itemPath) {
-  moveItemsQueue = [itemPath];
-  const m = document.getElementById('moveModal');
-  const desc = document.getElementById('moveTargetDesc');
-  if (!m) return;
-
-  desc.textContent = \`Memindahkan: \${itemPath.split('/').pop()}\`;
-  renderFolderPickerUI('moveFolderPicker', 'moveDestinationInput', currentPath);
-  m.style.display = 'flex';
-}
-function openBulkMoveModal() {
-  moveItemsQueue = Array.from(selectedFiles);
-  if (!moveItemsQueue.length) return;
-
-  const m = document.getElementById('moveModal');
-  const desc = document.getElementById('moveTargetDesc');
-  if (!m) return;
-
-  desc.textContent = \`Memindahkan \${moveItemsQueue.length} item terpilih.\`;
-  renderFolderPickerUI('moveFolderPicker', 'moveDestinationInput', currentPath);
-  m.style.display = 'flex';
-}
-function closeMoveModal() {
-  const m = document.getElementById('moveModal');
-  if (m) m.style.display = 'none';
-  moveItemsQueue = [];
-}
-async function submitMove() {
-  const destFolder = (document.getElementById('moveDestinationInput').value || '').trim();
-  const pin = localStorage.getItem('harudrive_admin_pin') || getCookie('harudrive_admin_pin') || '290722';
-
-  try {
-    const res = await fetch('/api/admin/move', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ paths: moveItemsQueue, target_folder: destFolder, admin_pin: pin })
-    });
-    const data = await res.json();
-    if (res.ok && data.success) {
-      closeMoveModal();
-      clearBulkSelection();
-      loadFolder(currentPath, currentFolderId);
-      fetchFolderTree(); fetchAndRenderTasks();
-      alert(\`Berhasil memindahkan \${data.movedCount} item ke /\${destFolder}\`);
-    } else {
-      alert('Gagal memindahkan: ' + (data.error || 'Terjadi kesalahan'));
-    }
-  } catch (e) {
-    alert('Error: ' + e.message);
-  }
-}
-
-// New Folder Modal
-function openNewFolderModal() {
-  const m = document.getElementById('newFolderModal');
-  if (m) {
-    m.style.display = 'flex';
-    document.getElementById('newFolderNameInput')?.focus();
-  }
-}
-function closeNewFolderModal() {
-  const m = document.getElementById('newFolderModal');
-  if (m) m.style.display = 'none';
-}
-async function submitNewFolder() {
-  const nameInput = document.getElementById('newFolderNameInput');
-  const folderName = (nameInput?.value || '').trim();
-  if (!folderName) return alert('Masukkan nama folder!');
-
-  const pin = localStorage.getItem('harudrive_admin_pin') || getCookie('harudrive_admin_pin') || '290722';
-  const targetPath = currentPath ? \`\${currentPath}/\${folderName}\` : folderName;
-
-  try {
-    const res = await fetch('/api/admin/mkdir', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ folder_path: targetPath, admin_pin: pin })
-    });
-    const data = await res.json();
-    if (res.ok && data.success) {
-      closeNewFolderModal();
-      if (nameInput) nameInput.value = '';
-      loadFolder(currentPath, currentFolderId);
-      fetchFolderTree(); fetchAndRenderTasks();
-    } else {
-      alert('Gagal: ' + (data.error || 'Terjadi kesalahan'));
-    }
-  } catch (e) {
-    alert('Error: ' + e.message);
-  }
-}
-
-// Single Delete
-async function deleteSingleItem(itemPath) {
-  if (!confirm(\`Yakin ingin menghapus permanent:\\n\${itemPath}?\`)) return;
-  const pin = localStorage.getItem('harudrive_admin_pin') || getCookie('harudrive_admin_pin') || '290722';
-
-  try {
-    const res = await fetch('/api/admin/delete', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: itemPath, admin_pin: pin })
-    });
-    const data = await res.json();
-    if (res.ok && data.success) {
-      loadFolder(currentPath, currentFolderId);
-      fetchFolderTree(); fetchAndRenderTasks();
-    } else {
-      alert('Gagal menghapus: ' + (data.error || 'Error'));
-    }
-  } catch (e) {
-    alert('Error: ' + e.message);
-  }
-}
-
-// Bulk Selection
 function toggleItemSelect(itemPath, checked) {
   if (checked) selectedFiles.add(itemPath);
   else selectedFiles.delete(itemPath);
@@ -2554,16 +2410,85 @@ async function bulkDeleteSelected() {
   }
 }
 
-function bulkCopyLinks() {
-  const links = Array.from(selectedFiles).map(p => {
-    const file = allFiles.find(f => f.path === p);
-    return file ? \`\${window.location.origin}/file/\${file.id}\` : '';
-  }).filter(Boolean).join('\\n');
 
-  navigator.clipboard.writeText(links).then(() => {
-    alert(\`Berhasil menyalin \${selectedFiles.size} shortlink!\`);
+function copyFolderLink(id, path) {
+  const url = id ? `${window.location.origin}/folder/${id}` : `${window.location.origin}/?path=${encodeURIComponent(path)}`;
+  navigator.clipboard.writeText(url).then(() => {
+    alert(`Link folder berhasil disalin!
+${url}`);
+  }).catch(() => {
+    prompt('Salin link folder ini:', url);
   });
 }
+
+function copyShortLink(id, path) {
+  const url = id ? `${window.location.origin}/file/${id}` : `${window.location.origin}/d/${encodeURIComponent(path)}`;
+  navigator.clipboard.writeText(url).then(() => {
+    alert(`Link file berhasil disalin!
+${url}`);
+  }).catch(() => {
+    prompt('Salin link file ini:', url);
+  });
+}
+
+function bulkCopyLinks() {
+  if (selectedFiles.size === 0) {
+    alert('Pilih setidaknya 1 item terlebih dahulu.');
+    return;
+  }
+  const links = Array.from(selectedFiles).map(p => {
+    const file = allFiles.find(f => f.path === p);
+    if (!file) return '';
+    const isDir = file.mimeType === 'application/vnd.google-apps.folder';
+    if (isDir) {
+      return file.id ? `${window.location.origin}/folder/${file.id}` : `${window.location.origin}/?path=${encodeURIComponent(file.path)}`;
+    } else {
+      return file.id ? `${window.location.origin}/file/${file.id}` : `${window.location.origin}/d/${encodeURIComponent(file.path)}`;
+    }
+  }).filter(Boolean);
+
+  const textToCopy = links.join('\n');
+  navigator.clipboard.writeText(textToCopy).then(() => {
+    alert(`Berhasil menyalin ${links.length} link!
+
+${textToCopy}`);
+  }).catch(() => {
+    prompt('Salin link:', textToCopy);
+  });
+}
+
+function bulkDownloadSelected() {
+  const filesToDownload = allFiles.filter(f => selectedFiles.has(f.path) && f.mimeType !== 'application/vnd.google-apps.folder');
+  if (filesToDownload.length === 0) {
+    alert('Pilih setidaknya 1 file untuk di-download.');
+    return;
+  }
+  filesToDownload.forEach((f, idx) => {
+    setTimeout(() => {
+      const a = document.createElement('a');
+      a.href = `/d/${f.id}`;
+      a.download = f.name;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }, idx * 500);
+  });
+}
+
+function updateBulkToolbar() {
+  const count = selectedFiles.size;
+  const countSpan = document.getElementById('bulkCount');
+  if (countSpan) countSpan.textContent = `${count} Dipilih`;
+  
+  const dlBtnText = document.getElementById('bulkDownloadText');
+  if (dlBtnText) dlBtnText.textContent = `Download Selected (${count})`;
+
+  const toolbar = document.getElementById('bulkToolbar');
+  if (toolbar) {
+    toolbar.style.display = count > 0 ? 'flex' : 'none';
+  }
+}
+
 
 // Cloud Mirror Modal
 async function openMirrorModal() {
@@ -2852,7 +2777,7 @@ function publicUI() {
   <header class="navbar-cyber glass">
     <div class="nav-container">
       <div class="nav-left">
-        <a href="/" class="brand-logo" id="logoLink" onclick="navigateTo(''); return false;">
+        <a href="/" class="brand-logo" id="logoLink" onclick="navigateTo('/'); return false;">
           <div class="logo-glow-wrap">
             <svg class="sakura-icon-svg" viewBox="0 0 24 24"><path d="M12 2a4 4 0 0 0-3.5 6 4 4 0 0 0-6 3.5 4 4 0 0 0 3.5 6 4 4 0 0 0 6 3.5 4 4 0 0 0 6-3.5 4 4 0 0 0 3.5-6 4 4 0 0 0-3.5-6 4 4 0 0 0-6-3.5z"/><circle cx="12" cy="12" r="2.5" fill="#ffffff"/></svg>
           </div>
@@ -2861,10 +2786,6 @@ function publicUI() {
             <span class="brand-subtag">Cloud Storage</span>
           </div>
         </a>
-        <div class="status-capsule">
-          <span class="pulse-dot"></span>
-          <span class="status-text">HF 8TB Online</span>
-        </div>
       </div>
 
       <div class="nav-center">
@@ -2876,91 +2797,73 @@ function publicUI() {
       </div>
 
       <div class="nav-right">
-        <button class="nav-btn" id="refreshBtn" title="Refresh File">
+        <button class="nav-btn" id="refreshBtn" title="Refresh File" onclick="loadFolder(currentPath, currentFolderId)">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
         </button>
-
-        <a href="/admin" class="nav-btn btn-admin-nav" title="Buka Console Admin">
-          <svg class="icon icon-sm" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-          <span class="btn-text-label">Admin</span>
-        </a>
-
         <button class="nav-btn" id="darkToggle" title="Ganti Tema">
           <svg class="icon icon-sm" id="themeIcon" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
         </button>
-
-        <a href="/logout" class="nav-btn" title="Keluar">
-          <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+        <a href="/admin" class="nav-btn btn-admin-nav" title="Buka Console Admin">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          <span class="btn-text-label">Admin</span>
         </a>
       </div>
     </div>
   </header>
 
-  <!-- CATEGORY FILTER -->
-  <div class="filter-strip">
-    <div class="filter-container">
-      <button class="filter-chip active" data-filter="all">
-        <svg class="icon icon-sm" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
-        <span>Semua File</span>
-      </button>
-      <button class="filter-chip" data-filter="video">
-        <svg class="icon icon-sm" viewBox="0 0 24 24"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
-        <span>Video & Film</span>
-      </button>
-      <button class="filter-chip" data-filter="folder">
-        <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-        <span>Direktori</span>
-      </button>
-      <button class="filter-chip" data-filter="archive">
-        <svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>
-        <span>Archive (ZIP/RAR)</span>
-      </button>
-      <button class="filter-chip" data-filter="document">
-        <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
-        <span>Dokumen</span>
-      </button>
-    </div>
-  </div>
-
-  <!-- MAIN VIEW -->
-  <main class="container">
-    <div class="breadcrumb-bar glass">
-      <div class="crumb-group" id="breadcrumbNav">
-        <a href="/" class="crumb" onclick="navigateTo('/'); return false;">
-          <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
-          <span>Home</span>
-        </a>
+  <!-- GUEST CENTERED CARD (Screenshot 2 Style) -->
+  <main class="guest-card-wrapper">
+    <div class="guest-main-card glass">
+      
+      <!-- FOLDER HEADER -->
+      <div class="guest-header-box">
+        <div class="guest-folder-icon-large">
+          <svg viewBox="0 0 24 24" fill="#f59e0b"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+        </div>
+        <h1 class="guest-card-title" id="guestCardTitle">HaruDrive Cloud Storage</h1>
+        <div class="guest-card-stats" id="guestCardStats">Memuat isi folder...</div>
       </div>
-    </div>
 
-    <div class="file-table-wrapper glass">
-      <div class="table-header">
-        <div class="col-cb"><input type="checkbox" id="selectAllCheckbox" onchange="toggleSelectAll(this.checked)"></div>
-        <div class="col-name">Nama File / Folder</div>
-        <div class="col-size">Ukuran</div>
-        <div class="col-date">Diperbarui</div>
-        <div class="col-actions">Aksi</div>
-      </div>
-      <div id="fileListContainer">
-        <div style="text-align: center; padding: 40px; color: var(--text-muted);">
-          <div class="pulse-dot" style="margin: 0 auto 12px; width: 12px; height: 12px;"></div>
-          <p>Menghubungkan ke HaruDrive Storage...</p>
+      <!-- BREADCRUMBS -->
+      <div class="guest-breadcrumb-strip">
+        <div class="crumb-group" id="breadcrumbNav">
+          <a href="/" class="crumb" onclick="navigateTo('/'); return false;">
+            <svg class="icon icon-xs" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+            <span>Home</span>
+          </a>
         </div>
       </div>
+
+      <!-- TABLE LIST -->
+      <div class="guest-table-box">
+        <div class="guest-table-header">
+          <div class="col-cb"><input type="checkbox" id="selectAllCheckbox" onchange="toggleSelectAll(this.checked)"></div>
+          <div class="col-name">NAME</div>
+          <div class="col-size" style="text-align: right;">SIZE</div>
+          <div class="col-actions" style="text-align: center;">ACTIONS</div>
+        </div>
+        <div id="fileListContainer" class="guest-file-list">
+          <div style="text-align: center; padding: 40px; color: var(--text-muted);">
+            <div class="pulse-dot" style="margin: 0 auto 12px; width: 12px; height: 12px;"></div>
+            <p>Menghubungkan ke HaruDrive Storage...</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- BOTTOM ACTIONS (Green Button) -->
+      <div class="guest-bottom-actions">
+        <button class="btn-bulk-download-green" id="btnBulkDownload" onclick="bulkDownloadSelected()">
+          <svg class="icon icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          <span id="bulkDownloadText">Download Selected (0)</span>
+        </button>
+        <button class="btn-bulk-copy-subtle" id="btnBulkCopy" onclick="bulkCopyLinks()">
+          <svg class="icon icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+          <span>Copy</span>
+        </button>
+      </div>
+
     </div>
   </main>
-
-  <!-- FLOATING BULK TOOLBAR (PUBLIC) -->
-  <div id="bulkToolbar" class="bulk-toolbar" style="display: none;">
-    <span id="bulkCount" class="bulk-count-badge">0 Dipilih</span>
-    <button class="btn-bulk" onclick="bulkCopyLinks()">
-      <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
-      <span>Salin</span>
-    </button>
-    <button class="btn-bulk-close" onclick="clearBulkSelection()" title="Batal Pilih">
-      <svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-    </button>
-  </div>
 
   <!-- THEATER PLYR VIDEO MODAL -->
   <div id="videoModal" class="modal-backdrop" style="display: none;">
