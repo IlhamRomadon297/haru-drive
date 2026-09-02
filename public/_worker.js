@@ -1494,6 +1494,11 @@ function htmlPage(content, env, pageMode = 'public') {
     .col-date { width: 150px; text-align: right; flex-shrink: 0; }
     .col-actions { width: 110px; text-align: right; flex-shrink: 0; }
     body[data-mode="admin"] .col-actions { width: 170px; }
+    .gdi-sort-header { cursor: pointer; user-select: none; position: relative; }
+    .gdi-sort-header:hover { color: var(--text); }
+    .gdi-sort-header::after { content: '↕'; margin-left: 6px; opacity: 0.35; font-size: 0.7em; vertical-align: middle; }
+    .gdi-sort-header.asc::after { content: '▲'; opacity: 1; color: var(--primary-light); }
+    .gdi-sort-header.desc::after { content: '▼'; opacity: 1; color: var(--primary-light); }
 
     .file-row {
       display: flex;
