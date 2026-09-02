@@ -30,20 +30,36 @@ export default {
       }
     }
 
-    const isPublicRoute = url.pathname.startsWith('/file/') ||
-                          url.pathname.startsWith('/d/') ||
-                          url.pathname.startsWith('/raw/') ||
-                          url.pathname.startsWith('/folder/') ||
-                          (url.pathname === '/api/list' && (url.searchParams.has('path') || url.searchParams.has('id')));
+        // Public read-only routes (No login required for guests)
+    const isPublicGet = request.method === 'GET' && (
+      url.pathname === '/' ||
+      url.pathname === '/api/list' ||
+      url.pathname === '/api/folders' ||
+      url.pathname === '/api/search' ||
+      url.pathname.startsWith('/folder/') ||
+      url.pathname.startsWith('/file/') ||
+      url.pathname.startsWith('/d/') ||
+      url.pathname.startsWith('/raw/') ||
+      url.pathname.startsWith('/static/') ||
+      url.pathname.endsWith('.ico') ||
+      url.pathname.endsWith('.png')
+    );
 
-    if (!isLoggedIn && !isPublicRoute) {
+    // Only Admin routes and write APIs require authentication
+    const requiresAdmin = !isPublicGet && (
+      url.pathname.startsWith('/admin') ||
+      url.pathname.startsWith('/api/admin/') ||
+      (url.pathname.startsWith('/api/') && request.method !== 'GET')
+    );
+
+    if (requiresAdmin && !isLoggedIn) {
       if (url.pathname.startsWith('/api/')) {
-        return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+        return new Response(JSON.stringify({ error: 'Unauthorized. Admin login required.' }), {
           status: 401,
           headers: { 'Content-Type': 'application/json' }
         });
       }
-      return new Response(htmlPage(loginUI(), env, 'login'), {
+      return new Response(loginPageHTML(redirectParam), {
         headers: { 'Content-Type': 'text/html;charset=UTF-8' }
       });
     }
@@ -1686,7 +1702,116 @@ function htmlPage(content, env, pageMode = 'public') {
       .modal-backdrop { padding: 12px; align-items: center; }
       .modal-card { max-width: 100%; border-radius: 18px; }
     }
-  </style>
+  
+/* === GUEST FOCUSED CARD UI (Screenshot 2 Style) === */
+.guest-card-container {
+  max-width: 720px;
+  margin: 30px auto 40px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 28px 24px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(16px);
+  position: relative;
+}
+
+.guest-folder-header {
+  text-align: center;
+  margin-bottom: 24px;
+}
+
+.guest-big-icon-wrap {
+  width: 64px;
+  height: 64px;
+  margin: 0 auto 14px;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #f59e0b;
+  box-shadow: 0 8px 24px rgba(245, 158, 11, 0.15);
+}
+
+.guest-big-icon-wrap svg {
+  width: 32px;
+  height: 32px;
+}
+
+.guest-folder-title {
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.4;
+  margin: 0 0 6px;
+  word-break: break-word;
+}
+
+.guest-folder-meta {
+  font-size: 0.82rem;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.guest-bulk-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.btn-download-selected {
+  width: 100%;
+  padding: 13px 20px;
+  background: #10b981;
+  color: #ffffff;
+  border: none;
+  border-radius: 12px;
+  font-size: 0.92rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: all 0.2s ease;
+  box-shadow: 0 4px 14px rgba(16, 185, 129, 0.3);
+}
+
+.btn-download-selected:hover {
+  background: #059669;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px rgba(16, 185, 129, 0.4);
+}
+
+.btn-copy-links {
+  width: 100%;
+  padding: 11px 20px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  font-size: 0.88rem;
+  font-weight: 500;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: all 0.2s ease;
+}
+
+.btn-copy-links:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text);
+}
+
+</style>
 </head>
 <body data-mode="${pageMode}">
   ${content}
