@@ -4,8 +4,8 @@ export default {
 
     const HF_REPO_ID = env.HF_REPO_ID || 'username/harudrive-data';
     const HF_TOKEN = env.HF_TOKEN || '';
-    const APP_PASSWORD = env.APP_PASSWORD || 'HaruDrive_Desu';
-    const ADMIN_PIN = env.ADMIN_PIN || '290722';
+    const APP_PASSWORD = env.APP_PASSWORD || 'not_set_in_env';
+    const ADMIN_PIN = env.ADMIN_PIN || 'not_set_in_env';
     const GITHUB_PAT = env.GITHUB_PAT || '';
     const GITHUB_REPO = env.GITHUB_REPO || 'IlhamRomadon297/haru-drive';
 
@@ -254,7 +254,26 @@ export default {
           currentFolderId = await generateShortId(reqPath);
         }
 
-        return new Response(JSON.stringify({ folderName, currentPath: reqPath, folderId: currentFolderId, files: formattedFiles }), {
+        // Fill recursive folder sizes (from the D1 folder_sizes index) + current folder stats.
+        let folderStats = { fileCount: 0, fileSize: 0 };
+        if (env.harudrive_db) {
+          try {
+            const dirSizeMap = new Map();
+            const fsRes = await env.harudrive_db.prepare('SELECT path, size, files FROM folder_sizes').all();
+            (fsRes.results || []).forEach(r => dirSizeMap.set(r.path, { size: r.size || 0, files: r.files || 0 }));
+            formattedFiles.forEach(f => {
+              if (f.mimeType === 'application/vnd.google-apps.folder') {
+                const s = dirSizeMap.get(f.path);
+                f.size = s ? s.size : 0;
+                f.fileCount = s ? s.files : 0;
+              }
+            });
+            const cur = dirSizeMap.get(reqPath);
+            if (cur) folderStats = { fileCount: cur.files, fileSize: cur.size };
+          } catch (e) {}
+        }
+
+        return new Response(JSON.stringify({ folderName, currentPath: reqPath, folderId: currentFolderId, files: formattedFiles, folderStats }), {
           headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
         });
       } catch (err) {
@@ -878,6 +897,7 @@ async function syncIndex(env) {
   let items = 0;
   const MAX_ITEMS = 4000;
   const seen = new Set();
+  const dirStats = new Map();
   let nextUrl = `https://huggingface.co/api/datasets/${repoId}/tree/main?recursive=true`;
 
   while (nextUrl && items < MAX_ITEMS) {
@@ -897,16 +917,35 @@ async function syncIndex(env) {
 
       const shortId = await generateShortId(path);
       const filename = path.split('/').pop();
+      const fileSize = item.size || 0;
       await env.harudrive_db.prepare(
         'INSERT OR REPLACE INTO shortlinks (short_id, file_path, name, type, size) VALUES (?, ?, ?, ?, ?)'
-      ).bind(shortId, path, filename, 'file', item.size || 0).run();
+      ).bind(shortId, path, filename, 'file', fileSize).run();
       items++;
       if (items >= MAX_ITEMS) break;
+
+      // Accumulate recursive size / file count per ancestor folder.
+      const parts = path.split('/');
+      for (let i = 1; i < parts.length; i++) {
+        const dir = parts.slice(0, i).join('/');
+        const st = dirStats.get(dir) || { size: 0, files: 0 };
+        st.size += fileSize;
+        st.files += 1;
+        dirStats.set(dir, st);
+      }
     }
 
     const linkHeader = hfRes.headers.get('Link') || '';
     const m = linkHeader.match(/<([^>]+)>\s*;\s*rel="next"/);
     nextUrl = m ? (m[1].startsWith('http') ? m[1] : 'https://huggingface.co' + m[1]) : '';
+  }
+
+  if (dirStats.size > 0) {
+    await env.harudrive_db.prepare('CREATE TABLE IF NOT EXISTS folder_sizes (path TEXT PRIMARY KEY, size INTEGER, files INTEGER)').run();
+    const upsert = env.harudrive_db.prepare('INSERT OR REPLACE INTO folder_sizes (path, size, files) VALUES (?, ?, ?)');
+    for (const [dir, st] of dirStats) {
+      await upsert.bind(dir, st.size, st.files).run();
+    }
   }
   return { items, truncated: items >= MAX_ITEMS };
 }
@@ -1073,6 +1112,7 @@ function htmlPage(content, env, pageMode = 'public') {
     .sakura-icon-svg {
       width: 22px;
       height: 22px;
+      display: block;
       fill: #ec4899;
       filter: drop-shadow(0 0 6px rgba(236, 72, 153, 0.6));
       flex-shrink: 0;
@@ -1355,6 +1395,13 @@ function htmlPage(content, env, pageMode = 'public') {
       transform: translateY(-1px);
     }
 
+    .folder-stats-label {
+      font-size: 0.8rem;
+      color: var(--text-dim);
+      font-weight: 600;
+      padding: 0 2px 10px;
+      letter-spacing: 0.02em;
+    }
     .file-table-wrapper {
       border-radius: var(--radius);
       overflow: hidden;
@@ -1770,20 +1817,19 @@ function htmlPage(content, env, pageMode = 'public') {
         padding: 12px 14px;
       }
       .toolbar-actions {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
+        display: flex;
+        flex-wrap: wrap;
         gap: 8px;
         width: 100%;
       }
       .search-box {
-        grid-column: 1 / -1;
+        flex: 1 1 200px;
         min-width: 0;
         max-width: 100%;
       }
       .btn-action-tool {
         padding: 8px 10px;
         font-size: 0.78rem;
-        width: 100%;
       }
 
       .col-date, .file-date-cell { display: none; }
@@ -2184,6 +2230,7 @@ function htmlPage(content, env, pageMode = 'public') {
 let currentPath = '';
 let currentFolderId = '';
 let allFiles = [];
+let currentFolderStats = null;
 let availableFolders = [''];
 let activeFilter = 'all';
 const selectedFiles = new Set();
@@ -2377,6 +2424,7 @@ async function loadFolder(path = '', id = '') {
 
     currentPath = data.currentPath || '';
     currentFolderId = data.folderId || '';
+    currentFolderStats = data.folderStats || null;
     allFiles = data.files || [];
 
     updateBreadcrumbs();
@@ -2469,7 +2517,8 @@ function updateBreadcrumbs() {
   const nav = document.getElementById('breadcrumbNav');
   if (!nav) return;
   
-  const homeClick = isPageAdmin ? "navigateToAdmin('')" : "navigateTo('/', '')";
+  const isGuestCard = !!document.getElementById('guestCardTitle');
+  const homeClick = isPageAdmin ? "navigateToAdmin('')" : (isGuestCard ? "navigateTo('/', '')" : "navigateTo('', '')");
   let html = '<a href="/" class="crumb" onclick="' + homeClick + '; return false;"><svg class="icon icon-xs" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg><span>Home</span></a>';
   
   if (currentPath) {
@@ -2495,7 +2544,7 @@ function renderFileList() {
   if (!container) return;
 
   const cardTitle = document.getElementById('guestCardTitle');
-  const cardStats = document.getElementById('guestCardStats');
+  const statsEl = document.getElementById('guestCardStats') || document.getElementById('folderStatsLabel');
   if (cardTitle) {
     if (!currentPath) {
       cardTitle.textContent = 'HaruDrive Storage';
@@ -2504,18 +2553,27 @@ function renderFileList() {
       cardTitle.textContent = parts[parts.length - 1];
     }
   }
-  if (cardStats) {
+  if (statsEl) {
     let fCount = 0;
-    let fileCount = 0;
-    let totalBytes = 0;
     allFiles.forEach(f => {
       if (f.mimeType === 'application/vnd.google-apps.folder') {
         fCount++;
-      } else {
-        fileCount++;
-        totalBytes += (f.size || 0);
       }
     });
+
+    let fileCount = 0;
+    let totalBytes = 0;
+    if (currentFolderStats && (currentFolderStats.fileCount > 0 || currentFolderStats.fileSize > 0)) {
+      fileCount = currentFolderStats.fileCount;
+      totalBytes = currentFolderStats.fileSize;
+    } else {
+      allFiles.forEach(f => {
+        if (f.mimeType !== 'application/vnd.google-apps.folder') {
+          fileCount++;
+          totalBytes += (f.size || 0);
+        }
+      });
+    }
 
     let sList = [];
     if (fCount > 0 && fileCount > 0) {
@@ -2527,7 +2585,7 @@ function renderFileList() {
     } else {
       sList.push('Folder kosong');
     }
-    cardStats.textContent = sList.join('');
+    statsEl.textContent = sList.join('');
   }
 
   const filtered = allFiles.filter(item => {
@@ -2572,7 +2630,7 @@ function renderFileList() {
     html += '    <div class="file-icon-box ' + iconType + '">' + getModernSvgIcon(iconType) + '</div>';
     html += '    <span class="file-title" title="' + safeName + '">' + safeName + '</span>';
     html += '  </div>';
-    html += '  <div class="file-size-cell" style="text-align: right;">' + (isDir ? '-' : formatBytes(file.size)) + '</div>';
+    html += '  <div class="file-size-cell" style="text-align: right;">' + (isDir ? (file.size > 0 ? formatBytes(file.size) : '-') : formatBytes(file.size)) + '</div>';
     
     if (isPageAdmin) {
       html += '  <div class="file-date-cell">' + formatDate(file.modifiedTime) + '</div>';
@@ -3341,7 +3399,7 @@ function publicIndexUI() {
   <header class="navbar-cyber glass">
     <div class="nav-container">
       <div class="nav-left">
-        <a href="javascript:void(0)" class="brand-logo" onclick="navigateTo('/', ''); return false;">
+        <a href="javascript:void(0)" class="brand-logo" onclick="navigateTo('', ''); return false;">
           <div class="logo-glow-wrap">
             <svg class="sakura-icon-svg" viewBox="0 0 24 24"><path d="M12 2a4 4 0 0 0-3.5 6 4 4 0 0 0-6 3.5 4 4 0 0 0 3.5 6 4 4 0 0 0 6 3.5 4 4 0 0 0 6-3.5 4 4 0 0 0 3.5-6 4 4 0 0 0-3.5-6 4 4 0 0 0-6-3.5z"/><circle cx="12" cy="12" r="2.5" fill="#ffffff"/></svg>
           </div>
@@ -3370,7 +3428,7 @@ function publicIndexUI() {
   <div class="container">
     <div class="breadcrumb-bar glass">
       <div class="crumb-group" id="breadcrumbNav">
-        <a href="javascript:void(0)" class="crumb" onclick="navigateTo('/', ''); return false;">
+        <a href="javascript:void(0)" class="crumb" onclick="navigateTo('', ''); return false;">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
           <span>Home</span>
         </a>
@@ -3386,6 +3444,8 @@ function publicIndexUI() {
         </button>
       </div>
     </div>
+
+    <div class="folder-stats-label" id="folderStatsLabel"></div>
 
     <!-- File Table -->
     <div class="file-table-wrapper glass">
@@ -3553,6 +3613,8 @@ function adminConsoleUI() {
         </button>
       </div>
     </div>
+
+    <div class="folder-stats-label" id="folderStatsLabel"></div>
 
     <!-- Table -->
     <div class="file-table-wrapper glass">
