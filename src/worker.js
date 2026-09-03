@@ -206,14 +206,16 @@ export default {
             } catch(e) {}
           }
           const gFiles = await listGDriveFolder(realGFolderId, env);
-          // Generate shortIds for GDrive files/folders to hide real Drive IDs
+          // Generate shortIds for GDrive files/folders to hide real Drive IDs (fallback to real ID if D1 write limit hit)
           const gFormatted = [];
           for (const f of gFiles) {
-            const shortId = await generateShortId('gdrive:' + f.id);
+            let shortId;
+            try { shortId = await generateShortId('gdrive:' + f.id); } catch(e) { shortId = f.id; }
             const fType = f.mimeType === 'application/vnd.google-apps.folder' ? 'folder' : 'file';
-            try { await env.harudrive_db.prepare('INSERT OR REPLACE INTO shortlinks (short_id, file_path, name, type, size) VALUES (?, ?, ?, ?, ?)').bind(shortId, f.id, f.name, fType, f.size).run(); } catch(e) {}
-            // Also store folder size for display (like HF)
-            gFormatted.push({ id: shortId, path: shortId, name: f.name, mimeType: f.mimeType, size: f.size, modifiedTime: f.modifiedTime });
+            let useShortId = true;
+            try { await env.harudrive_db.prepare('INSERT OR REPLACE INTO shortlinks (short_id, file_path, name, type, size) VALUES (?, ?, ?, ?, ?)').bind(shortId, f.id, f.name, fType, f.size).run(); } catch(e) { useShortId = false; }
+            const finalId = useShortId ? shortId : f.id;
+            gFormatted.push({ id: finalId, path: finalId, name: f.name, mimeType: f.mimeType, size: f.size, modifiedTime: f.modifiedTime });
           }
           gFormatted.sort((a,b) => {
             const aIsDir = a.mimeType === 'application/vnd.google-apps.folder';
@@ -528,21 +530,20 @@ export default {
 
     // API: Bandwidth stats (admin only)
     if (url.pathname === '/api/bandwidth') {
-      const bMode = url.searchParams.get('mode') || '';
-      // Only admin can view detailed stats, but allow anyone with auth to see? Require login for now
       const bCookie = request.headers.get('Cookie') || '';
       const bLoggedIn = bCookie.includes('harudrive_auth=true');
       if (!bLoggedIn) return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } });
       try {
-        await env.harudrive_db.prepare('CREATE TABLE IF NOT EXISTS bandwidth_stats (mode TEXT PRIMARY KEY, bytes INTEGER, requests INTEGER, updated INTEGER)').run();
+        const bMode = url.searchParams.get('mode') || '';
         if (bMode) {
-          const row = await env.harudrive_db.prepare('SELECT mode, bytes, requests, updated FROM bandwidth_stats WHERE mode = ?').bind(bMode).first();
-          return new Response(JSON.stringify({ mode: bMode, stats: row || { mode: bMode, bytes: 0, requests: 0 } }), { headers: { 'Content-Type': 'application/json' } });
+          const row = await env.harudrive_db.prepare('SELECT mode, bytes, requests, updated FROM bandwidth_stats WHERE mode = ?').bind(bMode).first().catch(() => null);
+          if (!row) return new Response(JSON.stringify({ mode: bMode, stats: { mode: bMode, bytes: 0, requests: 0 } }), { headers: { 'Content-Type': 'application/json' } });
+          return new Response(JSON.stringify({ mode: bMode, stats: row }), { headers: { 'Content-Type': 'application/json' } });
         } else {
-          const rows = await env.harudrive_db.prepare('SELECT mode, bytes, requests, updated FROM bandwidth_stats').all();
+          const rows = await env.harudrive_db.prepare('SELECT mode, bytes, requests, updated FROM bandwidth_stats').all().catch(() => ({ results: [] }));
           return new Response(JSON.stringify({ stats: rows.results || [] }), { headers: { 'Content-Type': 'application/json' } });
         }
-      } catch(e) { return new Response(JSON.stringify({ error: e.message }), { status: 500 }); }
+      } catch(e) { return new Response(JSON.stringify({ stats: [] }), { headers: { 'Content-Type': 'application/json' } }); }
     }
 
     // API: Start Cloud Mirror
@@ -973,8 +974,8 @@ export default {
         try {
           const metaRes = await fetch(`https://www.googleapis.com/drive/v3/files/${effectiveGDriveId}?fields=name,size&supportsAllDrives=true`, { headers: { 'Authorization': `Bearer ${gToken}` } });
           if (metaRes.ok) { const meta = await metaRes.json(); if (meta.name) gFileName = meta.name; 
-            // Track bandwidth for GDrive
-            try { const sz = parseInt(meta.size || '0', 10); if (sz > 0) { await env.harudrive_db.prepare('CREATE TABLE IF NOT EXISTS bandwidth_stats (mode TEXT PRIMARY KEY, bytes INTEGER, requests INTEGER, updated INTEGER)').run(); await env.harudrive_db.prepare('INSERT INTO bandwidth_stats (mode, bytes, requests, updated) VALUES (?, ?, 1, ?) ON CONFLICT(mode) DO UPDATE SET bytes = bytes + ?, requests = requests + 1, updated = ?').bind('gdrive', sz, Date.now(), sz, Date.now()).run(); } } catch(e) {}
+            // Track bandwidth for GDrive (best-effort)
+            try { const sz = parseInt(meta.size || '0', 10); if (sz > 0 && env.harudrive_db) { await env.harudrive_db.prepare('INSERT INTO bandwidth_stats (mode, bytes, requests, updated) VALUES (?, ?, 1, ?) ON CONFLICT(mode) DO UPDATE SET bytes = bytes + ?, requests = requests + 1, updated = ?').bind('gdrive', sz, Date.now(), sz, Date.now()).run().catch(()=>{}); } } catch(e) {}
           }
         } catch(e) {}
         const gSafeName = encodeURIComponent(gFileName);
@@ -1011,8 +1012,8 @@ export default {
         return new Response(`File Not Found on Storage (${hfRes.status})`, { status: hfRes.status });
       }
 
-      // Track bandwidth for HF
-      try { const cLen = parseInt(hfRes.headers.get('Content-Length') || '0', 10) || parseInt(hfRes.headers.get('Content-Range')?.split('/')?.pop() || '0', 10) || 0; if (cLen > 0 && env.harudrive_db) { await env.harudrive_db.prepare('CREATE TABLE IF NOT EXISTS bandwidth_stats (mode TEXT PRIMARY KEY, bytes INTEGER, requests INTEGER, updated INTEGER)').run(); await env.harudrive_db.prepare('INSERT INTO bandwidth_stats (mode, bytes, requests, updated) VALUES (?, ?, 1, ?) ON CONFLICT(mode) DO UPDATE SET bytes = bytes + ?, requests = requests + 1, updated = ?').bind('hf', cLen, Date.now(), cLen, Date.now()).run(); } } catch(e) {}
+      // Track bandwidth for HF (best-effort, ignore if D1 limit hit)
+      try { const cLen = parseInt(hfRes.headers.get('Content-Length') || '0', 10) || parseInt(hfRes.headers.get('Content-Range')?.split('/')?.pop() || '0', 10) || 0; if (cLen > 0 && env.harudrive_db) { await env.harudrive_db.prepare('INSERT INTO bandwidth_stats (mode, bytes, requests, updated) VALUES (?, ?, 1, ?) ON CONFLICT(mode) DO UPDATE SET bytes = bytes + ?, requests = requests + 1, updated = ?').bind('hf', cLen, Date.now(), cLen, Date.now()).run().catch(()=>{}); } } catch(e) {}
       const respHeaders = new Headers(hfRes.headers);
       const mime = getMimeType(fileName);
       respHeaders.set('Content-Type', mime);
