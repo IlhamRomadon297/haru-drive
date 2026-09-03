@@ -1318,7 +1318,6 @@ function htmlPage(content, env, pageMode = 'public') {
       display: block;
       overflow: visible;
       fill: #ec4899;
-      filter: drop-shadow(0 0 6px rgba(236, 72, 153, 0.6));
       flex-shrink: 0;
     }
 
