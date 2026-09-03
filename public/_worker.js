@@ -1328,6 +1328,7 @@ function htmlPage(content, env, pageMode = 'public') {
       z-index: 100;
       border-bottom: 1px solid var(--border);
       box-shadow: 0 4px 25px rgba(0, 0, 0, 0.15);
+      overflow: visible;
     }
     .nav-container {
       display: flex;
@@ -1337,6 +1338,7 @@ function htmlPage(content, env, pageMode = 'public') {
       gap: 16px;
       max-width: 1300px;
       margin: 0 auto;
+      overflow: visible;
     }
     .nav-left, .nav-right {
       display: flex;
