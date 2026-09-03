@@ -1334,7 +1334,7 @@ function htmlPage(content, env, pageMode = 'public') {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding: 12px 24px;
+      padding: 16px 24px 12px;
       gap: 16px;
       max-width: 1300px;
       margin: 0 auto;
@@ -1374,7 +1374,7 @@ function htmlPage(content, env, pageMode = 'public') {
       display: flex;
       align-items: center;
       justify-content: center;
-      box-shadow: 0 0 16px rgba(236, 72, 153, 0.3);
+      box-shadow: 0 0 10px rgba(236, 72, 153, 0.25);
       transition: transform 0.25s, box-shadow 0.25s;
     }
     .brand-logo:hover .logo-glow-wrap {
