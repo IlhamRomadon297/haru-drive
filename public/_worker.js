@@ -188,9 +188,33 @@ export default {
         const listMode = url.searchParams.get('mode') || request.headers.get('X-Storage-Mode') || '';
         if (listMode === 'gdrive') {
           let gFolderId = url.searchParams.get('id') || url.searchParams.get('path') || '';
-          if (!gFolderId) gFolderId = GDRIVE_ROOT_ID;
-          const gFiles = await listGDriveFolder(gFolderId, env);
-          const gFormatted = gFiles.map(f => ({ id: f.id, path: f.id, name: f.name, mimeType: f.mimeType, size: f.size, modifiedTime: f.modifiedTime }));
+          // Resolve shortId -> Drive ID if needed (for GDrive shortId links)
+          let realGFolderId = gFolderId;
+          if (gFolderId && gFolderId.length === 8 && env.harudrive_db) {
+            try { const r = await env.harudrive_db.prepare('SELECT file_path FROM shortlinks WHERE short_id = ?').bind(gFolderId).first(); if (r && r.file_path && r.file_path.length > 20) realGFolderId = r.file_path; } catch(e) {}
+          }
+          if (!realGFolderId) realGFolderId = GDRIVE_ROOT_ID;
+          let folderDisplayName = 'GDrive';
+          let displayPath = '';
+          if (realGFolderId !== GDRIVE_ROOT_ID) {
+            try {
+              const tkn2 = await getGDriveAccessToken(env);
+              if (tkn2) {
+                const metaRes2 = await fetch('https://www.googleapis.com/drive/v3/files/' + realGFolderId + '?fields=name&supportsAllDrives=true', { headers: { 'Authorization': 'Bearer ' + tkn2 } });
+                if (metaRes2.ok) { const meta2 = await metaRes2.json(); if (meta2.name) { folderDisplayName = meta2.name; displayPath = meta2.name; } }
+              }
+            } catch(e) {}
+          }
+          const gFiles = await listGDriveFolder(realGFolderId, env);
+          // Generate shortIds for GDrive files/folders to hide real Drive IDs
+          const gFormatted = [];
+          for (const f of gFiles) {
+            const shortId = await generateShortId('gdrive:' + f.id);
+            const fType = f.mimeType === 'application/vnd.google-apps.folder' ? 'folder' : 'file';
+            try { await env.harudrive_db.prepare('INSERT OR REPLACE INTO shortlinks (short_id, file_path, name, type, size) VALUES (?, ?, ?, ?, ?)').bind(shortId, f.id, f.name, fType, f.size).run(); } catch(e) {}
+            // Also store folder size for display (like HF)
+            gFormatted.push({ id: shortId, path: shortId, name: f.name, mimeType: f.mimeType, size: f.size, modifiedTime: f.modifiedTime });
+          }
           gFormatted.sort((a,b) => {
             const aIsDir = a.mimeType === 'application/vnd.google-apps.folder';
             const bIsDir = b.mimeType === 'application/vnd.google-apps.folder';
@@ -198,7 +222,8 @@ export default {
             if (!aIsDir && bIsDir) return 1;
             return a.name.localeCompare(b.name, undefined, { numeric: true });
           });
-          return new Response(JSON.stringify({ folderName: gFolderId === GDRIVE_ROOT_ID ? 'GDrive Root' : 'Folder', currentPath: gFolderId, folderId: gFolderId, files: gFormatted, folderStats: { fileCount: gFiles.filter(f => f.mimeType !== 'application/vnd.google-apps.folder').length, fileSize: gFiles.filter(f => f.mimeType !== 'application/vnd.google-apps.folder').reduce((s,f)=>s+f.size,0) } }), { headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
+          // For folder sizes in GDrive, we can compute directly from the listed files (not recursive via D1)
+          return new Response(JSON.stringify({ folderName: folderDisplayName, currentPath: displayPath, folderId: realGFolderId, files: gFormatted, folderStats: { fileCount: gFiles.filter(f => f.mimeType !== 'application/vnd.google-apps.folder').length, fileSize: gFiles.filter(f => f.mimeType !== 'application/vnd.google-apps.folder').reduce((s,f)=>s+f.size,0) } }), { headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
         }
         let reqPath = url.searchParams.get('path') || '';
         const folderId = url.searchParams.get('id') || '';
@@ -499,6 +524,25 @@ export default {
       } catch (err) {
         return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: { 'Content-Type': 'application/json' } });
       }
+    }
+
+    // API: Bandwidth stats (admin only)
+    if (url.pathname === '/api/bandwidth') {
+      const bMode = url.searchParams.get('mode') || '';
+      // Only admin can view detailed stats, but allow anyone with auth to see? Require login for now
+      const bCookie = request.headers.get('Cookie') || '';
+      const bLoggedIn = bCookie.includes('harudrive_auth=true');
+      if (!bLoggedIn) return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } });
+      try {
+        await env.harudrive_db.prepare('CREATE TABLE IF NOT EXISTS bandwidth_stats (mode TEXT PRIMARY KEY, bytes INTEGER, requests INTEGER, updated INTEGER)').run();
+        if (bMode) {
+          const row = await env.harudrive_db.prepare('SELECT mode, bytes, requests, updated FROM bandwidth_stats WHERE mode = ?').bind(bMode).first();
+          return new Response(JSON.stringify({ mode: bMode, stats: row || { mode: bMode, bytes: 0, requests: 0 } }), { headers: { 'Content-Type': 'application/json' } });
+        } else {
+          const rows = await env.harudrive_db.prepare('SELECT mode, bytes, requests, updated FROM bandwidth_stats').all();
+          return new Response(JSON.stringify({ stats: rows.results || [] }), { headers: { 'Content-Type': 'application/json' } });
+        }
+      } catch(e) { return new Response(JSON.stringify({ error: e.message }), { status: 500 }); }
     }
 
     // API: Start Cloud Mirror
@@ -897,12 +941,26 @@ export default {
       let pathAfterPrefix = url.pathname.replace(/^\/(file|d|raw)\//, '');
       const shortId = pathAfterPrefix.split('/')[0];
 
-      const gMode = url.searchParams.get('mode') || request.headers.get('X-Storage-Mode') || '';
-      const isLikelyGDriveId = shortId.length > 20;
-      if (gMode === 'gdrive' || isLikelyGDriveId) {
+      // Resolve shortId -> real Drive ID if this is a GDrive shortId (stored as file_path = Drive ID)
+      let realShortId = shortId;
+      let gDriveFileId = null;
+      // Check if this shortId maps to a Drive ID in D1 (GDrive)
+      if (env.harudrive_db) {
+        try {
+          const r2 = await env.harudrive_db.prepare('SELECT file_path FROM shortlinks WHERE short_id = ?').bind(shortId).first();
+          if (r2 && r2.file_path && r2.file_path.length > 20 && r2.file_path.indexOf('/') === -1) {
+            // file_path looks like a Drive ID (no slash, long)
+            gDriveFileId = r2.file_path;
+          }
+        } catch(e) {}
+      }
+      const gMode2 = url.searchParams.get('mode') || request.headers.get('X-Storage-Mode') || '';
+      const isLikelyGDriveId = shortId.length > 20 || !!gDriveFileId;
+      const effectiveGDriveId = gDriveFileId || shortId;
+      if (gMode2 === 'gdrive' || isLikelyGDriveId) {
         const gToken = await getGDriveAccessToken(env);
         if (!gToken) return new Response('GDrive not configured', { status: 500 });
-        const gDriveUrl = `https://www.googleapis.com/drive/v3/files/${shortId}?alt=media&supportsAllDrives=true`;
+        const gDriveUrl = `https://www.googleapis.com/drive/v3/files/${effectiveGDriveId}?alt=media&supportsAllDrives=true`;
         const gHeaders = new Headers();
         gHeaders.set('Authorization', `Bearer ${gToken}`);
         const gRange = request.headers.get('Range');
@@ -911,10 +969,13 @@ export default {
         if (!gRes.ok && gRes.status !== 206) return new Response(`Drive File Not Found (${gRes.status})`, { status: gRes.status });
         const gRespHeaders = new Headers(gRes.headers);
         gRespHeaders.set('Access-Control-Allow-Origin', '*');
-        let gFileName = shortId;
+        let gFileName = effectiveGDriveId;
         try {
-          const metaRes = await fetch(`https://www.googleapis.com/drive/v3/files/${shortId}?fields=name&supportsAllDrives=true`, { headers: { 'Authorization': `Bearer ${gToken}` } });
-          if (metaRes.ok) { const meta = await metaRes.json(); if (meta.name) gFileName = meta.name; }
+          const metaRes = await fetch(`https://www.googleapis.com/drive/v3/files/${effectiveGDriveId}?fields=name,size&supportsAllDrives=true`, { headers: { 'Authorization': `Bearer ${gToken}` } });
+          if (metaRes.ok) { const meta = await metaRes.json(); if (meta.name) gFileName = meta.name; 
+            // Track bandwidth for GDrive
+            try { const sz = parseInt(meta.size || '0', 10); if (sz > 0) { await env.harudrive_db.prepare('CREATE TABLE IF NOT EXISTS bandwidth_stats (mode TEXT PRIMARY KEY, bytes INTEGER, requests INTEGER, updated INTEGER)').run(); await env.harudrive_db.prepare('INSERT INTO bandwidth_stats (mode, bytes, requests, updated) VALUES (?, ?, 1, ?) ON CONFLICT(mode) DO UPDATE SET bytes = bytes + ?, requests = requests + 1, updated = ?').bind('gdrive', sz, Date.now(), sz, Date.now()).run(); } } catch(e) {}
+          }
         } catch(e) {}
         const gSafeName = encodeURIComponent(gFileName);
         const gDisp = isDownload ? 'attachment' : 'inline';
@@ -950,6 +1011,8 @@ export default {
         return new Response(`File Not Found on Storage (${hfRes.status})`, { status: hfRes.status });
       }
 
+      // Track bandwidth for HF
+      try { const cLen = parseInt(hfRes.headers.get('Content-Length') || '0', 10) || parseInt(hfRes.headers.get('Content-Range')?.split('/')?.pop() || '0', 10) || 0; if (cLen > 0 && env.harudrive_db) { await env.harudrive_db.prepare('CREATE TABLE IF NOT EXISTS bandwidth_stats (mode TEXT PRIMARY KEY, bytes INTEGER, requests INTEGER, updated INTEGER)').run(); await env.harudrive_db.prepare('INSERT INTO bandwidth_stats (mode, bytes, requests, updated) VALUES (?, ?, 1, ?) ON CONFLICT(mode) DO UPDATE SET bytes = bytes + ?, requests = requests + 1, updated = ?').bind('hf', cLen, Date.now(), cLen, Date.now()).run(); } } catch(e) {}
       const respHeaders = new Headers(hfRes.headers);
       const mime = getMimeType(fileName);
       respHeaders.set('Content-Type', mime);
@@ -2485,6 +2548,7 @@ function getStorageMode(){ try{ return localStorage.getItem('harudrive_storage_m
 function setStorageMode(m){ try{ localStorage.setItem('harudrive_storage_mode', m); document.cookie='harudrive_mode='+m+'; Path=/; Max-Age=2592000; SameSite=Lax'; }catch(e){} updateStorageModeUI(); }
 function toggleStorageMode(){ const cur=getStorageMode(); const nxt=cur==='hf'?'gdrive':'hf'; setStorageMode(nxt); loadFolder('', ''); }
 function updateStorageModeUI(){ const m=getStorageMode(); const l=document.getElementById('storageModeLabel'); if(l) l.textContent=m==='gdrive'?'GDrive':'HF'; const l2=document.getElementById('storageModeLabelAdmin'); if(l2) l2.textContent=m==='gdrive'?'GDrive':'HF'; const isGDrive=m==='gdrive'; const mb=document.getElementById('cloudMirrorBtn'); if(mb) mb.style.display=isGDrive?'none':''; const sb=document.getElementById('syncIndexBtn'); if(sb) sb.style.display=isGDrive?'none':''; const ub=document.getElementById('uploadBtn'); if(ub) ub.style.display=isGDrive?'none':''; const fb=document.getElementById('newFolderBtn'); if(fb) fb.style.display=isGDrive?'none':''; }
+async function updateBandwidthIndicator(){ try{ const res=await fetch('/api/bandwidth'); if(!res.ok) return; const data=await res.json(); const stats=data.stats||[]; const hf=stats.find(function(s){return s.mode==='hf';}); const gd=stats.find(function(s){return s.mode==='gdrive';}); const fmt=function(b){ if(!b) return '-'; const v=Number(b); if(v>=1099511627776) return (v/1099511627776).toFixed(2)+' TB'; if(v>=1073741824) return (v/1073741824).toFixed(2)+' GB'; if(v>=1048576) return (v/1048576).toFixed(2)+' MB'; if(v>=1024) return (v/1024).toFixed(2)+' KB'; return v+' B'; }; const elHf=document.getElementById('bwHf'); if(elHf) elHf.textContent='HF: ' + (hf? fmt(hf.bytes) + ' ('+hf.requests+' req)':'-'); const elGd=document.getElementById('bwGDrive'); if(elGd) elGd.textContent='GDrive: ' + (gd? fmt(gd.bytes) + ' ('+gd.requests+' req)':'-'); const elUp=document.getElementById('bwUpdated'); if(elUp && stats.length){ const maxUpdated=Math.max.apply(null, stats.map(function(s){return s.updated||0;})); if(maxUpdated) elUp.textContent='Updated: ' + new Date(maxUpdated).toLocaleString(); } }catch(e){} }
 let activeFilter = 'all';
 const selectedFiles = new Set();
 let plyrPlayerInstance = null;
@@ -2506,6 +2570,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   if (isPageAdmin) {
     initAdminConsole();
+    updateBandwidthIndicator();
+    setInterval(updateBandwidthIndicator, 30000);
   } else {
     // Guest Mode / Shared Folder View
     const pathName = window.location.pathname;
@@ -4479,6 +4545,13 @@ function adminConsoleUI() {
     </div>
 
     <div class="folder-stats-label" id="folderStatsLabel"></div>
+    <div id="bandwidthIndicator" class="glass" style="display:flex; align-items:center; gap:12px; padding:8px 14px; margin-bottom:12px; border-radius:10px; font-size:0.78rem; font-weight:600;">
+      <span style="color:var(--text-muted)">Bandwidth:</span>
+      <span id="bwHf" style="color:#818cf8">HF: -</span>
+      <span style="color:var(--border)">|</span>
+      <span id="bwGDrive" style="color:#34d399">GDrive: -</span>
+      <span id="bwUpdated" style="color:var(--text-dim); font-size:0.7rem; margin-left:auto;"></span>
+    </div>
 
     <!-- Table -->
     <div class="file-table-wrapper glass">
