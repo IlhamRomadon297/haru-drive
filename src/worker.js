@@ -2481,10 +2481,10 @@ let currentFolderStats = null;
 let _sortState = { col: null, dir: 1 };
 let availableFolders = [''];
 // Storage mode (hf | gdrive) - persisted
-function getStorageMode(){ try{ return localStorage.getItem('harudrive_storage_mode') || 'hf'; }catch(e){ return 'hf'; } }
+function getStorageMode(){ try{ return localStorage.getItem('harudrive_storage_mode') || 'gdrive'; }catch(e){ return 'gdrive'; } }
 function setStorageMode(m){ try{ localStorage.setItem('harudrive_storage_mode', m); document.cookie='harudrive_mode='+m+'; Path=/; Max-Age=2592000; SameSite=Lax'; }catch(e){} updateStorageModeUI(); }
 function toggleStorageMode(){ const cur=getStorageMode(); const nxt=cur==='hf'?'gdrive':'hf'; setStorageMode(nxt); loadFolder('', ''); }
-function updateStorageModeUI(){ const m=getStorageMode(); const l=document.getElementById('storageModeLabel'); if(l) l.textContent=m==='gdrive'?'GDrive':'HF'; const l2=document.getElementById('storageModeLabelAdmin'); if(l2) l2.textContent=m==='gdrive'?'GDrive':'HF'; }
+function updateStorageModeUI(){ const m=getStorageMode(); const l=document.getElementById('storageModeLabel'); if(l) l.textContent=m==='gdrive'?'GDrive':'HF'; const l2=document.getElementById('storageModeLabelAdmin'); if(l2) l2.textContent=m==='gdrive'?'GDrive':'HF'; const isGDrive=m==='gdrive'; const mb=document.getElementById('cloudMirrorBtn'); if(mb) mb.style.display=isGDrive?'none':''; const sb=document.getElementById('syncIndexBtn'); if(sb) sb.style.display=isGDrive?'none':''; const ub=document.getElementById('uploadBtn'); if(ub) ub.style.display=isGDrive?'none':''; const fb=document.getElementById('newFolderBtn'); if(fb) fb.style.display=isGDrive?'none':''; }
 let activeFilter = 'all';
 const selectedFiles = new Set();
 let plyrPlayerInstance = null;
@@ -4263,9 +4263,9 @@ function publicIndexUI() {
         </a>
       </div>
       <div class="nav-right">
-        <button class="nav-btn" id="storageModeToggle" onclick="toggleStorageMode()" title="Ganti mode storage (HF ↔ GDrive)" style="border-color: rgba(99,102,241,0.3);">
+        <button class="nav-btn" id="storageModeToggle" onclick="toggleStorageMode()" title="Ganti mode storage (GDrive ↔ HF)" style="border-color: rgba(99,102,241,0.3);">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M12 2v8M12 14v8"/><path d="M4.93 10a5 5 0 0 1 6.07-6"/><path d="M19.07 14a5 5 0 0 1-6.07 6"/><circle cx="12" cy="12" r="3"/></svg>
-          <span id="storageModeLabel">HF</span>
+          <span id="storageModeLabel">GDrive</span>
         </button>
         <a href="/admin" class="nav-btn" title="Masuk ke Admin Console">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
@@ -4386,9 +4386,9 @@ function adminConsoleUI() {
       </div>
 
       <div class="nav-right">
-        <button class="nav-btn" id="storageModeToggleAdmin" onclick="toggleStorageMode()" title="Ganti mode storage (HF ↔ GDrive)" style="border-color: rgba(99,102,241,0.3);">
+        <button class="nav-btn" id="storageModeToggleAdmin" onclick="toggleStorageMode()" title="Ganti mode storage (GDrive ↔ HF)" style="border-color: rgba(99,102,241,0.3);">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M12 2v8M12 14v8"/><path d="M4.93 10a5 5 0 0 1 6.07-6"/><path d="M19.07 14a5 5 0 0 1-6.07 6"/><circle cx="12" cy="12" r="3"/></svg>
-          <span id="storageModeLabelAdmin">HF</span>
+          <span id="storageModeLabelAdmin">GDrive</span>
         </button>
         <a href="/" class="nav-btn" title="Kembali ke Web Publik">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
@@ -4445,17 +4445,17 @@ function adminConsoleUI() {
           <input type="text" id="searchInput" class="form-input-pro" placeholder="Cari file global (Ctrl+K)" style="padding-left: 36px; padding-right: 36px;">
           <button id="searchClearBtn" class="search-clear-btn" title="Hapus pencarian" style="position:absolute; right:8px; top:50%; transform:translateY(-50%); display:none; background:rgba(255,255,255,0.08); border:1px solid var(--border); border-radius:50%; width:22px; height:22px; align-items:center; justify-content:center; cursor:pointer; color:var(--text-dim);"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
         </div>
-        <button class="btn-action-tool" style="background: rgba(99, 102, 241, 0.15); border-color: rgba(99, 102, 241, 0.4); color: var(--primary-light);" onclick="openUploadModal()">
+        <button id="uploadBtn" class="btn-action-tool" style="background: rgba(99, 102, 241, 0.15); border-color: rgba(99, 102, 241, 0.4); color: var(--primary-light);" onclick="openUploadModal()">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
           <span>Upload File</span>
         </button>
 
-        <button class="btn-action-tool" style="background: rgba(16, 185, 129, 0.12); border-color: rgba(16, 185, 129, 0.35); color: #10b981;" onclick="openNewFolderModal()">
+        <button id="newFolderBtn" class="btn-action-tool" style="background: rgba(16, 185, 129, 0.12); border-color: rgba(16, 185, 129, 0.35); color: #10b981;" onclick="openNewFolderModal()">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/><line x1="12" y1="10" x2="12" y2="16"/><line x1="9" y1="13" x2="15" y2="13"/></svg>
           <span>Folder Baru</span>
         </button>
 
-        <button class="btn-action-tool" style="background: rgba(236, 72, 153, 0.12); border-color: rgba(236, 72, 153, 0.35); color: #ec4899;" onclick="openMirrorModal()">
+        <button id="cloudMirrorBtn" class="btn-action-tool" style="background: rgba(236, 72, 153, 0.12); border-color: rgba(236, 72, 153, 0.35); color: #ec4899;" onclick="openMirrorModal()">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/><polyline points="12 13 12 7 9 10"/><polyline points="12 7 15 10"/></svg>
           <span>Cloud Mirror</span>
         </button>
@@ -4466,7 +4466,7 @@ function adminConsoleUI() {
           <span id="taskPulseDot" style="display: none; width: 7px; height: 7px; border-radius: 50%; background: #10b981; box-shadow: 0 0 8px #10b981; position: absolute; top: 4px; right: 4px;"></span>
         </button>
 
-        <button class="btn-action-tool" style="background: rgba(234, 179, 8, 0.12); border-color: rgba(234, 179, 8, 0.35); color: #eab308;" onclick="syncFromHF()" title="Sinkronkan seluruh index HF ke D1">
+        <button id="syncIndexBtn" class="btn-action-tool" style="background: rgba(234, 179, 8, 0.12); border-color: rgba(234, 179, 8, 0.35); color: #eab308;" onclick="syncFromHF()" title="Sinkronkan seluruh index HF ke D1">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
           <span>Sync Index</span>
         </button>
