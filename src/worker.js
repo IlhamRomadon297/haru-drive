@@ -2556,7 +2556,7 @@ let availableFolders = [''];
 function getStorageMode(){ try{ return localStorage.getItem('harudrive_storage_mode') || 'gdrive'; }catch(e){ return 'gdrive'; } }
 function setStorageMode(m){ try{ localStorage.setItem('harudrive_storage_mode', m); document.cookie='harudrive_mode='+m+'; Path=/; Max-Age=2592000; SameSite=Lax'; }catch(e){} updateStorageModeUI(); }
 function toggleStorageMode(){ const cur=getStorageMode(); const nxt=cur==='hf'?'gdrive':'hf'; setStorageMode(nxt); loadFolder('', ''); }
-function updateStorageModeUI(){ const m=getStorageMode(); const l=document.getElementById('storageModeLabel'); if(l) l.textContent=m==='gdrive'?'GDrive':'HF'; const l2=document.getElementById('storageModeLabelAdmin'); if(l2) l2.textContent=m==='gdrive'?'GDrive':'HF'; const isGDrive=m==='gdrive'; const mb=document.getElementById('cloudMirrorBtn'); if(mb) mb.style.display=isGDrive?'none':''; const sb=document.getElementById('syncIndexBtn'); if(sb) sb.style.display=isGDrive?'none':''; const ub=document.getElementById('uploadBtn'); if(ub) ub.style.display=isGDrive?'none':''; const fb=document.getElementById('newFolderBtn'); if(fb) fb.style.display=isGDrive?'none':''; }
+function updateStorageModeUI(){ const m=getStorageMode(); const cur=m==='gdrive'?'GDrive':'HF'; const nxt=m==='gdrive'?'HF':'GDrive'; const l=document.getElementById('storageModeLabel'); if(l) l.textContent='Mode: '+cur; const l2=document.getElementById('storageModeLabelAdmin'); if(l2) l2.textContent='Mode: '+cur; const t1=document.getElementById('storageModeToggle'); if(t1) t1.title='Saat ini: '+cur+' \u2014 klik untuk ganti ke '+nxt; const t2=document.getElementById('storageModeToggleAdmin'); if(t2) t2.title='Saat ini: '+cur+' \u2014 klik untuk ganti ke '+nxt; const isGDrive=m==='gdrive'; const mb=document.getElementById('cloudMirrorBtn'); if(mb) mb.style.display=isGDrive?'none':''; const sb=document.getElementById('syncIndexBtn'); if(sb) sb.style.display=isGDrive?'none':''; const ub=document.getElementById('uploadBtn'); if(ub) ub.style.display=isGDrive?'none':''; const fb=document.getElementById('newFolderBtn'); if(fb) fb.style.display=isGDrive?'none':''; }
 async function updateBandwidthIndicator(){ try{ const res=await fetch('/api/bandwidth'); if(!res.ok) return; const data=await res.json(); const stats=data.stats||[]; const hf=stats.find(function(s){return s.mode==='hf';}); const gd=stats.find(function(s){return s.mode==='gdrive';}); const fmt=function(b){ if(!b) return '-'; const v=Number(b); if(v>=1099511627776) return (v/1099511627776).toFixed(2)+' TB'; if(v>=1073741824) return (v/1073741824).toFixed(2)+' GB'; if(v>=1048576) return (v/1048576).toFixed(2)+' MB'; if(v>=1024) return (v/1024).toFixed(2)+' KB'; return v+' B'; }; const elHf=document.getElementById('bwHf'); if(elHf) elHf.textContent='HF: ' + (hf? fmt(hf.bytes) + ' ('+hf.requests+' req)':'-'); const elGd=document.getElementById('bwGDrive'); if(elGd) elGd.textContent='GDrive: ' + (gd? fmt(gd.bytes) + ' ('+gd.requests+' req)':'-'); const elUp=document.getElementById('bwUpdated'); if(elUp && stats.length){ const maxUpdated=Math.max.apply(null, stats.map(function(s){return s.updated||0;})); if(maxUpdated) elUp.textContent='Updated: ' + new Date(maxUpdated).toLocaleString(); } }catch(e){} }
 let activeFilter = 'all';
 const selectedFiles = new Set();
@@ -4353,9 +4353,9 @@ function publicIndexUI() {
         </a>
       </div>
       <div class="nav-right">
-        <button class="nav-btn" id="storageModeToggle" onclick="toggleStorageMode()" title="Ganti mode storage (GDrive ↔ HF)" style="border-color: rgba(99,102,241,0.3);">
+        <button class="nav-btn" id="storageModeToggle" onclick="toggleStorageMode()" title="Saat ini: GDrive — klik untuk ganti ke HF" style="border-color: rgba(99,102,241,0.3);">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M12 2v8M12 14v8"/><path d="M4.93 10a5 5 0 0 1 6.07-6"/><path d="M19.07 14a5 5 0 0 1-6.07 6"/><circle cx="12" cy="12" r="3"/></svg>
-          <span id="storageModeLabel">GDrive</span>
+          <span id="storageModeLabel">Mode: GDrive</span>
         </button>
         <a href="/admin" class="nav-btn" title="Masuk ke Admin Console">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
@@ -4476,9 +4476,9 @@ function adminConsoleUI() {
       </div>
 
       <div class="nav-right">
-        <button class="nav-btn" id="storageModeToggleAdmin" onclick="toggleStorageMode()" title="Ganti mode storage (GDrive ↔ HF)" style="border-color: rgba(99,102,241,0.3);">
+        <button class="nav-btn" id="storageModeToggleAdmin" onclick="toggleStorageMode()" title="Saat ini: GDrive — klik untuk ganti ke HF" style="border-color: rgba(99,102,241,0.3);">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M12 2v8M12 14v8"/><path d="M4.93 10a5 5 0 0 1 6.07-6"/><path d="M19.07 14a5 5 0 0 1-6.07 6"/><circle cx="12" cy="12" r="3"/></svg>
-          <span id="storageModeLabelAdmin">GDrive</span>
+          <span id="storageModeLabelAdmin">Mode: GDrive</span>
         </button>
         <a href="/" class="nav-btn" title="Kembali ke Web Publik">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
