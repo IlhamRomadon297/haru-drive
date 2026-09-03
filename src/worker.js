@@ -8,6 +8,10 @@ export default {
     const ADMIN_PIN = env.ADMIN_PIN || 'not_set_in_env';
     const GITHUB_PAT = env.GITHUB_PAT || '';
     const GITHUB_REPO = env.GITHUB_REPO || 'IlhamRomadon297/haru-drive';
+    const GDRIVE_CLIENT_ID = env.GDRIVE_CLIENT_ID || '';
+    const GDRIVE_CLIENT_SECRET = env.GDRIVE_CLIENT_SECRET || '';
+    const GDRIVE_REFRESH_TOKEN = env.GDRIVE_REFRESH_TOKEN || '';
+    const GDRIVE_ROOT_ID = env.GDRIVE_ROOT_ID || '1Sq1JHBCQ9REXWyhpvdjfwwJP7HJCB7Z9';
 
     // Best-effort background sync: keeps the D1 search index fresh automatically.
     // Only triggered on page loads (not /api/*) to avoid D1 write contention with file listing.
@@ -126,6 +130,14 @@ export default {
     // API: Global Search
     if (url.pathname === '/api/search') {
       try {
+        const searchMode = url.searchParams.get('mode') || request.headers.get('X-Storage-Mode') || '';
+        if (searchMode === 'gdrive') {
+          const gQ = (url.searchParams.get('q') || '').trim();
+          if (!gQ) return new Response(JSON.stringify({ query: '', files: [] }), { headers: { 'Content-Type': 'application/json' } });
+          const gFiles = await searchGDrive(gQ, env);
+          const formatted = gFiles.map(f => ({ id: f.id, path: f.id, name: f.name, mimeType: f.mimeType, size: f.size, modifiedTime: f.modifiedTime, parentDir: '' }));
+          return new Response(JSON.stringify({ query: gQ, files: formatted }), { headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
+        }
         const q = (url.searchParams.get('q') || '').trim();
         if (!q) {
           return new Response(JSON.stringify({ query: '', files: [] }), {
@@ -173,6 +185,21 @@ export default {
     // API: List Files
     if (url.pathname === '/api/list') {
       try {
+        const listMode = url.searchParams.get('mode') || request.headers.get('X-Storage-Mode') || '';
+        if (listMode === 'gdrive') {
+          let gFolderId = url.searchParams.get('id') || url.searchParams.get('path') || '';
+          if (!gFolderId) gFolderId = GDRIVE_ROOT_ID;
+          const gFiles = await listGDriveFolder(gFolderId, env);
+          const gFormatted = gFiles.map(f => ({ id: f.id, path: f.id, name: f.name, mimeType: f.mimeType, size: f.size, modifiedTime: f.modifiedTime }));
+          gFormatted.sort((a,b) => {
+            const aIsDir = a.mimeType === 'application/vnd.google-apps.folder';
+            const bIsDir = b.mimeType === 'application/vnd.google-apps.folder';
+            if (aIsDir && !bIsDir) return -1;
+            if (!aIsDir && bIsDir) return 1;
+            return a.name.localeCompare(b.name, undefined, { numeric: true });
+          });
+          return new Response(JSON.stringify({ folderName: gFolderId === GDRIVE_ROOT_ID ? 'GDrive Root' : 'Folder', currentPath: gFolderId, folderId: gFolderId, files: gFormatted, folderStats: { fileCount: gFiles.filter(f => f.mimeType !== 'application/vnd.google-apps.folder').length, fileSize: gFiles.filter(f => f.mimeType !== 'application/vnd.google-apps.folder').reduce((s,f)=>s+f.size,0) } }), { headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
+        }
         let reqPath = url.searchParams.get('path') || '';
         const folderId = url.searchParams.get('id') || '';
 
@@ -870,6 +897,31 @@ export default {
       let pathAfterPrefix = url.pathname.replace(/^\/(file|d|raw)\//, '');
       const shortId = pathAfterPrefix.split('/')[0];
 
+      const gMode = url.searchParams.get('mode') || request.headers.get('X-Storage-Mode') || '';
+      const isLikelyGDriveId = shortId.length > 20;
+      if (gMode === 'gdrive' || isLikelyGDriveId) {
+        const gToken = await getGDriveAccessToken(env);
+        if (!gToken) return new Response('GDrive not configured', { status: 500 });
+        const gDriveUrl = `https://www.googleapis.com/drive/v3/files/${shortId}?alt=media&supportsAllDrives=true`;
+        const gHeaders = new Headers();
+        gHeaders.set('Authorization', `Bearer ${gToken}`);
+        const gRange = request.headers.get('Range');
+        if (gRange) gHeaders.set('Range', gRange);
+        const gRes = await fetch(gDriveUrl, { headers: gHeaders });
+        if (!gRes.ok && gRes.status !== 206) return new Response(`Drive File Not Found (${gRes.status})`, { status: gRes.status });
+        const gRespHeaders = new Headers(gRes.headers);
+        gRespHeaders.set('Access-Control-Allow-Origin', '*');
+        let gFileName = shortId;
+        try {
+          const metaRes = await fetch(`https://www.googleapis.com/drive/v3/files/${shortId}?fields=name&supportsAllDrives=true`, { headers: { 'Authorization': `Bearer ${gToken}` } });
+          if (metaRes.ok) { const meta = await metaRes.json(); if (meta.name) gFileName = meta.name; }
+        } catch(e) {}
+        const gSafeName = encodeURIComponent(gFileName);
+        const gDisp = isDownload ? 'attachment' : 'inline';
+        gRespHeaders.set('Content-Disposition', `${gDisp}; filename="${gFileName.replace(/"/g, '')}"; filename*=UTF-8''${gSafeName}`);
+        if (!gRespHeaders.get('Content-Type')) gRespHeaders.set('Content-Type', getMimeType(gFileName));
+        return new Response(gRes.body, { status: gRes.status, headers: gRespHeaders });
+      }
       let filePath = '';
       let fileName = '';
 
@@ -1065,6 +1117,42 @@ function getMimeType(filename) {
     'svg': 'image/svg+xml'
   };
   return mimeTypes[ext] || 'application/octet-stream';
+}
+
+async function getGDriveAccessToken(env) {
+  const cid = env.GDRIVE_CLIENT_ID || '';
+  const csec = env.GDRIVE_CLIENT_SECRET || '';
+  const rtoken = env.GDRIVE_REFRESH_TOKEN || '';
+  if (!cid || !csec || !rtoken) return null;
+  const res = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: `client_id=${encodeURIComponent(cid)}&client_secret=${encodeURIComponent(csec)}&refresh_token=${encodeURIComponent(rtoken)}&grant_type=refresh_token`
+  });
+  if (!res.ok) return null;
+  const j = await res.json().catch(() => ({}));
+  return j.access_token || null;
+}
+async function listGDriveFolder(folderId, env) {
+  const token = await getGDriveAccessToken(env);
+  if (!token) throw new Error('GDrive not configured - set GDRIVE_CLIENT_ID/SECRET/REFRESH_TOKEN');
+  const q = `'${folderId}' in parents and trashed = false`;
+  const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=nextPageToken,files(id,name,mimeType,size,modifiedTime,parents)&pageSize=1000&supportsAllDrives=true&includeItemsFromAllDrives=true&orderBy=folder,name`;
+  const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
+  if (!res.ok) throw new Error(`Drive API ${res.status}: ${await res.text()}`);
+  const data = await res.json();
+  return (data.files || []).map(f => ({ id: f.id, name: f.name, mimeType: f.mimeType, size: parseInt(f.size || '0', 10), modifiedTime: f.modifiedTime, isFolder: f.mimeType === 'application/vnd.google-apps.folder' }));
+}
+async function searchGDrive(query, env) {
+  const token = await getGDriveAccessToken(env);
+  if (!token) throw new Error('GDrive not configured');
+  const safeQ = query.replace(/'/g, "\\'");
+  const q = `name contains '${safeQ}' and trashed = false`;
+  const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name,mimeType,size,modifiedTime,parents)&pageSize=60&supportsAllDrives=true&includeItemsFromAllDrives=true`;
+  const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
+  if (!res.ok) throw new Error(`Drive API ${res.status}`);
+  const data = await res.json();
+  return (data.files || []).map(f => ({ id: f.id, name: f.name, mimeType: f.mimeType, size: parseInt(f.size || '0', 10), modifiedTime: f.modifiedTime }));
 }
 
 function htmlPage(content, env, pageMode = 'public') {
@@ -2392,6 +2480,11 @@ let allFiles = [];
 let currentFolderStats = null;
 let _sortState = { col: null, dir: 1 };
 let availableFolders = [''];
+// Storage mode (hf | gdrive) - persisted
+function getStorageMode(){ try{ return localStorage.getItem('harudrive_storage_mode') || 'hf'; }catch(e){ return 'hf'; } }
+function setStorageMode(m){ try{ localStorage.setItem('harudrive_storage_mode', m); document.cookie='harudrive_mode='+m+'; Path=/; Max-Age=2592000; SameSite=Lax'; }catch(e){} updateStorageModeUI(); }
+function toggleStorageMode(){ const cur=getStorageMode(); const nxt=cur==='hf'?'gdrive':'hf'; setStorageMode(nxt); loadFolder('', ''); }
+function updateStorageModeUI(){ const m=getStorageMode(); const l=document.getElementById('storageModeLabel'); if(l) l.textContent=m==='gdrive'?'GDrive':'HF'; const l2=document.getElementById('storageModeLabelAdmin'); if(l2) l2.textContent=m==='gdrive'?'GDrive':'HF'; }
 let activeFilter = 'all';
 const selectedFiles = new Set();
 let plyrPlayerInstance = null;
@@ -2405,6 +2498,7 @@ document.addEventListener('DOMContentLoaded', () => {
     updateThemeIcon(true);
   }
 
+  updateStorageModeUI();
   // Login page: skip file-console initialization.
   if (document.body.getAttribute('data-mode') === 'login') {
     return;
@@ -2602,11 +2696,15 @@ async function loadFolder(path = '', id = '') {
   }
 
   try {
+    const _mode = getStorageMode();
     let fetchUrl = '/api/list';
-    if (id) {
-      fetchUrl += '?id=' + encodeURIComponent(id);
-    } else if (path) {
-      fetchUrl += '?path=' + encodeURIComponent(path);
+    if (_mode === 'gdrive') {
+      const gId = id || path || '';
+      if (gId) fetchUrl += '?id=' + encodeURIComponent(gId) + '&mode=gdrive';
+      else fetchUrl += '?mode=gdrive';
+    } else {
+      if (id) fetchUrl += '?id=' + encodeURIComponent(id);
+      else if (path) fetchUrl += '?path=' + encodeURIComponent(path);
     }
 
     const res = await fetch(fetchUrl);
@@ -3324,7 +3422,8 @@ function playVideo(fileId, fileName) {
   if (!modal || !video) return;
 
   title.textContent = fileName || 'Video Player';
-  const videoUrl = window.location.origin + '/d/' + fileId + '/' + encodeURIComponent(fileName || 'video');
+  const _vmode = getStorageMode();
+  const videoUrl = window.location.origin + '/d/' + fileId + '/' + encodeURIComponent(fileName || 'video') + (_vmode === 'gdrive' ? '?mode=gdrive' : '');
   video.src = videoUrl;
 
   if (plyrPlayerInstance) {
@@ -3460,7 +3559,9 @@ async function handleSearch(e) {
     container.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--text-dim);"><p>Mencari "' + escapeHtml(q) + '"...</p></div>';
   }
   try {
-    const res = await fetch('/api/search?q=' + encodeURIComponent(q));
+    const _sm = getStorageMode();
+    const searchUrl = '/api/search?q=' + encodeURIComponent(q) + (_sm === 'gdrive' ? '&mode=gdrive' : '');
+    const res = await fetch(searchUrl);
     if (res.ok) {
       const data = await res.json();
       allFiles = data.files || [];
@@ -3951,7 +4052,8 @@ async function startBinaryMediaInfoScan(force) {
   }
   // Layer 3 & 4: Byte-range + demux
   try {
-    const streamUrl = window.location.origin + '/d/' + file.id;
+    const _smode = getStorageMode();
+    const streamUrl = window.location.origin + '/d/' + file.id + (_smode === 'gdrive' ? '?mode=gdrive' : '');
     const res = await fetch(streamUrl, { headers: { 'Range': 'bytes=0-262143' } });
     if (res.ok || res.status === 206) {
       const buffer = await res.arrayBuffer();
@@ -4161,6 +4263,10 @@ function publicIndexUI() {
         </a>
       </div>
       <div class="nav-right">
+        <button class="nav-btn" id="storageModeToggle" onclick="toggleStorageMode()" title="Ganti mode storage (HF ↔ GDrive)" style="border-color: rgba(99,102,241,0.3);">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M12 2v8M12 14v8"/><path d="M4.93 10a5 5 0 0 1 6.07-6"/><path d="M19.07 14a5 5 0 0 1-6.07 6"/><circle cx="12" cy="12" r="3"/></svg>
+          <span id="storageModeLabel">HF</span>
+        </button>
         <a href="/admin" class="nav-btn" title="Masuk ke Admin Console">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
           <span class="btn-text-label">Admin</span>
@@ -4280,6 +4386,10 @@ function adminConsoleUI() {
       </div>
 
       <div class="nav-right">
+        <button class="nav-btn" id="storageModeToggleAdmin" onclick="toggleStorageMode()" title="Ganti mode storage (HF ↔ GDrive)" style="border-color: rgba(99,102,241,0.3);">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M12 2v8M12 14v8"/><path d="M4.93 10a5 5 0 0 1 6.07-6"/><path d="M19.07 14a5 5 0 0 1-6.07 6"/><circle cx="12" cy="12" r="3"/></svg>
+          <span id="storageModeLabelAdmin">HF</span>
+        </button>
         <a href="/" class="nav-btn" title="Kembali ke Web Publik">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
           <span class="btn-text-label">Web Publik</span>
