@@ -134,7 +134,15 @@ export default {
         if (searchMode === 'gdrive') {
           const gQ = (url.searchParams.get('q') || '').trim();
           if (!gQ) return new Response(JSON.stringify({ query: '', files: [] }), { headers: { 'Content-Type': 'application/json' } });
-          const gFiles = await searchGDrive(gQ, env);
+          const parentId = url.searchParams.get('parentId') || url.searchParams.get('folderId') || '';
+          let gFiles;
+          if (parentId) {
+            // Local search: list current folder and filter by name (direct children only)
+            try { const inFolder = await listGDriveFolder(parentId, env); gFiles = inFolder.filter(f => f.name.toLowerCase().includes(gQ.toLowerCase())); } catch(e) { gFiles = await searchGDrive(gQ, env); }
+          } else {
+            // No parent specified, fallback to global search (should not happen in GDrive local mode, but keep as fallback)
+            gFiles = await searchGDrive(gQ, env);
+          }
           const formatted = gFiles.map(f => ({ id: f.id, path: f.id, name: f.name, mimeType: f.mimeType, size: f.size, modifiedTime: f.modifiedTime, parentDir: '' }));
           return new Response(JSON.stringify({ query: gQ, files: formatted }), { headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
         }
@@ -3621,14 +3629,29 @@ async function handleSearch(e) {
     loadFolder(currentPath, currentFolderId);
     return;
   }
+  const _sm = getStorageMode();
+  if (_sm === 'gdrive') {
+    // Local search within current folder only (no global leak)
+    const lowerQ = q.toLowerCase();
+    const filtered = allFiles.filter(function(f){ return f.name.toLowerCase().includes(lowerQ); });
+    const container2 = document.getElementById('fileListContainer');
+    if (filtered.length === 0 && container2) {
+      container2.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--text-muted);"><p>Tidak ada hasil untuk "' + escapeHtml(q) + '" di folder ini.</p></div>';
+      return;
+    }
+    // Temporarily swap allFiles for render, then restore
+    const _origFiles = allFiles;
+    allFiles = filtered;
+    renderFileList();
+    allFiles = _origFiles;
+    return;
+  }
   const container = document.getElementById('fileListContainer');
   if (container) {
     container.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--text-dim);"><p>Mencari "' + escapeHtml(q) + '"...</p></div>';
   }
   try {
-    const _sm = getStorageMode();
-    const searchUrl = '/api/search?q=' + encodeURIComponent(q) + (_sm === 'gdrive' ? '&mode=gdrive' : '');
-    const res = await fetch(searchUrl);
+    const searchUrl = '/api/search?q=' + encodeURIComponent(q);
     if (res.ok) {
       const data = await res.json();
       allFiles = data.files || [];
