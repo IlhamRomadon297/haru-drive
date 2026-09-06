@@ -44,13 +44,25 @@ def normalize_gofile_file(f):
     if not isinstance(f, dict):
         return None
     name = f.get("name") or f.get("fileName") or f.get("filename") or ""
-    link = f.get("link") or f.get("url") or f.get("downloadUrl") or f.get("directLink") or f.get("content") or ""
-    size = f.get("size") or f.get("fileSize") or 0
+    link = f.get("downloadUrl") or f.get("link") or f.get("url") or f.get("directLink") or f.get("content") or ""
+    size = f.get("bytes") or f.get("size") or f.get("fileSize") or 0
     try:
         size = int(size)
     except Exception:
-        size = 0
-    if not name or not link:
+        try:
+            import re as _re
+            m = _re.match(r"\s*([\d.]+)\s*([KMGT]?B)", str(size), _re.I)
+            mult = {"B": 1, "KB": 1024, "MB": 1024**2, "GB": 1024**3, "TB": 1024**4}
+            size = int(float(m.group(1)) * mult.get(m.group(2).upper(), 1)) if m else 0
+        except Exception:
+            size = 0
+    if not name:
+        try:
+            from urllib.parse import unquote as _unq
+            name = _unq((link or "").rstrip("/").split("/")[-1].split("?")[0]) or "file"
+        except Exception:
+            name = "file"
+    if not link:
         return None
     return {"name": name, "link": link, "size": size}
 
@@ -60,6 +72,14 @@ def parse_gofile_response(data):
     if isinstance(data, dict):
         d = data.get("data")
         if isinstance(d, dict):
+            dl = d.get("downloadLinks")
+            if isinstance(dl, list):
+                folder_name = d.get("name") or ""
+                for f in dl:
+                    n = normalize_gofile_file(f)
+                    if n:
+                        files.append(n)
+                return files, folder_name
             ch = d.get("children")
             if isinstance(ch, dict):
                 folder_name = d.get("name") or ""
@@ -109,12 +129,24 @@ def resolve_gofile_files(api_base, api_token, gofile_url, password="", page_size
     page = 0
     while page < max_pages:
         payload = json.dumps({"url": f"https://gofile.io/d/{gid}", "password": password or "", "expiresInSeconds": 3600, "filePage": page, "filePageSize": page_size})
-        req = urllib.request.Request(api_base.rstrip("/") + "/api/v1/generate", data=payload.encode(), headers=headers)
-        try:
-            with urllib.request.urlopen(req, timeout=60) as res:
-                data = json.loads(res.read().decode())
-        except Exception as e:
-            raise Exception(f"Gofile API error (page {page}): {e}")
+        data = None
+        for api_attempt in range(1, 4):
+            try:
+                req = urllib.request.Request(api_base.rstrip("/") + "/api/v1/generate", data=payload.encode(), headers=headers)
+                with urllib.request.urlopen(req, timeout=60) as res:
+                    data = json.loads(res.read().decode())
+                break
+            except urllib.error.HTTPError as e:
+                if e.code in (403, 429, 503) and api_attempt < 3:
+                    wait = 60 * api_attempt
+                    print(f"    Gofile API throttled (HTTP {e.code}), retry {api_attempt}/3 in {wait}s...")
+                    time.sleep(wait)
+                    continue
+                raise Exception(f"Gofile API error (page {page}): HTTP {e.code} - upstream throttled, coba lagi nanti.")
+            except Exception as e:
+                raise Exception(f"Gofile API error (page {page}): {e}")
+        if data is None:
+            raise Exception(f"Gofile API error (page {page}): no response after retries.")
         if isinstance(data, dict) and data.get("ok") is False and "status" not in data:
             raise Exception(f"Gofile API: {data.get('error', 'unknown error')}")
         batch, bname = parse_gofile_response(data)
@@ -128,19 +160,42 @@ def resolve_gofile_files(api_base, api_token, gofile_url, password="", page_size
             seen.add(key)
             files.append(f)
             new_count += 1
+        try:
+            dd = data.get("data", {}) if isinstance(data, dict) else {}
+            has_more = dd.get("hasMoreFiles", None)
+        except Exception:
+            has_more = None
+        if has_more is False:
+            break
+        if has_more is True:
+            page += 1
+            continue
         if len(batch) < page_size or new_count == 0:
             break
         page += 1
     return files, folder_name, gid
 
-def download_url_stream(url, dest_path):
-    req = urllib.request.Request(url, headers={"User-Agent": "HaruDrive-Mirror/1.0"})
-    with urllib.request.urlopen(req, timeout=180) as res, open(dest_path, "wb") as out:
-        while True:
-            chunk = res.read(16 * 1024 * 1024)
-            if not chunk:
-                break
-            out.write(chunk)
+def download_url_stream(url, dest_path, max_retries=4):
+    last_err = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "HaruDrive-Mirror/1.0"})
+            with urllib.request.urlopen(req, timeout=180) as res, open(dest_path, "wb") as out:
+                while True:
+                    chunk = res.read(16 * 1024 * 1024)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+            return dest_path
+        except urllib.error.HTTPError as e:
+            last_err = e
+            if e.code in (429, 503) and attempt < max_retries:
+                wait = 30 * attempt
+                print(f"    Rate limited upstream (HTTP {e.code}), retry {attempt}/{max_retries} in {wait}s...")
+                time.sleep(wait)
+                continue
+            raise
+    raise last_err
 
 def decide_container(custom_name, api_folder_name, fallback_id, file_count):
     custom = (custom_name or "").strip("/\\ ")
