@@ -2106,6 +2106,7 @@ function htmlPage(content, env, pageMode = 'public') {
       .col-date, .file-date-cell { display: none; }
       .col-size, .file-size-cell { display: none; }
       .guest-table-box { overflow-x: auto; }
+      .guest-file-list { max-height: none; overflow: visible; }
       .guest-table-header, .guest-file-list .file-row { min-width: 600px; grid-template-columns: 40px 1fr 90px 110px; }
       .guest-table-box .col-size, .guest-table-box .file-size-cell { display: block; width: 90px; }
       
