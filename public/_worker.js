@@ -2719,8 +2719,9 @@ function lockAdminSession() {
 
 // Navigation
 function navigateTo(path, id = '', pushHistory = true) {
-  // Guest scoping: never navigate above/outside the shared root via HF-style paths.
-  if (document.getElementById('guestCardTitle') && guestRootPath && path && path.indexOf('/') !== -1 && !(path === guestRootPath || path.startsWith(guestRootPath + '/'))) {
+  // Guest scoping: never navigate above/outside the shared root.
+  // HF shares have slash paths; in a definite-HF share clamp every outside target.
+  if (document.getElementById('guestCardTitle') && guestRootPath && path && !(path === guestRootPath || path.startsWith(guestRootPath + '/')) && (path.indexOf('/') !== -1 || guestRootPath.indexOf('/') !== -1)) {
     path = guestRootPath; id = guestRootId;
   }
   if (pushHistory) {
@@ -2753,7 +2754,7 @@ function handlePopState(e) {
   } else {
     const urlParams = new URLSearchParams(window.location.search);
     const p = urlParams.get('p') || '';
-    if (_isGuestPs && guestRootPath && p && p.indexOf('/') !== -1 && !(p === guestRootPath || p.startsWith(guestRootPath + '/'))) {
+    if (_isGuestPs && guestRootPath && p && !(p === guestRootPath || p.startsWith(guestRootPath + '/')) && (p.indexOf('/') !== -1 || guestRootPath.indexOf('/') !== -1)) {
       goGuestHome();
     } else {
       loadFolder(p, '');
