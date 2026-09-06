@@ -2560,6 +2560,8 @@ function htmlPage(content, env, pageMode = 'public') {
   <script>
 let currentPath = '';
 let currentFolderId = '';
+let guestRootPath = '';
+let guestRootId = '';
 let allFiles = [];
 let currentFolderStats = null;
 let _sortState = { col: null, dir: 1 };
@@ -2596,9 +2598,10 @@ document.addEventListener('DOMContentLoaded', () => {
     } else {
       // Guest Mode / Shared Folder View
       const pathName = window.location.pathname;
-      if (pathName.startsWith('/folder/')) {
-        const fId = pathName.replace('/folder/', '').split('/')[0];
-        loadFolder('', fId);
+        if (pathName.startsWith('/folder/')) {
+          const fId = pathName.replace('/folder/', '').split('/')[0];
+          if (document.getElementById('guestCardTitle')) { guestRootId = fId; guestRootPath = ''; }
+          loadFolder('', fId);
       } else {
         const urlParams = new URLSearchParams(window.location.search);
         const _m = getStorageMode();
@@ -2716,11 +2719,23 @@ function lockAdminSession() {
 
 // Navigation
 function navigateTo(path, id = '', pushHistory = true) {
+  // Guest scoping: never navigate above/outside the shared root via HF-style paths.
+  if (document.getElementById('guestCardTitle') && guestRootPath && path && path.indexOf('/') !== -1 && !(path === guestRootPath || path.startsWith(guestRootPath + '/'))) {
+    path = guestRootPath; id = guestRootId;
+  }
   if (pushHistory) {
     const targetUrl = id ? ('/folder/' + id) : (path ? ('/?p=' + encodeURIComponent(path)) : '/');
     window.history.pushState({ path, id }, '', targetUrl);
   }
   loadFolder(path, id);
+}
+
+function goGuestHome() {
+  const rPath = guestRootPath || '';
+  const rId = guestRootId || '';
+  if (rId) { window.history.pushState({ path: rPath, id: rId }, '', '/folder/' + rId); }
+  else if (rPath) { window.history.pushState({ path: rPath, id: '' }, '', '/?p=' + encodeURIComponent(rPath)); }
+  loadFolder(rPath, rId);
 }
 
 function navigateToAdmin(path) {
@@ -2730,12 +2745,19 @@ function navigateToAdmin(path) {
 
 function handlePopState(e) {
   const pathName = window.location.pathname;
+  const _isGuestPs = !!document.getElementById('guestCardTitle');
   if (pathName.startsWith('/folder/')) {
     const fId = pathName.replace('/folder/', '').split('/')[0];
+    if (_isGuestPs && fId !== guestRootId) { guestRootId = fId; guestRootPath = ''; }
     loadFolder('', fId);
   } else {
     const urlParams = new URLSearchParams(window.location.search);
-    loadFolder(urlParams.get('p') || '', '');
+    const p = urlParams.get('p') || '';
+    if (_isGuestPs && guestRootPath && p && p.indexOf('/') !== -1 && !(p === guestRootPath || p.startsWith(guestRootPath + '/'))) {
+      goGuestHome();
+    } else {
+      loadFolder(p, '');
+    }
   }
 }
 
@@ -2806,6 +2828,7 @@ async function loadFolder(path = '', id = '') {
     currentPath = data.currentPath || '';
     currentFolderId = data.folderId || '';
     currentFolderStats = data.folderStats || null;
+    if (document.getElementById('guestCardTitle') && !guestRootPath && currentPath) { guestRootPath = currentPath; }
     allFiles = data.files || [];
 
     updateBreadcrumbs();
@@ -2899,12 +2922,24 @@ function updateBreadcrumbs() {
   if (!nav) return;
   
   const isGuestCard = !!document.getElementById('guestCardTitle');
-  const homeClick = isPageAdmin ? "navigateToAdmin('')" : (isGuestCard ? "navigateTo('/', '')" : "navigateTo('', '')");
+  const homeClick = isPageAdmin ? "navigateToAdmin('')" : (isGuestCard ? "goGuestHome()" : "navigateTo('', '')");
   let html = '<a href="/" class="crumb" onclick="' + homeClick + '; return false;"><svg class="icon icon-xs" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg><span>Home</span></a>';
-  
+
   if (currentPath) {
-    const parts = currentPath.split('/').filter(Boolean);
+    // Guest scoping: only show the trail relative to the shared root.
+    // Intermediate crumbs stay inside the share (clickable); nothing links above the root.
+    let parts = currentPath.split('/').filter(Boolean);
     let accum = '';
+    if (isGuestCard && !isPageAdmin && guestRootPath) {
+      const rootParts = guestRootPath.split('/').filter(Boolean);
+      const isInside = parts.length >= rootParts.length && rootParts.every(function(rp, i) { return parts[i] === rp; });
+      if (isInside) {
+        parts = parts.slice(rootParts.length);
+        accum = guestRootPath;
+      } else {
+        parts = [];
+      }
+    }
     parts.forEach((part, idx) => {
       accum = accum ? (accum + '/' + part) : part;
       const isLast = idx === parts.length - 1;
@@ -2916,6 +2951,13 @@ function updateBreadcrumbs() {
         html += '<a href="javascript:void(0)" class="crumb" onclick="' + click.replace(/"/g, '&quot;') + '; return false;">' + escapeHtml(part) + '</a>';
       }
     });
+    // Guest outside the shared root (shouldn't happen via UI): show only current name, no links out.
+    if (isGuestCard && !isPageAdmin && guestRootPath && parts.length === 0 && currentPath && currentPath !== guestRootPath && !currentPath.startsWith(guestRootPath + '/')) {
+      const segs = currentPath.split('/').filter(Boolean);
+      const lastPart = segs.length ? segs[segs.length - 1] : currentPath;
+      html += '<span class="crumb-separator" style="margin: 0 4px; color: var(--text-dim);">/</span>';
+      html += '<span class="crumb active" title="' + escapeHtml(lastPart) + '" style="color: var(--text); font-weight: 600;">' + escapeHtml(lastPart) + '</span>';
+    }
   }
   nav.innerHTML = html;
 }
@@ -3013,7 +3055,10 @@ function renderFileList() {
     html += '  </div>';
     html += '  <div class="file-size-cell" style="text-align: right;">' + (isDir ? (file.size > 0 ? formatBytes(file.size) : '-') : formatBytes(file.size)) + '</div>';
     
-    html += '  <div class="file-date-cell">' + formatDate(file.modifiedTime) + '</div>';
+    const _isGuestCardRow = !!cardTitle;
+    if (!_isGuestCardRow) {
+      html += '  <div class="file-date-cell">' + formatDate(file.modifiedTime) + '</div>';
+    }
 
     html += '  <div class="file-actions-cell" style="text-align: center;">';
     
@@ -4286,7 +4331,7 @@ function publicUI() {
       <!-- BREADCRUMBS -->
       <div class="guest-breadcrumb-strip">
         <div class="crumb-group" id="breadcrumbNav">
-          <a href="/" class="crumb" onclick="navigateTo('/'); return false;">
+          <a href="javascript:void(0)" class="crumb" onclick="goGuestHome(); return false;">
             <svg class="icon icon-xs" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
             <span>Home</span>
           </a>
