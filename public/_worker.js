@@ -596,7 +596,8 @@ export default {
           return new Response(JSON.stringify({ error: 'URL sumber (Google Drive / Gofile) wajib diisi.' }), { status: 400 });
         }
 
-        const ghRes = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/dispatches`, {
+        // workflow_dispatch works with fine-grained PATs (Actions R/W), unlike repository_dispatch.
+        const ghRes = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/actions/workflows/mirror.yml/dispatches`, {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${GITHUB_PAT}`,
@@ -605,8 +606,8 @@ export default {
             'Content-Type': 'application/json'
           },
           body: JSON.stringify({
-            event_type: 'gdrive_mirror',
-            client_payload: {
+            ref: 'main',
+            inputs: {
               gdrive_url: gdriveUrl,
               target_path: targetPath,
               folder_name: folderName,
