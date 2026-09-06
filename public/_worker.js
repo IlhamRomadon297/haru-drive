@@ -2582,17 +2582,22 @@ document.addEventListener('DOMContentLoaded', () => {
     initAdminConsole();
     updateBandwidthIndicator();
     setInterval(updateBandwidthIndicator, 30000);
-  } else {
-    // Guest Mode / Shared Folder View
-    const pathName = window.location.pathname;
-    if (pathName.startsWith('/folder/')) {
-      const fId = pathName.replace('/folder/', '').split('/')[0];
-      loadFolder('', fId);
     } else {
-      const urlParams = new URLSearchParams(window.location.search);
-      loadFolder(urlParams.get('p') || '', '');
+      // Guest Mode / Shared Folder View
+      const pathName = window.location.pathname;
+      if (pathName.startsWith('/folder/')) {
+        const fId = pathName.replace('/folder/', '').split('/')[0];
+        loadFolder('', fId);
+      } else {
+        const urlParams = new URLSearchParams(window.location.search);
+        const _m = getStorageMode();
+        if (_m === 'gdrive') {
+          loadFolder('', '');
+        } else {
+          loadFolder(urlParams.get('p') || '', '');
+        }
+      }
     }
-  }
 
   document.getElementById('darkToggle')?.addEventListener('click', toggleTheme);
   document.getElementById('refreshBtn')?.addEventListener('click', () => loadFolder(currentPath, currentFolderId));
