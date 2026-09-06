@@ -123,7 +123,7 @@ def resolve_gofile_files(api_base, api_token, gofile_url, password="", page_size
     if not api_token:
         raise Exception("GOFILE_API_TOKEN belum diset (GitHub Secrets / Colab Secrets).")
     print(f"    [DEBUG] Gofile token length={len(api_token)}, repr={repr(api_token[:3])}...{repr(api_token[-1:])}")
-    headers = {"Authorization": f"Bearer {api_token}", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {api_token}", "Content-Type": "application/json", "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"}
     files = []
     folder_name = ""
     seen = set()
