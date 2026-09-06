@@ -194,13 +194,24 @@ export default {
     if (url.pathname === '/api/list') {
       try {
         const listMode = url.searchParams.get('mode') || request.headers.get('X-Storage-Mode') || '';
-        if (listMode === 'gdrive') {
-          let gFolderId = url.searchParams.get('id') || url.searchParams.get('path') || '';
-          // Resolve shortId -> Drive ID if needed (for GDrive shortId links)
-          let realGFolderId = gFolderId;
-          if (gFolderId && gFolderId.length === 8 && env.harudrive_db) {
-            try { const r = await env.harudrive_db.prepare('SELECT file_path FROM shortlinks WHERE short_id = ?').bind(gFolderId).first(); if (r && r.file_path && r.file_path.length > 20) realGFolderId = r.file_path; } catch(e) {}
+        const rawListId = url.searchParams.get('id') || '';
+        // Shared links carry no mode: resolve the id first, then route by content type.
+        // HF shortIds map to paths containing '/'; Drive shortIds map to Drive IDs (no slash).
+        let listIdIsHf = false, listIdIsDrive = false, listResolvedDriveId = '';
+        if (rawListId && env.harudrive_db) {
+          try {
+            const chk = await env.harudrive_db.prepare('SELECT file_path FROM shortlinks WHERE short_id = ?').bind(rawListId).first();
+            if (chk && chk.file_path) {
+              if (chk.file_path.indexOf('/') !== -1) listIdIsHf = true;
+              else if (chk.file_path.length > 20) { listIdIsDrive = true; listResolvedDriveId = chk.file_path; }
+            } else if (rawListId.length > 20) { listIdIsDrive = true; listResolvedDriveId = rawListId; }
+          } catch(e) {
+            if (rawListId.length > 20) { listIdIsDrive = true; listResolvedDriveId = rawListId; }
           }
+        } else if (rawListId && rawListId.length > 20) { listIdIsDrive = true; listResolvedDriveId = rawListId; }
+
+        if ((listMode === 'gdrive' && !listIdIsHf) || (listIdIsDrive && listMode !== 'hf')) {
+          let realGFolderId = listResolvedDriveId || url.searchParams.get('path') || '';
           if (!realGFolderId) realGFolderId = GDRIVE_ROOT_ID;
           let folderDisplayName = 'GDrive';
           let displayPath = '';
@@ -950,23 +961,23 @@ export default {
       let pathAfterPrefix = url.pathname.replace(/^\/(file|d|raw)\//, '');
       const shortId = pathAfterPrefix.split('/')[0];
 
-      // Resolve shortId -> real Drive ID if this is a GDrive shortId (stored as file_path = Drive ID)
-      let realShortId = shortId;
-      let gDriveFileId = null;
-      // Check if this shortId maps to a Drive ID in D1 (GDrive)
+      // Resolve shortId -> determine backend by content type (shared links carry no reliable mode).
+      // HF shortIds map to paths containing '/'; Drive shortIds map to Drive IDs (no slash).
+      let dIsHf = false, dIsDrive = false, dDriveFileId = '';
       if (env.harudrive_db) {
         try {
           const r2 = await env.harudrive_db.prepare('SELECT file_path FROM shortlinks WHERE short_id = ?').bind(shortId).first();
-          if (r2 && r2.file_path && r2.file_path.length > 20 && r2.file_path.indexOf('/') === -1) {
-            // file_path looks like a Drive ID (no slash, long)
-            gDriveFileId = r2.file_path;
-          }
-        } catch(e) {}
-      }
+          if (r2 && r2.file_path) {
+            if (r2.file_path.indexOf('/') !== -1) dIsHf = true;
+            else if (r2.file_path.length > 20) { dIsDrive = true; dDriveFileId = r2.file_path; }
+          } else if (shortId.length > 20) { dIsDrive = true; dDriveFileId = shortId; }
+        } catch(e) {
+          if (shortId.length > 20) { dIsDrive = true; dDriveFileId = shortId; }
+        }
+      } else if (shortId.length > 20) { dIsDrive = true; dDriveFileId = shortId; }
       const gMode2 = url.searchParams.get('mode') || request.headers.get('X-Storage-Mode') || '';
-      const isLikelyGDriveId = shortId.length > 20 || !!gDriveFileId;
-      const effectiveGDriveId = gDriveFileId || shortId;
-      if (gMode2 === 'gdrive' || isLikelyGDriveId) {
+      const effectiveGDriveId = dDriveFileId || shortId;
+      if ((gMode2 === 'gdrive' && !dIsHf) || (dIsDrive && gMode2 !== 'hf')) {
         const gToken = await getGDriveAccessToken(env);
         if (!gToken) return new Response('GDrive not configured', { status: 500 });
         const gDriveUrl = `https://www.googleapis.com/drive/v3/files/${effectiveGDriveId}?alt=media&supportsAllDrives=true`;
