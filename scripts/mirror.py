@@ -122,7 +122,6 @@ def resolve_gofile_files(api_base, api_token, gofile_url, password="", page_size
         raise Exception("Gofile ID tidak valid.")
     if not api_token:
         raise Exception("GOFILE_API_TOKEN belum diset (GitHub Secrets / Colab Secrets).")
-    print(f"    [DEBUG] Gofile token length={len(api_token)}, repr={repr(api_token[:3])}...{repr(api_token[-1:])}")
     headers = {"Authorization": f"Bearer {api_token}", "Content-Type": "application/json", "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"}
     files = []
     folder_name = ""
@@ -135,23 +134,15 @@ def resolve_gofile_files(api_base, api_token, gofile_url, password="", page_size
             try:
                 req = urllib.request.Request(api_base.rstrip("/") + "/api/v1/generate", data=payload.encode(), headers=headers)
                 with urllib.request.urlopen(req, timeout=60) as res:
-                    resp_body = res.read().decode()
-                    print(f"    [DEBUG] Gofile API response (attempt {api_attempt}): {resp_body[:200]}")
-                    data = json.loads(resp_body)
+                    data = json.loads(res.read().decode())
                 break
             except urllib.error.HTTPError as e:
-                err_body = ""
-                try:
-                    err_body = e.read().decode()
-                except Exception:
-                    pass
-                print(f"    [DEBUG] Gofile HTTP {e.code} on attempt {api_attempt}, body: {err_body[:200]}")
                 if e.code in (403, 429, 503) and api_attempt < 3:
                     wait = 60 * api_attempt
                     print(f"    Gofile API throttled (HTTP {e.code}), retry {api_attempt}/3 in {wait}s...")
                     time.sleep(wait)
                     continue
-                raise Exception(f"Gofile API error (page {page}): HTTP {e.code} - {err_body[:200]}")
+                raise Exception(f"Gofile API error (page {page}): HTTP {e.code} - upstream throttled, coba lagi nanti.")
             except Exception as e:
                 raise Exception(f"Gofile API error (page {page}): {e}")
         if data is None:
