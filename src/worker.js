@@ -574,10 +574,11 @@ export default {
           return new Response(JSON.stringify({ error: 'PIN Admin Salah!' }), { status: 403 });
         }
 
-        const gdriveUrl = (body.gdrive_url || '').trim();
+        const gdriveUrl = (body.gdrive_url || body.source_url || '').trim();
         const targetPath = (body.target_path || '').trim();
+        const folderName = (body.folder_name || '').trim();
         if (!gdriveUrl) {
-          return new Response(JSON.stringify({ error: 'GDRIVE_URL wajib diisi.' }), { status: 400 });
+          return new Response(JSON.stringify({ error: 'URL sumber (Google Drive / Gofile) wajib diisi.' }), { status: 400 });
         }
 
         const ghRes = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/dispatches`, {
@@ -593,6 +594,7 @@ export default {
             client_payload: {
               gdrive_url: gdriveUrl,
               target_path: targetPath,
+              folder_name: folderName,
               hf_repo: HF_REPO_ID
             }
           })
@@ -3426,8 +3428,10 @@ function closeMirrorModal() {
 async function submitCloudMirror() {
   const urlInput = document.getElementById('mirrorGdriveUrl');
   const targetPath = (document.getElementById('mirrorTargetPath').value || '').trim();
+  const folderNameInput = document.getElementById('mirrorFolderName');
+  const folderName = (folderNameInput?.value || '').trim();
   const gdriveUrl = (urlInput?.value || '').trim();
-  if (!gdriveUrl) return alert('Masukkan URL Google Drive!');
+  if (!gdriveUrl) return alert('Masukkan URL Google Drive / Gofile!');
 
   const pin = localStorage.getItem('harudrive_admin_pin') || '290722';
   const btn = document.getElementById('startMirrorBtn');
@@ -3437,13 +3441,14 @@ async function submitCloudMirror() {
     const res = await fetch('/api/admin/mirror', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ gdrive_url: gdriveUrl, target_path: targetPath, pin: pin })
+      body: JSON.stringify({ gdrive_url: gdriveUrl, target_path: targetPath, folder_name: folderName, pin: pin })
     });
     const data = await res.json();
     if (res.ok && data.success) {
       alert('Tugas mirror berhasil dijadwalkan di Cloudflare & GitHub Actions! ⚡');
       closeMirrorModal();
       if (urlInput) urlInput.value = '';
+      if (folderNameInput) folderNameInput.value = '';
       openTaskManagerModal();
     } else {
       alert('Gagal: ' + (data.error || 'Error scheduling mirror'));
@@ -4823,9 +4828,12 @@ function adminConsoleUI() {
         </button>
       </div>
       <div class="modal-body">
-        <label style="font-size: 0.84rem; font-weight: 600;">Google Drive URL / Folder Link:</label>
-        <input type="text" id="mirrorGdriveUrl" class="form-input-pro" placeholder="https://drive.google.com/drive/folders/...">
-        
+        <label style="font-size: 0.84rem; font-weight: 600;">Google Drive / Gofile URL:</label>
+        <input type="text" id="mirrorGdriveUrl" class="form-input-pro" placeholder="https://drive.google.com/drive/folders/... atau https://gofile.io/d/...">
+
+        <label style="font-size: 0.84rem; font-weight: 600;">Nama Folder Kustom (opsional, untuk Gofile/Series):</label>
+        <input type="text" id="mirrorFolderName" class="form-input-pro" placeholder="Contoh: One.Piece.S01.1080p (kosongkan = otomatis)">
+
         <label style="font-size: 0.84rem; font-weight: 600;">Pilih Folder Tujuan di HaruDrive:</label>
         <div id="mirrorFolderPicker" class="folder-tree-box"></div>
         <input type="hidden" id="mirrorTargetPath">
