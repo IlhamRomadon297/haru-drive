@@ -565,6 +565,21 @@ export default {
       } catch(e) { return new Response(JSON.stringify({ stats: [] }), { headers: { 'Content-Type': 'application/json' } }); }
     }
 
+    // API: Verify Admin PIN (single source of truth for the console gate)
+    if (url.pathname === '/api/admin/verify' && request.method === 'POST') {
+      try {
+        const body = await request.json();
+        if ((body.admin_pin || '') === ADMIN_PIN) {
+          return new Response(JSON.stringify({ success: true }), {
+            headers: { 'Content-Type': 'application/json' }
+          });
+        }
+        return new Response(JSON.stringify({ error: 'PIN Admin Salah!' }), { status: 403 });
+      } catch (err) {
+        return new Response(JSON.stringify({ error: err.message }), { status: 500 });
+      }
+    }
+
     // API: Start Cloud Mirror
     if (url.pathname === '/api/admin/mirror' && request.method === 'POST') {
       try {
@@ -2673,13 +2688,24 @@ document.addEventListener('DOMContentLoaded', () => {
   window.addEventListener('popstate', handlePopState);
 });
 
-// Admin Session & PIN Gate
-function initAdminConsole() {
+// Admin Session & PIN Gate (PIN verified against server, single source of truth)
+async function verifyAdminPin(pin) {
+  try {
+    const res = await fetch('/api/admin/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ admin_pin: pin })
+    });
+    return res.ok;
+  } catch (e) { return false; }
+}
+
+async function initAdminConsole() {
   const gate = document.getElementById('adminLoginGate');
   const main = document.getElementById('adminMainContent');
   const savedPin = localStorage.getItem('harudrive_admin_pin') || getCookie('harudrive_admin_pin');
 
-  if (savedPin === '290722') {
+  if (savedPin && await verifyAdminPin(savedPin)) {
     if (gate) gate.style.display = 'none';
     if (main) main.style.display = 'block';
     const pathName = window.location.pathname;
@@ -2697,14 +2723,22 @@ function initAdminConsole() {
   }
 }
 
-function unlockAdminConsole() {
+async function unlockAdminConsole() {
   const pinInput = document.getElementById('gatePinInput');
   const errText = document.getElementById('loginPinError');
   const pin = (pinInput?.value || '').trim();
 
-  if (pin === '290722') {
-    localStorage.setItem('harudrive_admin_pin', '290722');
-    setCookie('harudrive_admin_pin', '290722', 30);
+  if (!pin) {
+    if (errText) {
+      errText.textContent = 'Masukkan PIN Admin terlebih dahulu.';
+      errText.style.display = 'block';
+    }
+    return;
+  }
+
+  if (await verifyAdminPin(pin)) {
+    localStorage.setItem('harudrive_admin_pin', pin);
+    setCookie('harudrive_admin_pin', pin, 30);
     if (errText) errText.style.display = 'none';
     initAdminConsole();
   } else {
@@ -3418,6 +3452,8 @@ async function openMirrorModal() {
   if (m) {
     await fetchFolderTree(); fetchAndRenderTasks();
     renderFolderPickerUI('mirrorFolderPicker', 'mirrorTargetPath', currentPath);
+    const pinInput = document.getElementById('mirrorAdminPin');
+    if (pinInput) pinInput.value = localStorage.getItem('harudrive_admin_pin') || '';
     m.style.display = 'flex';
   }
 }
@@ -3433,7 +3469,9 @@ async function submitCloudMirror() {
   const gdriveUrl = (urlInput?.value || '').trim();
   if (!gdriveUrl) return alert('Masukkan URL Google Drive / Gofile!');
 
-  const pin = localStorage.getItem('harudrive_admin_pin') || '290722';
+  const pinField = document.getElementById('mirrorAdminPin');
+  const pin = ((pinField?.value || '').trim() || localStorage.getItem('harudrive_admin_pin') || '').trim();
+  if (!pin) return alert('Masukkan PIN Admin!');
   const btn = document.getElementById('startMirrorBtn');
   if (btn) { btn.disabled = true; btn.textContent = 'Memulai Runner Cloud...'; }
 
@@ -3441,7 +3479,7 @@ async function submitCloudMirror() {
     const res = await fetch('/api/admin/mirror', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ gdrive_url: gdriveUrl, target_path: targetPath, folder_name: folderName, pin: pin })
+      body: JSON.stringify({ gdrive_url: gdriveUrl, target_path: targetPath, folder_name: folderName, admin_pin: pin })
     });
     const data = await res.json();
     if (res.ok && data.success) {
@@ -3541,10 +3579,10 @@ async function cancelMirrorTask(runId) {
   const pin = localStorage.getItem('harudrive_admin_pin') || '290722';
 
   try {
-    const res = await fetch('/api/admin/mirror-cancel', {
+    const res = await fetch('/api/admin/cancel-task', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ run_id: runId, pin: pin })
+      body: JSON.stringify({ run_id: runId, admin_pin: pin })
     });
     const data = await res.json();
     if (res.ok && data.success) {
@@ -4837,6 +4875,9 @@ function adminConsoleUI() {
         <label style="font-size: 0.84rem; font-weight: 600;">Pilih Folder Tujuan di HaruDrive:</label>
         <div id="mirrorFolderPicker" class="folder-tree-box"></div>
         <input type="hidden" id="mirrorTargetPath">
+
+        <label style="font-size: 0.84rem; font-weight: 600;">PIN Admin:</label>
+        <input type="password" id="mirrorAdminPin" class="form-input-pro" placeholder="••••••" autocomplete="off">
       </div>
       <div class="modal-footer">
         <button class="nav-btn" onclick="closeMirrorModal()">Batal</button>
