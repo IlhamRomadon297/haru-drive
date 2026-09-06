@@ -1953,6 +1953,90 @@ function htmlPage(content, env, pageMode = 'public') {
       color: #ef4444;
     }
 
+    /* Task Manager */
+    .task-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px 10px;
+      border-radius: 20px;
+      font-size: 0.7rem;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+      white-space: nowrap;
+    }
+    .badge-success { background: rgba(16, 185, 129, 0.12); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
+    .badge-danger { background: rgba(239, 68, 68, 0.12); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
+    .badge-warning { background: rgba(245, 158, 11, 0.12); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); }
+    .badge-info { background: rgba(14, 165, 233, 0.12); color: #38bdf8; border: 1px solid rgba(14, 165, 233, 0.3); }
+    .badge-secondary { background: rgba(100, 116, 139, 0.15); color: #94a3b8; border: 1px solid rgba(100, 116, 139, 0.3); }
+    body.light .badge-success { background: rgba(16, 185, 129, 0.08); color: #059669; border-color: rgba(16, 185, 129, 0.25); }
+    body.light .badge-danger { background: rgba(239, 68, 68, 0.08); color: #dc2626; border-color: rgba(239, 68, 68, 0.25); }
+    body.light .badge-warning { background: rgba(245, 158, 11, 0.08); color: #d97706; border-color: rgba(245, 158, 11, 0.25); }
+    body.light .badge-info { background: rgba(14, 165, 233, 0.08); color: #0284c7; border-color: rgba(14, 165, 233, 0.25); }
+    body.light .badge-secondary { background: rgba(100, 116, 139, 0.08); color: #475569; border-color: rgba(100, 116, 139, 0.25); }
+
+    .task-card-item {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 14px 16px;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    .task-card-item:hover {
+      border-color: rgba(14, 165, 233, 0.3);
+      box-shadow: 0 2px 12px rgba(14, 165, 233, 0.08);
+    }
+    .task-card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+    }
+    .task-card-meta {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin-top: 8px;
+      font-size: 0.74rem;
+      color: var(--text-dim);
+      flex-wrap: wrap;
+    }
+    .task-card-meta a {
+      color: #38bdf8;
+      text-decoration: none;
+      font-weight: 600;
+      transition: color 0.2s;
+    }
+    .task-card-meta a:hover { color: #7dd3fc; text-decoration: underline; }
+    body.light .task-card-meta a { color: #0284c7; }
+    body.light .task-card-meta a:hover { color: #0369a1; }
+
+    .btn-ctrl-sm {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 5px 12px;
+      border-radius: 8px;
+      font-size: 0.72rem;
+      font-weight: 600;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn-ctrl-sm:hover { background: var(--bg-card); color: var(--text); }
+    .btn-ctrl-sm.btn-act-danger:hover {
+      background: rgba(239, 68, 68, 0.12);
+      border-color: rgba(239, 68, 68, 0.4);
+      color: #f87171;
+    }
+    body.light .btn-ctrl-sm.btn-act-danger:hover {
+      background: rgba(239, 68, 68, 0.06);
+      color: #dc2626;
+    }
+
     .modal-body {
       padding: 16px 18px;
       display: flex;
@@ -3531,11 +3615,22 @@ async function fetchAndRenderTasks() {
     const runs = data.runs || [];
 
     if (runs.length === 0) {
-      container.innerHTML = '<div style="text-align: center; padding: 24px; color: var(--text-dim);">Belum ada antrean mirroring aktif.</div>';
+      container.innerHTML = '<div style="text-align: center; padding: 36px; color: var(--text-dim);"><svg class="icon" style="margin: 0 auto 12px; width: 32px; height: 32px; color: var(--text-dim); opacity: 0.5;" viewBox="0 0 24 24"><path d="M12 2v4"/><path d="M12 18v4"/><path d="M4.93 4.93l2.83 2.83"/><path d="M16.24 16.24l2.83 2.83"/><path d="M2 12h4"/><path d="M18 12h4"/><path d="M4.93 19.07l2.83-2.83"/><path d="M16.24 7.76l2.83-2.83"/></svg><p style="font-size: 0.88rem; font-weight: 600; margin-bottom: 4px;">Tidak ada task aktif</p><p style="font-size: 0.78rem;">Belum ada antrean mirroring.</p></div>';
       return;
     }
 
-    let html = '';
+    const running = runs.filter(r => r.status === 'in_progress' || r.status === 'queued').length;
+    const succeeded = runs.filter(r => r.conclusion === 'success').length;
+    const failed = runs.filter(r => r.conclusion === 'failure').length;
+
+    let summaryHtml = '<div style="display: flex; gap: 16px; margin-bottom: 14px; flex-wrap: wrap;">';
+    summaryHtml += '<div style="display: flex; align-items: center; gap: 6px; font-size: 0.76rem; color: var(--text-dim);"><span style="font-weight: 700; color: var(--text); font-size: 0.95rem;">' + runs.length + '</span> Total</div>';
+    if (running > 0) summaryHtml += '<div style="display: flex; align-items: center; gap: 5px; font-size: 0.76rem;"><div class="pulse-dot" style="width: 5px; height: 5px;"></div><span style="color: #38bdf8; font-weight: 600;">' + running + '</span> <span style="color: var(--text-dim);">Berjalan</span></div>';
+    if (succeeded > 0) summaryHtml += '<div style="display: flex; align-items: center; gap: 5px; font-size: 0.76rem;"><span style="color: #34d399; font-weight: 600;">' + succeeded + '</span> <span style="color: var(--text-dim);">Selesai</span></div>';
+    if (failed > 0) summaryHtml += '<div style="display: flex; align-items: center; gap: 5px; font-size: 0.76rem;"><span style="color: #f87171; font-weight: 600;">' + failed + '</span> <span style="color: var(--text-dim);">Gagal</span></div>';
+    summaryHtml += '</div>';
+
+    let html = summaryHtml;
     runs.forEach(r => {
       const isRunning = r.status === 'in_progress' || r.status === 'queued';
       const isSuccess = r.conclusion === 'success';
@@ -3544,30 +3639,34 @@ async function fetchAndRenderTasks() {
 
       let statusBadge = '<span class="task-badge badge-warning">Dalam Antrean</span>';
       if (r.status === 'in_progress') {
-        statusBadge = '<span class="task-badge badge-info"><span class="pulse-dot" style="display:inline-block; width:6px; height:6px; margin-right:4px;"></span>Sedang Berjalan</span>';
+        statusBadge = '<span class="task-badge badge-info"><span class="pulse-dot" style="display:inline-block; width:5px; height:5px; margin-right:3px;"></span>Berjalan</span>';
       } else if (isSuccess) {
-        statusBadge = '<span class="task-badge badge-success">Selesai 100%</span>';
+        statusBadge = '<span class="task-badge badge-success">Selesai</span>';
       } else if (isFailed) {
         statusBadge = '<span class="task-badge badge-danger">Gagal</span>';
       } else if (isCancelled) {
         statusBadge = '<span class="task-badge badge-secondary">Dibatalkan</span>';
       }
 
-      html += '<div class="task-card-item">';
+      const borderLeft = isRunning ? 'border-left: 3px solid #38bdf8;' : isSuccess ? 'border-left: 3px solid #34d399;' : isFailed ? 'border-left: 3px solid #f87171;' : isCancelled ? '' : '';
+
+      html += '<div class="task-card-item" style="' + borderLeft + ' margin-bottom: 10px;">';
       html += '  <div class="task-card-header">';
-      html += '    <div style="font-weight: 600; font-size: 0.85rem; color: var(--text);">' + escapeHtml(r.title || 'Mirroring Task') + '</div>';
-      html += '    <div>' + statusBadge + '</div>';
+      html += '    <div style="display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1;">';
+      html += '      <span style="font-weight: 700; font-size: 0.85rem; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">' + escapeHtml(r.display_title || r.title || 'Mirroring Task') + '</span>';
+      html += '    </div>';
+      html += '    <div style="display: flex; align-items: center; gap: 10px; flex-shrink: 0;">';
+      html += '      ' + statusBadge;
+      if (isRunning) {
+        html += '    <button class="btn-ctrl-sm btn-act-danger" onclick="cancelMirrorTask(' + r.id + ')">Batalkan</button>';
+      }
+      html += '    </div>';
       html += '  </div>';
       html += '  <div class="task-card-meta">';
-      html += '    <span>ID: #' + r.id + '</span>';
-      html += '    <span>Dimulai: ' + formatTimeAgo(r.created_at) + '</span>';
-      html += '    <a href="' + r.html_url + '" target="_blank" style="color: var(--accent-cyan); text-decoration: underline;">Buka Live Logs ↗</a>';
+      html += '    <span style="font-weight: 600; color: var(--text-dim);">#' + r.id + '</span>';
+      html += '    <span>' + formatTimeAgo(r.created_at) + '</span>';
+      html += '    <a href="' + r.html_url + '" target="_blank">Buka Logs ↗</a>';
       html += '  </div>';
-      if (isRunning) {
-        html += '  <div style="margin-top: 8px; text-align: right;">';
-        html += '    <button class="btn-ctrl-sm btn-act-danger" onclick="cancelMirrorTask(' + r.id + ')">Batalkan Task</button>';
-        html += '  </div>';
-      }
       html += '</div>';
     });
 
@@ -4828,14 +4927,14 @@ function adminConsoleUI() {
 
   <!-- TASK MANAGER MODAL -->
   <div id="taskManagerModal" class="modal-backdrop" style="display: none;">
-    <div class="modal-card" style="max-width: 580px;">
+    <div class="modal-card" style="max-width: 880px;">
       <div class="modal-header">
-        <div style="display: flex; align-items: center; gap: 8px;">
+        <div style="display: flex; align-items: center; gap: 10px;">
           <svg class="icon icon-sm" style="color: #0ea5e9;" viewBox="0 0 24 24"><path d="M12 2v4"/><path d="M12 18v4"/><path d="M4.93 4.93l2.83 2.83"/><path d="M16.24 16.24l2.83 2.83"/><path d="M2 12h4"/><path d="M18 12h4"/><path d="M4.93 19.07l2.83-2.83"/><path d="M16.24 7.76l2.83-2.83"/></svg>
           <span class="modal-title">Cloud Task Manager</span>
         </div>
         <div style="display: flex; align-items: center; gap: 8px;">
-          <button class="nav-btn" style="padding: 4px 8px; font-size: 0.72rem;" onclick="fetchAndRenderTasks()" title="Refresh Task">
+          <button class="nav-btn" style="padding: 4px 10px; font-size: 0.74rem;" onclick="fetchAndRenderTasks()" title="Refresh Task">
             <svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
             <span>Perbarui</span>
           </button>
@@ -4844,14 +4943,14 @@ function adminConsoleUI() {
           </button>
         </div>
       </div>
-      <div class="modal-body" style="padding: 14px 18px; max-height: 60vh; overflow-y: auto;" id="taskManagerList">
-        <div style="text-align: center; padding: 25px; color: var(--text-muted);">
-          <div class="pulse-dot" style="margin: 0 auto 10px; width: 10px; height: 10px;"></div>
-          <p style="font-size: 0.85rem;">Memuat daftar proses Cloud Mirror...</p>
+      <div class="modal-body" style="padding: 16px 20px; max-height: 65vh; overflow-y: auto;" id="taskManagerList">
+        <div style="text-align: center; padding: 30px; color: var(--text-muted);">
+          <div class="pulse-dot" style="margin: 0 auto 12px; width: 10px; height: 10px;"></div>
+          <p style="font-size: 0.88rem;">Memuat daftar proses Cloud Mirror...</p>
         </div>
       </div>
       <div class="modal-footer" style="justify-content: space-between; align-items: center;">
-        <span style="font-size: 0.74rem; color: var(--text-dim);">Auto-refresh aktif setiap 5 detik</span>
+        <span style="font-size: 0.74rem; color: var(--text-dim);">Auto-refresh setiap 5 detik</span>
         <button class="nav-btn" onclick="closeTaskManagerModal()">Tutup</button>
       </div>
     </div>
