@@ -1,0 +1,13 @@
+{
+  "name": "haru-drive-poster",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "vercel dev",
+    "deploy": "vercel --prod"
+  },
+  "dependencies": {
+    "@vercel/og": "^0.6.0",
+    "react": "^18.2.0"
+  }
+}

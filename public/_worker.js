@@ -12,6 +12,10 @@ export default {
     const GDRIVE_CLIENT_SECRET = env.GDRIVE_CLIENT_SECRET || '';
     const GDRIVE_REFRESH_TOKEN = env.GDRIVE_REFRESH_TOKEN || '';
     const GDRIVE_ROOT_ID = env.GDRIVE_ROOT_ID || '1Sq1JHBCQ9REXWyhpvdjfwwJP7HJCB7Z9';
+    const TELEGRAM_BOT_TOKEN = env.TELEGRAM_BOT_TOKEN || '';
+    const TELEGRAM_CHAT_ID = env.TELEGRAM_CHAT_ID || '';
+    const TMDB_API_KEY = env.TMDB_API_KEY || '';
+    const VERCEL_POSTER_URL = env.VERCEL_POSTER_URL || 'https://haru-drive.vercel.app';
 
     // Best-effort background sync: keeps the D1 search index fresh automatically.
     // Only triggered on page loads (not /api/*) to avoid D1 write contention with file listing.
@@ -627,6 +631,135 @@ export default {
           const errText = await ghRes.text();
           return new Response(JSON.stringify({ error: `GitHub dispatch error (${ghRes.status}): ${errText}` }), { status: ghRes.status });
         }
+      } catch (err) {
+        return new Response(JSON.stringify({ error: err.message }), { status: 500 });
+      }
+    }
+
+    // API: Telegram Post
+    if (url.pathname === '/api/admin/telegram-post' && request.method === 'POST') {
+      try {
+        const body = await request.json();
+        const pin = body.admin_pin || '';
+        if (pin !== ADMIN_PIN) {
+          return new Response(JSON.stringify({ error: 'PIN Admin Salah!' }), { status: 403 });
+        }
+        if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
+          return new Response(JSON.stringify({ error: 'Telegram bot belum dikonfigurasi di server.' }), { status: 500 });
+        }
+
+        const { poster_url, title, year, category, rating, synopsis, versions, specs, hashtags, channel_id, topic_id } = body;
+        if (!title) {
+          return new Response(JSON.stringify({ error: 'Title wajib diisi.' }), { status: 400 });
+        }
+
+        const catLabel = { movies: 'Movies', series: 'Series', anime: 'Anime' }[category] || category || 'Movies';
+        const yearText = year ? ` (${year})` : '';
+
+        let caption = `\u{1F3AC} <b>${title}${yearText} [${catLabel}]</b>\n`;
+
+        if (synopsis) {
+          const synTrunc = synopsis.length > 250 ? synopsis.slice(0, 247) + '...' : synopsis;
+          caption += `\n${synTrunc}\n`;
+        }
+
+        if (versions && versions.length > 0) {
+          if (versions.length === 1) {
+            const v = versions[0];
+            caption += `\n\u{1F4C1} ${v.quality || ''} ${v.codec || ''} (${v.size || '?'})`;
+          } else {
+            caption += `\n\u{1F4C1} Available Versions:\n`;
+            versions.forEach(v => {
+              caption += `  \u{1F4F9} ${v.quality || ''} ${v.codec || ''} (${v.size || '?'})\n`;
+            });
+          }
+        }
+
+        if (specs) {
+          caption += `\n\u{1F4CB} <b>SPECS:</b>\n`;
+          if (specs.video) caption += `\u{1F3AC} Video : ${specs.video}\n`;
+          if (specs.duration) caption += `\u23F1\uFE0F Duration : ${specs.duration}\n`;
+          if (specs.audio) caption += `\u{1F50A} Audio : ${specs.audio}\n`;
+          if (specs.subs) caption += `\u{1F4AC} Subs : ${specs.subs}\n`;
+        }
+
+        if (hashtags && hashtags.length > 0) {
+          caption += `\n${hashtags.map(h => h.startsWith('#') ? h : '#' + h).join(' ')}`;
+        }
+
+        if (caption.length > 1024) {
+          caption = caption.slice(0, 1020) + '...';
+        }
+
+        const chatId = channel_id || TELEGRAM_CHAT_ID;
+        const posterFinal = poster_url || 'https://via.placeholder.com/500x750/1a1a2e/ec4899?text=No+Poster';
+
+        const formData = new FormData();
+        formData.append('chat_id', chatId);
+        formData.append('photo', posterFinal);
+        formData.append('caption', caption);
+        formData.append('parse_mode', 'HTML');
+        if (topic_id) {
+          formData.append('message_thread_id', topic_id);
+        }
+
+        if (versions && versions.length > 0 && versions[0].link) {
+          const inline_keyboard = versions.map(v => ([{
+            text: `\u{1F4E5} Download ${v.quality || ''} ${v.codec || ''}`.trim(),
+            url: v.link
+          }]));
+          formData.append('reply_markup', JSON.stringify({ inline_keyboard }));
+        }
+
+        const tgRes = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto`, {
+          method: 'POST',
+          body: formData
+        });
+
+        const tgData = await tgRes.json();
+        if (!tgRes.ok) {
+          return new Response(JSON.stringify({ error: `Telegram error: ${tgData.description || 'Unknown error'}` }), { status: 500 });
+        }
+
+        return new Response(JSON.stringify({
+          success: true,
+          message: 'Berhasil memposting ke Telegram!',
+          message_id: tgData.result?.message_id,
+          caption_length: caption.length
+        }), { headers: { 'Content-Type': 'application/json' } });
+      } catch (err) {
+        return new Response(JSON.stringify({ error: err.message }), { status: 500 });
+      }
+    }
+
+    // API: TMDB Search
+    if (url.pathname === '/api/admin/tmdb-search') {
+      try {
+        if (!TMDB_API_KEY) {
+          return new Response(JSON.stringify({ error: 'TMDB API key belum dikonfigurasi.' }), { status: 500 });
+        }
+        const query = url.searchParams.get('q') || '';
+        const type = url.searchParams.get('type') || 'multi';
+        if (!query) {
+          return new Response(JSON.stringify({ error: 'Query wajib diisi.' }), { status: 400 });
+        }
+
+        const tmdbRes = await fetch(`https://api.themoviedb.org/3/search/${type}?query=${encodeURIComponent(query)}&api_key=${TMDB_API_KEY}&language=id-ID`);
+        if (!tmdbRes.ok) {
+          return new Response(JSON.stringify({ error: 'TMDB API error' }), { status: 500 });
+        }
+        const tmdbData = await tmdbRes.json();
+        const results = (tmdbData.results || []).slice(0, 5).map(r => ({
+          id: r.id,
+          title: r.title || r.name || '',
+          year: (r.release_date || r.first_air_date || '').slice(0, 4),
+          poster: r.poster_path ? `https://image.tmdb.org/t/p/w500${r.poster_path}` : null,
+          rating: r.vote_average ? r.vote_average.toFixed(1) : null,
+          overview: r.overview || '',
+          media_type: r.media_type || type
+        }));
+
+        return new Response(JSON.stringify({ results }), { headers: { 'Content-Type': 'application/json' } });
       } catch (err) {
         return new Response(JSON.stringify({ error: err.message }), { status: 500 });
       }
@@ -3268,6 +3401,18 @@ function clearBulkSelection() {
   updateBulkToolbar();
 }
 
+function openTelegramWithSelected() {
+  const checked = Array.from(selectedFiles);
+  const fileObjects = checked.map(path => {
+    const f = allFiles.find(af => af.path === path);
+    return f || { path: path, name: path.split('/').pop(), size: 0, id: '', shareUrl: '' };
+  });
+  if (fileObjects.length === 0) {
+    fileObjects.push({ path: currentPath, name: currentPath.split('/').pop() || 'Root', size: 0, id: '', shareUrl: '' });
+  }
+  openTelegramModal(fileObjects);
+}
+
 async function bulkDeleteSelected() {
   if (selectedFiles.size === 0) return;
   if (!confirm('Yakin ingin menghapus ' + selectedFiles.size + ' item yang dipilih?')) return;
@@ -3693,6 +3838,238 @@ async function cancelMirrorTask(runId) {
     }
   } catch (e) {
     alert('Error: ' + e.message);
+  }
+}
+
+// Telegram Post Modal
+let tgSelectedFiles = [];
+function openTelegramModal(files) {
+  tgSelectedFiles = files || [];
+  const m = document.getElementById('telegramModal');
+  if (!m) return;
+  const pin = localStorage.getItem('harudrive_admin_pin') || '';
+  document.getElementById('tgAdminPin').value = pin;
+  document.getElementById('tgChannelId').value = localStorage.getItem('harudrive_tg_channel') || '';
+  document.getElementById('tgTopicId').value = localStorage.getItem('harudrive_tg_topic') || '';
+  const savedPoster = localStorage.getItem('harudrive_tg_poster') || '';
+  if (savedPoster) {
+    document.getElementById('tgPosterUrl').value = savedPoster;
+    updateTGPosterPreview();
+  }
+  const fileContainer = document.getElementById('tgSelectedFiles');
+  if (tgSelectedFiles.length === 0) {
+    fileContainer.innerHTML = '<span style="color: var(--text-dim);">Tidak ada file dipilih. Centang file terlebih dahulu.</span>';
+  } else {
+    let fh = '';
+    tgSelectedFiles.forEach(f => {
+      const sz = f.size > 1073741824 ? (f.size / 1073741824).toFixed(2) + ' GB' : f.size > 1048576 ? (f.size / 1048576).toFixed(1) + ' MB' : (f.size / 1024).toFixed(0) + ' KB';
+      fh += '<div style="padding: 4px 0; border-bottom: 1px solid var(--border);">' + escapeHtml(f.name || f.path) + ' <span style="color: var(--accent);">' + sz + '</span></div>';
+    });
+    fileContainer.innerHTML = fh;
+    const first = tgSelectedFiles[0];
+    const parsed = parseFileName(first.name || first.path || '');
+    if (parsed.title && !document.getElementById('tgTitle').value) document.getElementById('tgTitle').value = parsed.title;
+    if (parsed.year && !document.getElementById('tgYear').value) document.getElementById('tgYear').value = parsed.year;
+    if (parsed.quality && !document.getElementById('tgSpecVideo').value) document.getElementById('tgSpecVideo').value = parsed.quality;
+    if (parsed.codec && !document.getElementById('tgSpecVideo').value.includes(parsed.codec)) {
+      const cur = document.getElementById('tgSpecVideo').value;
+      document.getElementById('tgSpecVideo').value = (cur ? cur + ' ' : '') + parsed.codec;
+    }
+    if (parsed.season) document.getElementById('tgCategory').value = 'series';
+    if (parsed.source) {
+      const tags = ['#' + parsed.cleanTitle.replace(/\s+/g, '')];
+      if (parsed.codec) tags.push('#' + parsed.codec);
+      if (parsed.source) tags.push('#' + parsed.source);
+      document.getElementById('tgHashtags').value = tags.join(' ');
+    }
+  }
+  m.style.display = 'flex';
+}
+function closeTelegramModal() {
+  const m = document.getElementById('telegramModal');
+  if (m) m.style.display = 'none';
+}
+function parseFileName(name) {
+  if (!name) return {};
+  const clean = name.replace(/\.[^.]+$/, '').replace(/_/g, ' ').replace(/\./g, ' ');
+  const yearMatch = clean.match(/\b(19|20)\d{2}\b/);
+  const year = yearMatch ? yearMatch[0] : '';
+  const seasonMatch = clean.match(/S\d{1,2}/i);
+  const season = seasonMatch ? seasonMatch[0].toUpperCase() : '';
+  const qualityMatch = clean.match(/\b(4K|2160p|1080p|1080i|720p|576p|480p|360p)\b/i);
+  const quality = qualityMatch ? qualityMatch[0].toLowerCase() : '';
+  const codecMatch = clean.match(/\b(AV1|AVC|HEVC|x264|x265|H\.?264|H\.?265|XviD|VP9)\b/i);
+  const codec = codecMatch ? codecMatch[0].replace(/\./g, '') : '';
+  const sourceMatch = clean.match(/\b(NF|WEB\-?DL|WEB\-?RIP|BluRay|BDRip|HDRip|DVDRip|AMZN|Disney|Hulu)\b/i);
+  const source = sourceMatch ? sourceMatch[0].toUpperCase() : '';
+  const audioMatch = clean.match(/\b(AAC2\.0|AAC|DTS|DTS\-HD|Dolby|DDP?5\.1|Atmos|FLAC|AC3|EAC3|DDP2\.0)\b/i);
+  const audio = audioMatch ? audioMatch[0] : '';
+  let title = clean;
+  if (year) title = title.split(year)[0].trim();
+  if (season) title = title.split(season)[0].trim();
+  title = title.replace(/\s*(NF|WEB\-?DL|BluRay|1080p|720p|4K|AV1|x264|x265|AAC.*|DDP?.*|HEVC|H\.264|H\.265).*$/i, '').trim();
+  title = title.replace(/-/g, ' ').replace(/\s+/g, ' ').trim();
+  const cleanTitle = title || clean.split(/\s+/).slice(0, 4).join(' ');
+  return { title, cleanTitle, year, season, quality, codec, source, audio };
+}
+function updateTGPosterPreview() {
+  const url = document.getElementById('tgPosterUrl').value;
+  const img = document.getElementById('tgPosterPreview');
+  const ph = document.getElementById('tgPosterPlaceholder');
+  if (url) {
+    img.src = url;
+    img.style.display = 'block';
+    ph.style.display = 'none';
+    img.onerror = () => { img.style.display = 'none'; ph.style.display = 'block'; };
+  } else {
+    img.style.display = 'none';
+    ph.style.display = 'block';
+  }
+}
+async function searchTMDB() {
+  const q = document.getElementById('tgTmdbQuery').value.trim();
+  const container = document.getElementById('tgTmdbResults');
+  if (!q) return;
+  container.innerHTML = '<span style="color: var(--accent);">Mencari...</span>';
+  try {
+    const cat = document.getElementById('tgCategory').value;
+    const type = cat === 'movies' ? 'movie' : 'tv';
+    const res = await fetch('/api/admin/tmdb-search?q=' + encodeURIComponent(q) + '&type=' + type);
+    const data = await res.json();
+    if (!data.results || data.results.length === 0) {
+      container.innerHTML = '<span style="color: #f87171;">Tidak ditemukan</span>';
+      return;
+    }
+    let h = '<div style="display: flex; flex-direction: column; gap: 6px;">';
+    data.results.forEach(r => {
+      h += '<div style="display: flex; align-items: center; gap: 10px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer;" onclick="applyTMDBResult(' + r.id + ', \'' + escapeHtml(r.title).replace(/'/g, "\\'") + '\', \'' + (r.year || '') + '\', \'' + (r.poster || '') + '\', \'' + (r.rating || '') + '\', \'' + escapeHtml(r.overview || '').replace(/'/g, "\\'").replace(/\n/g, ' ') + '\')">';
+      if (r.poster) h += '<img src="' + r.poster + '" style="width: 32px; height: 48px; border-radius: 4px; object-fit: cover;">';
+      h += '<div style="flex: 1; min-width: 0;"><div style="font-weight: 600; font-size: 0.8rem; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">' + escapeHtml(r.title) + ' (' + (r.year || '?') + ')</div><div style="font-size: 0.7rem; color: var(--text-dim);">ID: ' + r.id + (r.rating ? ' \u2022 \u2605 ' + r.rating : '') + '</div></div>';
+      h += '<button class="nav-btn" style="font-size: 0.7rem; padding: 3px 8px;">Pilih</button>';
+      h += '</div>';
+    });
+    h += '</div>';
+    container.innerHTML = h;
+  } catch (e) {
+    container.innerHTML = '<span style="color: #f87171;">Error: ' + e.message + '</span>';
+  }
+}
+function applyTMDBResult(id, title, year, poster, rating, overview) {
+  document.getElementById('tgTitle').value = title;
+  if (year) document.getElementById('tgYear').value = year;
+  if (poster) { document.getElementById('tgPosterUrl').value = poster; updateTGPosterPreview(); }
+  if (rating) document.getElementById('tgRating').value = rating;
+  if (overview) document.getElementById('tgSynopsis').value = overview.length > 250 ? overview.slice(0, 247) + '...' : overview;
+  document.getElementById('tgTmdbResults').innerHTML = '<span style="color: #34d399;">\u2713 Berhasil diisi dari TMDB</span>';
+}
+function generateTGCaption() {
+  const title = document.getElementById('tgTitle').value || 'Untitled';
+  const year = document.getElementById('tgYear').value;
+  const category = document.getElementById('tgCategory').value;
+  const rating = document.getElementById('tgRating').value;
+  const synopsis = document.getElementById('tgSynopsis').value;
+  const videoSpec = document.getElementById('tgSpecVideo').value;
+  const duration = document.getElementById('tgSpecDuration').value;
+  const audioSpec = document.getElementById('tgSpecAudio').value;
+  const subsSpec = document.getElementById('tgSpecSubs').value;
+  const hashtagsRaw = document.getElementById('tgHashtags').value;
+  const catLabel = { movies: 'Movies', series: 'Series', anime: 'Anime' }[category] || category;
+  const yearText = year ? ' (' + year + ')' : '';
+  let cap = '\uD83C\uDFAC <b>' + title + yearText + ' [' + catLabel + ']</b>\n';
+  if (synopsis) {
+    const synTrunc = synopsis.length > 250 ? synopsis.slice(0, 247) + '...' : synopsis;
+    cap += '\n' + synTrunc + '\n';
+  }
+  if (tgSelectedFiles.length > 1) {
+    cap += '\n\uD83D\uDCC1 Available Versions:\n';
+    tgSelectedFiles.forEach(f => {
+      const parsed = parseFileName(f.name || f.path);
+      const sz = f.size > 1073741824 ? (f.size / 1073741824).toFixed(2) + ' GB' : f.size > 1048576 ? (f.size / 1048576).toFixed(1) + ' MB' : (f.size / 1024).toFixed(0) + ' KB';
+      cap += '  \uD83D\uDCF9 ' + (parsed.quality || '') + ' ' + (parsed.codec || '') + ' (' + sz + ')\n';
+    });
+  } else if (tgSelectedFiles.length === 1) {
+    const f = tgSelectedFiles[0];
+    const parsed = parseFileName(f.name || f.path);
+    const sz = f.size > 1073741824 ? (f.size / 1073741824).toFixed(2) + ' GB' : f.size > 1048576 ? (f.size / 1048576).toFixed(1) + ' MB' : (f.size / 1024).toFixed(0) + ' KB';
+    cap += '\n\uD83D\uDCC1 ' + (parsed.quality || '') + ' ' + (parsed.codec || '') + ' (' + sz + ')\n';
+  }
+  const hasSpecs = videoSpec || duration || audioSpec || subsSpec;
+  if (hasSpecs) {
+    cap += '\n\uD83D\uDCCB <b>SPECS:</b>\n';
+    if (videoSpec) cap += '\uD83C\uDFAC Video : ' + videoSpec + '\n';
+    if (duration) cap += '\u23F1\uFE0F Duration : ' + duration + '\n';
+    if (audioSpec) cap += '\uD83D\uDD0A Audio : ' + audioSpec + '\n';
+    if (subsSpec) cap += '\uD83D\uDCAC Subs : ' + subsSpec + '\n';
+  }
+  if (hashtagsRaw) {
+    const tags = hashtagsRaw.split(/\s+/).filter(t => t).map(t => t.startsWith('#') ? t : '#' + t).join(' ');
+    cap += '\n' + tags;
+  }
+  if (cap.length > 1024) cap = cap.slice(0, 1020) + '...';
+  return cap;
+}
+function previewTelegramCaption() {
+  const cap = generateTGCaption();
+  document.getElementById('tgCaptionPreview').textContent = cap;
+  document.getElementById('tgCharCount').textContent = cap.length + ' / 1024 chars';
+  document.getElementById('tgCharCount').style.color = cap.length > 900 ? '#f87171' : cap.length > 700 ? '#fbbf24' : 'var(--text-dim)';
+}
+async function sendToTelegram() {
+  const pin = document.getElementById('tgAdminPin').value;
+  if (!pin) return alert('Masukkan PIN Admin!');
+  const title = document.getElementById('tgTitle').value;
+  if (!title) return alert('Title wajib diisi!');
+  const btn = document.getElementById('tgSendBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Mengirim...'; }
+  const channelId = document.getElementById('tgChannelId').value;
+  const topicId = document.getElementById('tgTopicId').value;
+  if (channelId) localStorage.setItem('harudrive_tg_channel', channelId);
+  if (topicId) localStorage.setItem('harudrive_tg_topic', topicId);
+  const posterUrl = document.getElementById('tgPosterUrl').value;
+  if (posterUrl) localStorage.setItem('harudrive_tg_poster', posterUrl);
+  const versions = tgSelectedFiles.map(f => {
+    const parsed = parseFileName(f.name || f.path);
+    const sz = f.size > 1073741824 ? (f.size / 1073741824).toFixed(2) + ' GB' : f.size > 1048576 ? (f.size / 1048576).toFixed(1) + ' MB' : (f.size / 1024).toFixed(0) + ' KB';
+    return { quality: parsed.quality || 'HD', codec: parsed.codec || '', size: sz, link: f.shareUrl || f.shortUrl || '' };
+  });
+  const hashtagsRaw = document.getElementById('tgHashtags').value;
+  const hashtags = hashtagsRaw.split(/\s+/).filter(t => t).map(t => t.startsWith('#') ? t.slice(1) : t);
+  const body = {
+    admin_pin: pin,
+    poster_url: posterUrl,
+    title: title,
+    year: document.getElementById('tgYear').value,
+    category: document.getElementById('tgCategory').value,
+    rating: document.getElementById('tgRating').value,
+    synopsis: document.getElementById('tgSynopsis').value,
+    versions: versions,
+    specs: {
+      video: document.getElementById('tgSpecVideo').value,
+      duration: document.getElementById('tgSpecDuration').value,
+      audio: document.getElementById('tgSpecAudio').value,
+      subs: document.getElementById('tgSpecSubs').value
+    },
+    hashtags: hashtags,
+    channel_id: channelId,
+    topic_id: topicId
+  };
+  try {
+    const res = await fetch('/api/admin/telegram-post', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      alert('Berhasil memposting ke Telegram! \uD83D\uDE80\nCaption: ' + data.caption_length + ' chars');
+      closeTelegramModal();
+    } else {
+      alert('Gagal: ' + (data.error || 'Error'));
+    }
+  } catch (e) {
+    alert('Network Error: ' + e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Send to Channel'; }
   }
 }
 
@@ -4758,6 +5135,11 @@ function adminConsoleUI() {
           <span>Cloud Mirror</span>
         </button>
 
+        <button id="telegramPostBtn" class="btn-action-tool" style="background: rgba(56, 189, 248, 0.12); border-color: rgba(56, 189, 248, 0.35); color: #38bdf8;" onclick="openTelegramWithSelected()">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M21.198 2.433a2.242 2.242 0 0 0-1.022.215l-16.5 7.5a2.25 2.25 0 0 0 .126 4.088l4.096 1.228 1.228 4.096a2.25 2.25 0 0 0 4.088.126l7.5-16.5a2.25 2.25 0 0 0-2.42-3.26z"/></svg>
+          <span>Telegram</span>
+        </button>
+
         <button class="btn-action-tool" style="background: rgba(14, 165, 233, 0.12); border-color: rgba(14, 165, 233, 0.35); color: #0ea5e9; position: relative;" onclick="openTaskManagerModal()">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M12 2v4"/><path d="M12 18v4"/><path d="M4.93 4.93l2.83 2.83"/><path d="M16.24 16.24l2.83 2.83"/><path d="M2 12h4"/><path d="M18 12h4"/><path d="M4.93 19.07l2.83-2.83"/><path d="M16.24 7.76l2.83-2.83"/></svg>
           <span>Task Manager</span>
@@ -4977,11 +5359,137 @@ function adminConsoleUI() {
         <input type="hidden" id="mirrorTargetPath">
 
         <label style="font-size: 0.84rem; font-weight: 600;">PIN Admin:</label>
-        <input type="password" id="mirrorAdminPin" class="form-input-pro" placeholder="••••••" autocomplete="off">
+        <input type="password" id="mirrorAdminPin" class="form-input-pro" placeholder="\u2022\u2022\u2022\u2022\u2022\u2022" autocomplete="off">
       </div>
       <div class="modal-footer">
         <button class="nav-btn" onclick="closeMirrorModal()">Batal</button>
         <button class="nav-btn" id="startMirrorBtn" style="background: var(--accent-gradient); color: white; border: none;" onclick="submitCloudMirror()">Mulai Mirror</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- TELEGRAM POST MODAL -->
+  <div id="telegramModal" class="modal-backdrop" style="display: none;">
+    <div class="modal-card" style="max-width: 780px;">
+      <div class="modal-header">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <svg class="icon icon-sm" style="color: #38bdf8;" viewBox="0 0 24 24"><path d="M21.198 2.433a2.242 2.242 0 0 0-1.022.215l-16.5 7.5a2.25 2.25 0 0 0 .126 4.088l4.096 1.228 1.228 4.096a2.25 2.25 0 0 0 4.088.126l7.5-16.5a2.25 2.25 0 0 0-2.42-3.26z"/></svg>
+          <span class="modal-title">Post to Telegram</span>
+        </div>
+        <button class="btn-close-circle" onclick="closeTelegramModal()">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="modal-body" style="max-height: 65vh; overflow-y: auto; padding: 18px 22px;">
+        <!-- Poster + Title Row -->
+        <div style="display: flex; gap: 18px; margin-bottom: 16px;">
+          <div style="flex-shrink: 0; width: 140px; height: 210px; border-radius: 12px; overflow: hidden; border: 2px solid var(--border); background: var(--bg-surface); display: flex; align-items: center; justify-content: center;">
+            <img id="tgPosterPreview" src="" style="width: 100%; height: 100%; object-fit: cover; display: none;" alt="Poster">
+            <span id="tgPosterPlaceholder" style="font-size: 0.72rem; color: var(--text-dim); text-align: center; padding: 8px;">No Poster</span>
+          </div>
+          <div style="flex: 1; display: flex; flex-direction: column; gap: 10px;">
+            <div>
+              <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Title</label>
+              <input type="text" id="tgTitle" class="form-input-pro" placeholder="Movie / Series Title" style="margin-top: 4px;">
+            </div>
+            <div style="display: flex; gap: 10px;">
+              <div style="flex: 1;">
+                <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Year</label>
+                <input type="text" id="tgYear" class="form-input-pro" placeholder="2026" style="margin-top: 4px;">
+              </div>
+              <div style="flex: 1;">
+                <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Rating</label>
+                <input type="text" id="tgRating" class="form-input-pro" placeholder="8.5" style="margin-top: 4px;">
+              </div>
+            </div>
+            <div>
+              <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Category</label>
+              <select id="tgCategory" class="form-input-pro" style="margin-top: 4px; padding: 8px 12px;">
+                <option value="movies">Movies</option>
+                <option value="series">Series</option>
+                <option value="anime">Anime</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <!-- TMDB Search -->
+        <div style="margin-bottom: 14px;">
+          <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">TMDB ID / Search (opsional)</label>
+          <div style="display: flex; gap: 8px; margin-top: 4px;">
+            <input type="text" id="tgTmdbQuery" class="form-input-pro" placeholder="Cari judul atau masukkan TMDB ID..." style="flex: 1;">
+            <button class="nav-btn" onclick="searchTMDB()" style="white-space: nowrap;">Cari</button>
+          </div>
+          <div id="tgTmdbResults" style="margin-top: 6px; font-size: 0.76rem; color: var(--text-dim);"></div>
+        </div>
+
+        <!-- Poster URL -->
+        <div style="margin-bottom: 14px;">
+          <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Poster URL</label>
+          <input type="url" id="tgPosterUrl" class="form-input-pro" placeholder="https://image.tmdb.org/t/p/w500/... atau URL manual" style="margin-top: 4px;" oninput="updateTGPosterPreview()">
+        </div>
+
+        <!-- Selected Files -->
+        <div style="margin-bottom: 14px;">
+          <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Selected Files</label>
+          <div id="tgSelectedFiles" class="folder-tree-box" style="margin-top: 4px; max-height: 120px; overflow-y: auto; font-size: 0.78rem; color: var(--text-muted); padding: 10px;">Tidak ada file dipilih</div>
+        </div>
+
+        <!-- Specs -->
+        <div style="margin-bottom: 14px;">
+          <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Specs (auto dari MediaInfo)</label>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 4px;">
+            <input type="text" id="tgSpecVideo" class="form-input-pro" placeholder="1080p AV1 10-bit \u2022 24fps">
+            <input type="text" id="tgSpecDuration" class="form-input-pro" placeholder="24 min/ep">
+            <input type="text" id="tgSpecAudio" class="form-input-pro" placeholder="Japanese DD 5.1">
+            <input type="text" id="tgSpecSubs" class="form-input-pro" placeholder="Indonesia, English">
+          </div>
+        </div>
+
+        <!-- Synopsis -->
+        <div style="margin-bottom: 14px;">
+          <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Sinopsis (TMDB auto, editable)</label>
+          <textarea id="tgSynopsis" class="form-input-pro" rows="3" placeholder="Sinopsis akan terisi otomatis dari TMDB..." style="margin-top: 4px; resize: vertical;"></textarea>
+          <div style="font-size: 0.7rem; color: var(--text-dim); margin-top: 3px;">Max 250 karakter untuk caption</div>
+        </div>
+
+        <!-- Hashtags -->
+        <div style="margin-bottom: 14px;">
+          <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Hashtags</label>
+          <input type="text" id="tgHashtags" class="form-input-pro" placeholder="#Title #NF #AV1 (pisahkan spasi)" style="margin-top: 4px;">
+        </div>
+
+        <!-- Channel + Topic -->
+        <div style="display: flex; gap: 10px; margin-bottom: 14px;">
+          <div style="flex: 1;">
+            <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Channel ID</label>
+            <input type="text" id="tgChannelId" class="form-input-pro" placeholder="-100xxxxx" style="margin-top: 4px;">
+          </div>
+          <div style="flex: 1;">
+            <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Topic ID (opsional)</label>
+            <input type="text" id="tgTopicId" class="form-input-pro" placeholder="123" style="margin-top: 4px;">
+          </div>
+        </div>
+
+        <!-- PIN -->
+        <div style="margin-bottom: 14px;">
+          <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">PIN Admin</label>
+          <input type="password" id="tgAdminPin" class="form-input-pro" placeholder="\u2022\u2022\u2022\u2022\u2022\u2022" autocomplete="off" style="margin-top: 4px;">
+        </div>
+
+        <!-- Caption Preview -->
+        <div style="margin-bottom: 10px;">
+          <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Caption Preview</label>
+          <div id="tgCaptionPreview" class="folder-tree-box" style="margin-top: 4px; font-size: 0.76rem; color: var(--text-muted); padding: 12px; white-space: pre-wrap; min-height: 80px; line-height: 1.5;">Klik "Preview" untuk melihat caption</div>
+          <div id="tgCharCount" style="font-size: 0.7rem; color: var(--text-dim); margin-top: 3px;">0 / 1024 chars</div>
+        </div>
+      </div>
+      <div class="modal-footer" style="justify-content: space-between;">
+        <button class="nav-btn" onclick="previewTelegramCaption()" style="font-size: 0.82rem;">Preview</button>
+        <div style="display: flex; gap: 8px;">
+          <button class="nav-btn" onclick="closeTelegramModal()">Batal</button>
+          <button class="nav-btn" id="tgSendBtn" style="background: #38bdf8; color: white; border: none;" onclick="sendToTelegram()">Send to Channel</button>
+        </div>
       </div>
     </div>
   </div>
