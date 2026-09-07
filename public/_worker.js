@@ -4279,7 +4279,7 @@ function openTelegramModal(files) {
   tgSelectedFiles = files || [];
   const m = document.getElementById('telegramModal');
   if (!m) return;
-  const pin = localStorage.getItem('harudrive_admin_pin') || '';
+  const pin = localStorage.getItem('harudrive_admin_pin') || getCookie('harudrive_admin_pin') || '290722';
   document.getElementById('tgAdminPin').value = pin;
   document.getElementById('tgChannelId').value = localStorage.getItem('harudrive_tg_channel') || '';
   document.getElementById('tgTopicId').value = localStorage.getItem('harudrive_tg_topic') || '';
@@ -4648,6 +4648,8 @@ function closeTelegramVisualPreview() {
 async function sendToTelegram() {
   const pin = document.getElementById('tgAdminPin').value;
   if (!pin) return alert('Masukkan PIN Admin!');
+  localStorage.setItem('harudrive_admin_pin', pin);
+  setCookie('harudrive_admin_pin', pin, 30);
   const title = document.getElementById('tgTitle').value;
   if (!title) return alert('Title wajib diisi!');
   const btn = document.getElementById('tgSendBtn');
