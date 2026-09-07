@@ -661,35 +661,48 @@ export default {
         const catLabel = { movies: 'Movies', series: 'Series', anime: 'Anime' }[category] || category || 'Movies';
         const yearText = year ? ` (${year})` : '';
 
+        // HaruFilm-style rich caption
         let caption = `\u{1F3AC} <b>${title}${yearText} [${catLabel}]</b>\n`;
 
         if (synopsis) {
           const synTrunc = synopsis.length > 250 ? synopsis.slice(0, 247) + '...' : synopsis;
-          caption += `\n${synTrunc}\n`;
+          caption += `\n\u{1F4DD} ${synTrunc}\n`;
+        }
+
+        const details = [];
+        if (body.genres || body.genre) details.push(`\u2B50 <b>Genre:</b> ${body.genres || body.genre}`);
+        if (rating) details.push(`\u{1F31F} <b>Rating:</b> ${rating}/10`);
+        if (body.release_date) details.push(`\u{1F4C5} <b>Rilis:</b> ${body.release_date}`);
+        if (specs && specs.duration && specs.duration.trim()) details.push(`\u231B <b>Durasi:</b> ${specs.duration.trim()}`);
+        if (body.country) details.push(`\u{1F310} <b>Negara:</b> ${body.country}`);
+        if (specs && specs.video && specs.video.trim()) details.push(`\u{1F3AC} <b>Video:</b> ${specs.video.trim()}`);
+        if (specs && specs.audio && specs.audio.trim()) details.push(`\u{1F50A} <b>Audio:</b> ${specs.audio.trim()}`);
+        if (specs && specs.subs && specs.subs.trim()) details.push(`\u{1F4AC} <b>Subtitle:</b> ${specs.subs.trim()}`);
+
+        if (details.length > 0) {
+          caption += `\n` + details.join('\n') + `\n`;
         }
 
         if (versions && versions.length > 0) {
           if (versions.length === 1) {
             const v = versions[0];
-            caption += `\n\u{1F4C1} ${v.quality || ''} ${v.codec || ''} (${v.size || '?'})`;
+            caption += `\n\u{1F4C1} ${v.quality || ''} ${v.codec || ''} (${v.size || '?'})`.replace(/\s+/g, ' ');
           } else {
-            caption += `\n\u{1F4C1} Available Versions:\n`;
+            caption += `\n\u{1F4C1} <b>Available Versions:</b>\n`;
             versions.forEach(v => {
-              caption += `  \u{1F4F9} ${v.quality || ''} ${v.codec || ''} (${v.size || '?'})\n`;
+              caption += `  \u{1F4F9} ${v.quality || ''} ${v.codec || ''} (${v.size || '?'})\n`.replace(/\s+/g, ' ');
             });
           }
         }
 
-        if (specs) {
-          caption += `\n\u{1F4CB} <b>SPECS:</b>\n`;
-          if (specs.video) caption += `\u{1F3AC} Video : ${specs.video}\n`;
-          if (specs.duration) caption += `\u23F1\uFE0F Duration : ${specs.duration}\n`;
-          if (specs.audio) caption += `\u{1F50A} Audio : ${specs.audio}\n`;
-          if (specs.subs) caption += `\u{1F4AC} Subs : ${specs.subs}\n`;
-        }
-
         if (hashtags && hashtags.length > 0) {
-          caption += `\n${hashtags.map(h => h.startsWith('#') ? h : '#' + h).join(' ')}`;
+          const validTags = hashtags
+            .map(h => String(h).trim())
+            .filter(h => h && h !== '#')
+            .map(h => h.startsWith('#') ? h : '#' + h);
+          if (validTags.length > 0) {
+            caption += `\n\n${validTags.join(' ')}`;
+          }
         }
 
         if (caption.length > 1024) {
@@ -698,7 +711,24 @@ export default {
 
         const chatId = channel_id || TELEGRAM_CHAT_ID;
         const finalTopicId = topic_id || TELEGRAM_TOPIC_ID;
-        const posterFinal = poster_url || 'https://via.placeholder.com/500x750/1a1a2e/ec4899?text=No+Poster';
+
+        // Auto HaruFilm banner generation
+        let posterFinal = poster_url || 'https://via.placeholder.com/500x750/141414/ec4899?text=No+Poster';
+        if (body.use_banner !== false && poster_url) {
+          const qLabel = (versions && versions[0] && versions[0].quality) || (specs && specs.video) || 'HD';
+          const bannerParams = new URLSearchParams();
+          bannerParams.set('poster_url', poster_url);
+          bannerParams.set('title', title || '');
+          if (year) bannerParams.set('year', year);
+          if (rating) bannerParams.set('rating', rating);
+          bannerParams.set('quality', qLabel.split(' ')[0] || 'HD');
+          if (body.genres || body.genre) bannerParams.set('genre', body.genres || body.genre);
+          if (specs && specs.audio) bannerParams.set('audio', specs.audio);
+          if (specs && specs.subs) bannerParams.set('subtitle', specs.subs);
+          if (versions && versions[0] && versions[0].size) bannerParams.set('size', versions[0].size);
+          bannerParams.set('brand', 'HaruFilm');
+          posterFinal = `${VERCEL_POSTER_URL}/api/poster?${bannerParams.toString()}`;
+        }
 
         const formData = new FormData();
         formData.append('chat_id', chatId);
@@ -738,7 +768,7 @@ export default {
       }
     }
 
-    // API: TMDB Search (Supports Title Search & Direct Numeric TMDB ID)
+        // API: TMDB Search (Supports Title Search & Direct Numeric TMDB ID)
     if (url.pathname === '/api/admin/tmdb-search') {
       try {
         const tmdbKey = String(TMDB_API_KEY || '').trim() || url.searchParams.get('api_key') || request.headers.get('X-TMDB-Key') || '';
@@ -768,6 +798,10 @@ export default {
                   if (!title) title = enData.title || enData.name;
                 }
               }
+              const genres = (r.genres || []).map(g => g.name).join(', ');
+              const duration = r.runtime ? `${r.runtime} menit` : (r.episode_run_time && r.episode_run_time.length ? `${r.episode_run_time[0]} menit` : '');
+              const releaseDate = r.release_date || r.first_air_date || '';
+              const country = (r.production_countries && r.production_countries.length ? r.production_countries.map(c => c.name).join(', ') : (r.origin_country || []).join(', '));
               const results = [{
                 id: r.id,
                 title: title || '',
@@ -775,7 +809,11 @@ export default {
                 poster: r.poster_path ? `https://image.tmdb.org/t/p/w500${r.poster_path}` : null,
                 rating: r.vote_average ? r.vote_average.toFixed(1) : null,
                 overview: overview || '',
-                media_type: ep
+                media_type: ep,
+                genres: genres,
+                duration: duration,
+                release_date: releaseDate,
+                country: country
               }];
               return new Response(JSON.stringify({ results }), { headers: { 'Content-Type': 'application/json' } });
             }
@@ -791,6 +829,14 @@ export default {
           tmdbData = tmdbRes.ok ? await tmdbRes.json() : { results: [] };
         }
 
+        const genreMap = {
+          28: 'Aksi', 12: 'Petualangan', 16: 'Animasi', 35: 'Komedi', 80: 'Kejahatan', 99: 'Dokumenter',
+          18: 'Drama', 10751: 'Keluarga', 14: 'Fantasi', 36: 'Sejarah', 27: 'Horor', 10402: 'Musik',
+          9648: 'Misteri', 10749: 'Romantis', 878: 'Sci-Fi', 10770: 'Film TV', 53: 'Thriller',
+          10752: 'Perang', 37: 'Western', 10759: 'Aksi & Petualangan', 10762: 'Anak-anak',
+          10763: 'Berita', 10764: 'Reality', 10765: 'Sci-Fi & Fantasi', 10766: 'Soap', 10767: 'Talk', 10768: 'Perang & Politik'
+        };
+
         const results = (tmdbData.results || []).slice(0, 5).map(r => ({
           id: r.id,
           title: r.title || r.name || '',
@@ -798,7 +844,10 @@ export default {
           poster: r.poster_path ? `https://image.tmdb.org/t/p/w500${r.poster_path}` : null,
           rating: r.vote_average ? r.vote_average.toFixed(1) : null,
           overview: r.overview || '',
-          media_type: r.media_type || searchType
+          media_type: r.media_type || searchType,
+          genres: (r.genre_ids || []).map(gid => genreMap[gid]).filter(Boolean).join(', '),
+          release_date: r.release_date || r.first_air_date || '',
+          country: (r.origin_country || []).join(', ')
         }));
 
         return new Response(JSON.stringify({ results }), { headers: { 'Content-Type': 'application/json' } });
@@ -807,7 +856,7 @@ export default {
       }
     }
 
-    // API: Mkdir
+        // API: Mkdir
     if (url.pathname === '/api/admin/mkdir' && request.method === 'POST') {
       try {
         const body = await request.json();
@@ -3897,19 +3946,27 @@ async function cancelMirrorTask(runId) {
 // Telegram Post Modal
 let tgSelectedFiles = [];
 let _tgLivePreviewSetup = false;
+
 function setupTelegramLivePreview() {
   if (_tgLivePreviewSetup) return;
   _tgLivePreviewSetup = true;
   const inputIds = [
     'tgTitle', 'tgYear', 'tgRating', 'tgCategory', 'tgPosterUrl',
+    'tgGenres', 'tgReleaseDate', 'tgCountry',
     'tgSpecVideo', 'tgSpecDuration', 'tgSpecAudio', 'tgSpecSubs',
-    'tgSynopsis', 'tgHashtags'
+    'tgSynopsis', 'tgHashtags', 'tgUseBanner'
   ];
   inputIds.forEach(id => {
     const el = document.getElementById(id);
     if (el) {
-      el.addEventListener('input', previewTelegramCaption);
-      el.addEventListener('change', previewTelegramCaption);
+      el.addEventListener('input', () => {
+        updateTGPosterPreview();
+        previewTelegramCaption();
+      });
+      el.addEventListener('change', () => {
+        updateTGPosterPreview();
+        previewTelegramCaption();
+      });
     }
   });
   const qInput = document.getElementById('tgTmdbQuery');
@@ -3923,6 +3980,162 @@ function setupTelegramLivePreview() {
   }
 }
 
+function getTGBannerUrl() {
+  const posterUrl = (document.getElementById('tgPosterUrl')?.value || '').trim();
+  const title = (document.getElementById('tgTitle')?.value || '').trim() || 'Untitled';
+  const year = (document.getElementById('tgYear')?.value || '').trim();
+  const rating = (document.getElementById('tgRating')?.value || '').trim();
+  const videoSpec = (document.getElementById('tgSpecVideo')?.value || '').trim();
+  const quality = videoSpec ? videoSpec.split(' ')[0] : 'HD';
+  const genres = (document.getElementById('tgGenres')?.value || '').trim() || '-';
+  const audio = (document.getElementById('tgSpecAudio')?.value || '').trim() || '-';
+  const subs = (document.getElementById('tgSpecSubs')?.value || '').trim() || '-';
+  const first = tgSelectedFiles[0];
+  const size = first && first.size
+    ? (first.size > 1073741824 ? (first.size / 1073741824).toFixed(2) + ' GB' : (first.size / 1048576).toFixed(1) + ' MB')
+    : '';
+
+  const p = new URLSearchParams();
+  p.set('poster_url', posterUrl || 'https://via.placeholder.com/500x750/141414/ec4899?text=No+Poster');
+  p.set('title', title);
+  if (year) p.set('year', year);
+  if (rating) p.set('rating', rating);
+  p.set('quality', quality);
+  p.set('genre', genres);
+  p.set('audio', audio);
+  p.set('subtitle', subs);
+  if (size) p.set('size', size);
+  p.set('brand', 'HaruFilm');
+
+  return 'https://haru-drive.vercel.app/api/poster?' + p.toString();
+}
+
+function updateTGPosterPreview() {
+  const useBanner = document.getElementById('tgUseBanner')?.checked !== false;
+  const rawPoster = (document.getElementById('tgPosterUrl')?.value || '').trim();
+  const img = document.getElementById('tgPosterPreview');
+  const ph = document.getElementById('tgPosterPlaceholder');
+  const badge = document.getElementById('tgBannerBadge');
+  if (!img) return;
+
+  if (useBanner) {
+    if (rawPoster) {
+      const bannerUrl = getTGBannerUrl();
+      img.src = bannerUrl;
+      img.style.display = 'block';
+      if (ph) ph.style.display = 'none';
+      if (badge) { badge.textContent = 'HaruFilm Banner (1200x630)'; badge.style.color = '#ec4899'; }
+      img.onerror = () => {
+        if (rawPoster) img.src = rawPoster;
+        else { img.style.display = 'none'; if (ph) ph.style.display = 'block'; }
+      };
+    } else {
+      img.style.display = 'none';
+      if (ph) ph.style.display = 'block';
+    }
+  } else {
+    if (rawPoster) {
+      img.src = rawPoster;
+      img.style.display = 'block';
+      if (ph) ph.style.display = 'none';
+      if (badge) { badge.textContent = 'Original Poster (TMDB)'; badge.style.color = '#38bdf8'; }
+      img.onerror = () => { img.style.display = 'none'; if (ph) ph.style.display = 'block'; };
+    } else {
+      img.style.display = 'none';
+      if (ph) ph.style.display = 'block';
+    }
+  }
+}
+
+async function extractSpecsAndMediaInfo(file) {
+  if (!file) return;
+  const parsed = parseFileName(file.name || file.path || '');
+  
+  // 1. Initial smart specs from filename
+  let videoSpec = [parsed.quality ? parsed.quality.toUpperCase() : '1080p', parsed.codec || 'x264'].filter(Boolean).join(' ');
+  if (file.name && /(10bit|10-bit|10\s*bit|hi10p)/i.test(file.name)) videoSpec += ' 10-bit';
+  let audioSpec = parsed.audio || 'Japanese AAC 2.0';
+  let durationSpec = '';
+  let subsSpec = 'Indonesian, English';
+
+  // 2. Check D1 / RAM cache
+  try {
+    const res = await fetch('/api/mediainfo?path=' + encodeURIComponent(file.path || file.id));
+    if (res.ok) {
+      const d = await res.json();
+      let j = d.mediainfo_json;
+      if (typeof j === 'string') { try { j = JSON.parse(j); } catch(e){} }
+      if (j) {
+        if (j.video && j.video[0]) {
+          const v = j.video[0];
+          const resLabel = v.height ? v.height + 'p' : (v.width >= 1900 ? '1080p' : v.width >= 1200 ? '720p' : 'HD');
+          const fmt = v.format || parsed.codec || '';
+          const bdepth = v.bitDepth || '';
+          const fps = v.frameRate ? v.frameRate.replace('FPS', 'fps') : '';
+          videoSpec = [resLabel, fmt, bdepth].filter(Boolean).join(' ') + (fps ? ' • ' + fps : '');
+        }
+        if (j.audio && j.audio[0]) {
+          const a = j.audio[0];
+          const lang = a.language || 'Japanese';
+          const fmt = a.format || '';
+          const ch = a.channels ? a.channels.replace(' channels', 'ch') : '';
+          const br = a.bitRate ? '(' + a.bitRate + ')' : '';
+          audioSpec = [lang, fmt, ch, br].filter(Boolean).join(' ');
+        }
+        if (j.text && j.text.length > 0) {
+          subsSpec = j.text.map(t => t.language || t.title || 'Indonesian').filter((v, i, a) => a.indexOf(v) === i).join(', ');
+        }
+        if (j.general && j.general.duration) {
+          durationSpec = j.general.duration;
+        }
+      }
+    }
+  } catch(e) {
+    console.warn('MediaInfo auto-extract error:', e);
+  }
+
+  // Populate UI inputs
+  if (videoSpec) document.getElementById('tgSpecVideo').value = videoSpec.trim();
+  if (audioSpec) document.getElementById('tgSpecAudio').value = audioSpec.trim();
+  if (subsSpec) document.getElementById('tgSpecSubs').value = subsSpec.trim();
+  if (durationSpec && !document.getElementById('tgSpecDuration').value) {
+    document.getElementById('tgSpecDuration').value = durationSpec.trim();
+  }
+
+  generateAutoHashtags();
+  updateTGPosterPreview();
+  previewTelegramCaption();
+}
+
+function generateAutoHashtags() {
+  const title = (document.getElementById('tgTitle')?.value || '').trim();
+  const category = document.getElementById('tgCategory')?.value || 'movies';
+  const genres = document.getElementById('tgGenres') ? document.getElementById('tgGenres').value.trim() : '';
+  const first = tgSelectedFiles[0];
+  const parsed = first ? parseFileName(first.name || first.path) : {};
+  
+  const tags = [];
+  if (title) {
+    const cleanTag = title.replace(/[^a-zA-Z0-9]/g, '');
+    if (cleanTag) tags.push('#' + cleanTag);
+  }
+  const catLabel = { movies: 'Movies', series: 'Series', anime: 'Anime' }[category] || category;
+  if (catLabel) tags.push('#' + catLabel);
+  if (parsed.source) tags.push('#' + parsed.source.replace(/[^a-zA-Z0-9]/g, ''));
+  if (parsed.quality) tags.push('#' + parsed.quality.toUpperCase());
+  if (parsed.codec) tags.push('#' + parsed.codec.replace(/[^a-zA-Z0-9]/g, ''));
+  
+  if (genres) {
+    genres.split(',').forEach(g => {
+      const t = g.trim().replace(/[^a-zA-Z0-9]/g, '');
+      if (t && !tags.includes('#' + t)) tags.push('#' + t);
+    });
+  }
+  
+  const filteredTags = tags.filter((t, i) => tags.indexOf(t) === i && t !== '#');
+  document.getElementById('tgHashtags').value = filteredTags.join(' ');
+}
+
 function openTelegramModal(files) {
   tgSelectedFiles = files || [];
   const m = document.getElementById('telegramModal');
@@ -3934,7 +4147,6 @@ function openTelegramModal(files) {
   const savedPoster = localStorage.getItem('harudrive_tg_poster') || '';
   if (savedPoster) {
     document.getElementById('tgPosterUrl').value = savedPoster;
-    updateTGPosterPreview();
   }
   const fileContainer = document.getElementById('tgSelectedFiles');
   if (tgSelectedFiles.length === 0) {
@@ -3950,21 +4162,15 @@ function openTelegramModal(files) {
     const parsed = parseFileName(first.name || first.path || '');
     document.getElementById('tgTitle').value = parsed.title || first.name || '';
     document.getElementById('tgYear').value = parsed.year || '';
-    document.getElementById('tgSpecVideo').value = [parsed.quality, parsed.codec].filter(Boolean).join(' ');
-    document.getElementById('tgSpecAudio').value = parsed.audio || '';
     if (parsed.season) document.getElementById('tgCategory').value = 'series';
     else document.getElementById('tgCategory').value = 'movies';
     if (parsed.cleanTitle) {
       document.getElementById('tgTmdbQuery').value = parsed.cleanTitle;
     }
-    const tags = [];
-    if (parsed.cleanTitle) tags.push('#' + parsed.cleanTitle.replace(/\s+/g, ''));
-    if (parsed.codec) tags.push('#' + parsed.codec);
-    if (parsed.source) tags.push('#' + parsed.source);
-    if (parsed.quality) tags.push('#' + parsed.quality);
-    document.getElementById('tgHashtags').value = tags.join(' ');
+    extractSpecsAndMediaInfo(first);
   }
   setupTelegramLivePreview();
+  updateTGPosterPreview();
   previewTelegramCaption();
   const autoQ = document.getElementById('tgTmdbQuery').value.trim();
   if (autoQ && autoQ.length >= 2) {
@@ -3972,10 +4178,12 @@ function openTelegramModal(files) {
   }
   m.style.display = 'flex';
 }
+
 function closeTelegramModal() {
   const m = document.getElementById('telegramModal');
   if (m) m.style.display = 'none';
 }
+
 function parseFileName(name) {
   if (!name) return {};
   const clean = name.replace(/\.[^.]+$/, '').replace(/_/g, ' ').replace(/\./g, ' ');
@@ -3999,26 +4207,14 @@ function parseFileName(name) {
   const cleanTitle = title || clean.split(/\s+/).slice(0, 4).join(' ');
   return { title, cleanTitle, year, season, quality, codec, source, audio };
 }
-function updateTGPosterPreview() {
-  const url = document.getElementById('tgPosterUrl').value;
-  const img = document.getElementById('tgPosterPreview');
-  const ph = document.getElementById('tgPosterPlaceholder');
-  if (url) {
-    img.src = url;
-    img.style.display = 'block';
-    ph.style.display = 'none';
-    img.onerror = () => { img.style.display = 'none'; ph.style.display = 'block'; };
-  } else {
-    img.style.display = 'none';
-    ph.style.display = 'block';
-  }
-}
+
 function saveTMDBKeyAndSearch() {
   const input = document.getElementById('tgTmdbKeyInput');
   if (!input || !input.value.trim()) return alert('Masukkan TMDB API Key!');
   localStorage.setItem('harudrive_tmdb_api_key', input.value.trim());
   searchTMDB();
 }
+
 async function searchTMDB(autoApplyIfSingle = false) {
   const q = document.getElementById('tgTmdbQuery').value.trim();
   const container = document.getElementById('tgTmdbResults');
@@ -4058,7 +4254,7 @@ async function searchTMDB(autoApplyIfSingle = false) {
     data.results.forEach((r, idx) => {
       h += '<div style="display: flex; align-items: center; gap: 10px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer;" onclick="applyTMDBResultByIndex(' + idx + ')">';
       if (r.poster) h += '<img src="' + r.poster + '" style="width: 32px; height: 48px; border-radius: 4px; object-fit: cover;">';
-      h += '<div style="flex: 1; min-width: 0;"><div style="font-weight: 600; font-size: 0.8rem; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">' + escapeHtml(r.title) + ' (' + (r.year || '?') + ')</div><div style="font-size: 0.7rem; color: var(--text-dim);">ID: ' + r.id + (r.rating ? ' \u2022 \u2605 ' + r.rating : '') + '</div></div>';
+      h += '<div style="flex: 1; min-width: 0;"><div style="font-weight: 600; font-size: 0.8rem; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">' + escapeHtml(r.title) + ' (' + (r.year || '?') + ')</div><div style="font-size: 0.7rem; color: var(--text-dim);">ID: ' + r.id + (r.rating ? ' • ★ ' + r.rating : '') + (r.genres ? ' • ' + escapeHtml(r.genres) : '') + '</div></div>';
       h += '<button class="nav-btn" style="font-size: 0.7rem; padding: 3px 8px;">Pilih</button>';
       h += '</div>';
     });
@@ -4071,72 +4267,143 @@ async function searchTMDB(autoApplyIfSingle = false) {
     container.innerHTML = '<span style="color: #f87171;">Error: ' + e.message + '</span>';
   }
 }
+
 function applyTMDBResultByIndex(idx) {
   const r = (window._tmdbResults || [])[idx];
   if (!r) return;
-  applyTMDBResult(r.id, r.title, r.year, r.poster, r.rating, r.overview);
+  applyTMDBResult(r.id, r.title, r.year, r.poster, r.rating, r.overview, r.genres, r.duration, r.release_date, r.country);
 }
-function applyTMDBResult(id, title, year, poster, rating, overview) {
-  document.getElementById('tgTitle').value = title;
+
+async function applyTMDBResult(id, title, year, poster, rating, overview, genres, duration, releaseDate, country) {
+  document.getElementById('tgTitle').value = title || '';
   if (year) document.getElementById('tgYear').value = year;
-  if (poster) { document.getElementById('tgPosterUrl').value = poster; updateTGPosterPreview(); }
+  if (poster) {
+    document.getElementById('tgPosterUrl').value = poster;
+  }
   if (rating) document.getElementById('tgRating').value = rating;
-  if (overview) document.getElementById('tgSynopsis').value = overview.length > 250 ? overview.slice(0, 247) + '...' : overview;
-  document.getElementById('tgTmdbResults').innerHTML = '<span style="color: #34d399;">\u2713 Berhasil diisi dari TMDB</span>';
+  if (overview) {
+    document.getElementById('tgSynopsis').value = overview.length > 250 ? overview.slice(0, 247) + '...' : overview;
+  }
+  if (genres && document.getElementById('tgGenres')) {
+    document.getElementById('tgGenres').value = genres;
+  }
+  if (duration && document.getElementById('tgSpecDuration')) {
+    document.getElementById('tgSpecDuration').value = duration;
+  }
+  if (releaseDate && document.getElementById('tgReleaseDate')) {
+    document.getElementById('tgReleaseDate').value = releaseDate;
+  }
+  if (country && document.getElementById('tgCountry')) {
+    document.getElementById('tgCountry').value = country;
+  }
+
+  // If genres or duration is missing (e.g. from text search results), fetch full details by numeric ID
+  if (id && (!genres || !duration)) {
+    try {
+      const cat = document.getElementById('tgCategory').value;
+      const type = cat === 'movies' ? 'movie' : 'tv';
+      const userKey = localStorage.getItem('harudrive_tmdb_api_key') || '';
+      let url = '/api/admin/tmdb-search?q=' + id + '&type=' + type;
+      if (userKey) url += '&api_key=' + encodeURIComponent(userKey);
+      const detRes = await fetch(url);
+      if (detRes.ok) {
+        const detData = await detRes.json();
+        const full = detData.results && detData.results[0];
+        if (full) {
+          if (full.genres && document.getElementById('tgGenres')) document.getElementById('tgGenres').value = full.genres;
+          if (full.duration && document.getElementById('tgSpecDuration')) document.getElementById('tgSpecDuration').value = full.duration;
+          if (full.release_date && document.getElementById('tgReleaseDate')) document.getElementById('tgReleaseDate').value = full.release_date;
+          if (full.country && document.getElementById('tgCountry')) document.getElementById('tgCountry').value = full.country;
+          if (full.overview && !overview) {
+            document.getElementById('tgSynopsis').value = full.overview.length > 250 ? full.overview.slice(0, 247) + '...' : full.overview;
+          }
+        }
+      }
+    } catch(e) {}
+  }
+
+  generateAutoHashtags();
+  updateTGPosterPreview();
   previewTelegramCaption();
+  const resBox = document.getElementById('tgTmdbResults');
+  if (resBox) resBox.innerHTML = '<span style="color: #34d399;">✓ Berhasil diisi dari TMDB & Poster Banner siap!</span>';
 }
+
 function generateTGCaption() {
-  const title = document.getElementById('tgTitle').value || 'Untitled';
-  const year = document.getElementById('tgYear').value;
-  const category = document.getElementById('tgCategory').value;
-  const rating = document.getElementById('tgRating').value;
-  const synopsis = document.getElementById('tgSynopsis').value;
-  const videoSpec = document.getElementById('tgSpecVideo').value;
-  const duration = document.getElementById('tgSpecDuration').value;
-  const audioSpec = document.getElementById('tgSpecAudio').value;
-  const subsSpec = document.getElementById('tgSpecSubs').value;
-  const hashtagsRaw = document.getElementById('tgHashtags').value;
+  const title = (document.getElementById('tgTitle')?.value || '').trim() || 'Untitled';
+  const year = (document.getElementById('tgYear')?.value || '').trim();
+  const category = document.getElementById('tgCategory')?.value || 'movies';
+  const rating = (document.getElementById('tgRating')?.value || '').trim();
+  const synopsis = (document.getElementById('tgSynopsis')?.value || '').trim();
+  const genres = document.getElementById('tgGenres') ? document.getElementById('tgGenres').value.trim() : '';
+  const releaseDate = document.getElementById('tgReleaseDate') ? document.getElementById('tgReleaseDate').value.trim() : '';
+  const duration = (document.getElementById('tgSpecDuration')?.value || '').trim();
+  const country = document.getElementById('tgCountry') ? document.getElementById('tgCountry').value.trim() : '';
+  const videoSpec = (document.getElementById('tgSpecVideo')?.value || '').trim();
+  const audioSpec = (document.getElementById('tgSpecAudio')?.value || '').trim();
+  const subsSpec = (document.getElementById('tgSpecSubs')?.value || '').trim();
+  const hashtagsRaw = (document.getElementById('tgHashtags')?.value || '').trim();
   const catLabel = { movies: 'Movies', series: 'Series', anime: 'Anime' }[category] || category;
   const yearText = year ? ' (' + year + ')' : '';
-  let cap = '\\uD83C\\uDFAC <b>' + title + yearText + ' [' + catLabel + ']</b>\\n';
+  const nl = String.fromCharCode(10);
+
+  let cap = '🎬 <b>' + title + yearText + ' [' + catLabel + ']</b>' + nl;
+
   if (synopsis) {
     const synTrunc = synopsis.length > 250 ? synopsis.slice(0, 247) + '...' : synopsis;
-    cap += '\\n' + synTrunc + '\\n';
+    cap += nl + '📝 ' + synTrunc + nl;
   }
+
+  const details = [];
+  if (genres) details.push('⭐ <b>Genre:</b> ' + genres);
+  if (rating) details.push('🌟 <b>Rating:</b> ' + rating + '/10');
+  if (releaseDate) details.push('📅 <b>Rilis:</b> ' + releaseDate);
+  if (duration) details.push('⌛ <b>Durasi:</b> ' + duration);
+  if (country) details.push('🌐 <b>Negara:</b> ' + country);
+  if (videoSpec) details.push('🎬 <b>Video:</b> ' + videoSpec);
+  if (audioSpec) details.push('🔊 <b>Audio:</b> ' + audioSpec);
+  if (subsSpec) details.push('💬 <b>Subtitle:</b> ' + subsSpec);
+
+  if (details.length > 0) {
+    cap += nl + details.join(nl) + nl;
+  }
+
   if (tgSelectedFiles.length > 1) {
-    cap += '\\n\\uD83D\\uDCC1 Available Versions:\\n';
+    cap += nl + '📁 <b>Available Versions:</b>' + nl;
     tgSelectedFiles.forEach(f => {
       const parsed = parseFileName(f.name || f.path);
       const sz = f.size > 1073741824 ? (f.size / 1073741824).toFixed(2) + ' GB' : f.size > 1048576 ? (f.size / 1048576).toFixed(1) + ' MB' : (f.size / 1024).toFixed(0) + ' KB';
-      cap += '  \\uD83D\\uDCF9 ' + (parsed.quality || '') + ' ' + (parsed.codec || '') + ' (' + sz + ')\\n';
+      cap += '  🎥 ' + (parsed.quality || '') + ' ' + (parsed.codec || '') + ' (' + sz + ')' + nl;
     });
   } else if (tgSelectedFiles.length === 1) {
     const f = tgSelectedFiles[0];
     const parsed = parseFileName(f.name || f.path);
     const sz = f.size > 1073741824 ? (f.size / 1073741824).toFixed(2) + ' GB' : f.size > 1048576 ? (f.size / 1048576).toFixed(1) + ' MB' : (f.size / 1024).toFixed(0) + ' KB';
-    cap += '\\n\\uD83D\\uDCC1 ' + (parsed.quality || '') + ' ' + (parsed.codec || '') + ' (' + sz + ')\\n';
+    cap += nl + '📁 ' + (parsed.quality || 'HD') + ' ' + (parsed.codec || '') + ' (' + sz + ')' + nl;
   }
-  const hasSpecs = videoSpec || duration || audioSpec || subsSpec;
-  if (hasSpecs) {
-    cap += '\\n\\uD83D\\uDCCB <b>SPECS:</b>\\n';
-    if (videoSpec) cap += '\\uD83C\\uDFAC Video : ' + videoSpec + '\\n';
-    if (duration) cap += '\\u23F1\\uFE0F Duration : ' + duration + '\\n';
-    if (audioSpec) cap += '\\uD83D\\uDD0A Audio : ' + audioSpec + '\\n';
-    if (subsSpec) cap += '\\uD83D\\uDCAC Subs : ' + subsSpec + '\\n';
-  }
+
   if (hashtagsRaw) {
-    const tags = hashtagsRaw.split(/\s+/).filter(t => t).map(t => t.startsWith('#') ? t : '#' + t).join(' ');
-    cap += '\\n' + tags;
+    const validTags = hashtagsRaw
+      .split(/\s+/)
+      .map(t => t.trim())
+      .filter(t => t && t !== '#')
+      .map(t => t.startsWith('#') ? t : '#' + t);
+    if (validTags.length > 0) {
+      cap += nl + validTags.join(' ');
+    }
   }
+
   if (cap.length > 1024) cap = cap.slice(0, 1020) + '...';
   return cap;
 }
+
 function previewTelegramCaption() {
   const cap = generateTGCaption();
   document.getElementById('tgCaptionPreview').textContent = cap;
   document.getElementById('tgCharCount').textContent = cap.length + ' / 1024 chars';
   document.getElementById('tgCharCount').style.color = cap.length > 900 ? '#f87171' : cap.length > 700 ? '#fbbf24' : 'var(--text-dim)';
 }
+
 async function sendToTelegram() {
   const pin = document.getElementById('tgAdminPin').value;
   if (!pin) return alert('Masukkan PIN Admin!');
@@ -4156,15 +4423,20 @@ async function sendToTelegram() {
     return { quality: parsed.quality || 'HD', codec: parsed.codec || '', size: sz, link: f.shareUrl || f.shortUrl || '' };
   });
   const hashtagsRaw = document.getElementById('tgHashtags').value;
-  const hashtags = hashtagsRaw.split(/\s+/).filter(t => t).map(t => t.startsWith('#') ? t.slice(1) : t);
+  const hashtags = hashtagsRaw.split(/\s+/).filter(t => t && t !== '#').map(t => t.startsWith('#') ? t.slice(1) : t);
+  const useBanner = document.getElementById('tgUseBanner') ? document.getElementById('tgUseBanner').checked : true;
   const body = {
     admin_pin: pin,
+    use_banner: useBanner,
     poster_url: posterUrl,
     title: title,
     year: document.getElementById('tgYear').value,
     category: document.getElementById('tgCategory').value,
     rating: document.getElementById('tgRating').value,
     synopsis: document.getElementById('tgSynopsis').value,
+    genres: document.getElementById('tgGenres') ? document.getElementById('tgGenres').value : '',
+    release_date: document.getElementById('tgReleaseDate') ? document.getElementById('tgReleaseDate').value : '',
+    country: document.getElementById('tgCountry') ? document.getElementById('tgCountry').value : '',
     versions: versions,
     specs: {
       video: document.getElementById('tgSpecVideo').value,
@@ -4195,7 +4467,6 @@ async function sendToTelegram() {
     if (btn) { btn.disabled = false; btn.textContent = 'Send to Channel'; }
   }
 }
-
 // Video Player Modal
 function playVideo(fileId, fileName) {
   const modal = document.getElementById('videoModal');
@@ -5493,79 +5764,121 @@ function adminConsoleUI() {
 
   <!-- TELEGRAM POST MODAL -->
   <div id="telegramModal" class="modal-backdrop" style="display: none;">
-    <div class="modal-card" style="max-width: 780px;">
+    <div class="modal-card" style="max-width: 820px;">
       <div class="modal-header">
         <div style="display: flex; align-items: center; gap: 10px;">
           <svg class="icon icon-sm" style="color: #38bdf8;" viewBox="0 0 24 24"><path d="M21.198 2.433a2.242 2.242 0 0 0-1.022.215l-16.5 7.5a2.25 2.25 0 0 0 .126 4.088l4.096 1.228 1.228 4.096a2.25 2.25 0 0 0 4.088.126l7.5-16.5a2.25 2.25 0 0 0-2.42-3.26z"/></svg>
-          <span class="modal-title">Post to Telegram</span>
+          <span class="modal-title">Post to Telegram (HaruFilm Style)</span>
         </div>
         <button class="btn-close-circle" onclick="closeTelegramModal()">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
       </div>
-      <div class="modal-body" style="max-height: 65vh; overflow-y: auto; padding: 18px 22px;">
-        <!-- Poster + Title Row -->
-        <div style="display: flex; gap: 18px; margin-bottom: 16px;">
-          <div style="flex-shrink: 0; width: 140px; height: 210px; border-radius: 12px; overflow: hidden; border: 2px solid var(--border); background: var(--bg-surface); display: flex; align-items: center; justify-content: center;">
-            <img id="tgPosterPreview" src="" style="width: 100%; height: 100%; object-fit: cover; display: none;" alt="Poster">
-            <span id="tgPosterPlaceholder" style="font-size: 0.72rem; color: var(--text-dim); text-align: center; padding: 8px;">No Poster</span>
+      <div class="modal-body" style="max-height: 70vh; overflow-y: auto; padding: 18px 22px;">
+        <!-- HaruFilm Poster Banner Preview Card -->
+        <div style="margin-bottom: 16px; border: 1px solid rgba(236, 72, 153, 0.35); border-radius: 12px; background: rgba(15, 23, 42, 0.6); padding: 12px; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span id="tgBannerBadge" class="badge" style="background: rgba(236, 72, 153, 0.15); color: #ec4899; border: 1px solid rgba(236, 72, 153, 0.4); font-size: 0.72rem; padding: 2px 8px; border-radius: 6px; font-weight: 600;">HaruFilm Banner (1200x630)</span>
+              <span style="font-size: 0.72rem; color: var(--text-dim);">Live Banner Preview</span>
+            </div>
+            <label style="display: flex; align-items: center; gap: 6px; font-size: 0.75rem; color: var(--text); cursor: pointer;">
+              <input type="checkbox" id="tgUseBanner" checked onchange="updateTGPosterPreview()">
+              <span>Gunakan Banner ala HaruFilm</span>
+            </label>
           </div>
-          <div style="flex: 1; display: flex; flex-direction: column; gap: 10px;">
-            <div>
-              <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Title</label>
-              <input type="text" id="tgTitle" class="form-input-pro" placeholder="Movie / Series Title" style="margin-top: 4px;">
+          <div style="width: 100%; height: 190px; border-radius: 8px; overflow: hidden; background: #0b0f19; display: flex; align-items: center; justify-content: center; border: 1px solid var(--border); position: relative;">
+            <img id="tgPosterPreview" src="" style="width: 100%; height: 100%; object-fit: contain; display: none;" alt="Poster Banner">
+            <div id="tgPosterPlaceholder" style="font-size: 0.76rem; color: var(--text-dim); text-align: center; padding: 12px;">
+              <svg style="width: 32px; height: 32px; margin: 0 auto 6px; opacity: 0.4; display: block;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+              Pilih TMDB atau masukkan Poster URL untuk melihat preview banner HaruFilm
             </div>
-            <div style="display: flex; gap: 10px;">
-              <div style="flex: 1;">
-                <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Year</label>
-                <input type="text" id="tgYear" class="form-input-pro" placeholder="2026" style="margin-top: 4px;">
-              </div>
-              <div style="flex: 1;">
-                <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Rating</label>
-                <input type="text" id="tgRating" class="form-input-pro" placeholder="8.5" style="margin-top: 4px;">
-              </div>
-            </div>
-            <div>
-              <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Category</label>
-              <select id="tgCategory" class="form-input-pro" style="margin-top: 4px; padding: 8px 12px;">
-                <option value="movies">Movies</option>
-                <option value="series">Series</option>
-                <option value="anime">Anime</option>
-              </select>
-            </div>
+          </div>
+        </div>
+
+        <!-- Title & Basic Info Row -->
+        <div style="display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap: 10px; margin-bottom: 14px;">
+          <div>
+            <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Title</label>
+            <input type="text" id="tgTitle" class="form-input-pro" placeholder="Movie / Series Title" style="margin-top: 4px;">
+          </div>
+          <div>
+            <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Year</label>
+            <input type="text" id="tgYear" class="form-input-pro" placeholder="2026" style="margin-top: 4px;">
+          </div>
+          <div>
+            <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Rating</label>
+            <input type="text" id="tgRating" class="form-input-pro" placeholder="8.5" style="margin-top: 4px;">
+          </div>
+          <div>
+            <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Category</label>
+            <select id="tgCategory" class="form-input-pro" style="margin-top: 4px; padding: 8px 10px;">
+              <option value="movies">Movies</option>
+              <option value="series">Series</option>
+              <option value="anime">Anime</option>
+            </select>
           </div>
         </div>
 
         <!-- TMDB Search -->
         <div style="margin-bottom: 14px;">
-          <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">TMDB ID / Search (opsional)</label>
+          <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">TMDB ID / Search (Cari judul atau ketik ID TMDB langsung)</label>
           <div style="display: flex; gap: 8px; margin-top: 4px;">
-            <input type="text" id="tgTmdbQuery" class="form-input-pro" placeholder="Cari judul atau masukkan TMDB ID..." style="flex: 1;">
+            <input type="text" id="tgTmdbQuery" class="form-input-pro" placeholder="Contoh: 667520 atau A Whisker Away..." style="flex: 1;">
             <button class="nav-btn" onclick="searchTMDB()" style="white-space: nowrap;">Cari</button>
           </div>
           <div id="tgTmdbResults" style="margin-top: 6px; font-size: 0.76rem; color: var(--text-dim);"></div>
         </div>
 
-        <!-- Poster URL -->
-        <div style="margin-bottom: 14px;">
-          <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Poster URL</label>
-          <input type="url" id="tgPosterUrl" class="form-input-pro" placeholder="https://image.tmdb.org/t/p/w500/... atau URL manual" style="margin-top: 4px;" oninput="updateTGPosterPreview()">
+        <!-- TMDB Auto Details: Genre, Durasi, Rilis, Negara -->
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px;">
+          <div>
+            <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Genre (auto TMDB / banner)</label>
+            <input type="text" id="tgGenres" class="form-input-pro" placeholder="Animasi, Drama, Romantis" style="margin-top: 4px;">
+          </div>
+          <div>
+            <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Rilis (Tanggal / Tahun)</label>
+            <input type="text" id="tgReleaseDate" class="form-input-pro" placeholder="2020-06-18" style="margin-top: 4px;">
+          </div>
+          <div>
+            <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Negara (opsional)</label>
+            <input type="text" id="tgCountry" class="form-input-pro" placeholder="Jepang" style="margin-top: 4px;">
+          </div>
+          <div>
+            <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Poster Image URL (TMDB / manual)</label>
+            <input type="url" id="tgPosterUrl" class="form-input-pro" placeholder="https://image.tmdb.org/t/p/w500/..." style="margin-top: 4px;" oninput="updateTGPosterPreview()">
+          </div>
         </div>
 
         <!-- Selected Files -->
         <div style="margin-bottom: 14px;">
           <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Selected Files</label>
-          <div id="tgSelectedFiles" class="folder-tree-box" style="margin-top: 4px; max-height: 120px; overflow-y: auto; font-size: 0.78rem; color: var(--text-muted); padding: 10px;">Tidak ada file dipilih</div>
+          <div id="tgSelectedFiles" class="folder-tree-box" style="margin-top: 4px; max-height: 100px; overflow-y: auto; font-size: 0.78rem; color: var(--text-muted); padding: 10px;">Tidak ada file dipilih</div>
         </div>
 
-        <!-- Specs -->
+        <!-- Specs (Auto MediaInfo) -->
         <div style="margin-bottom: 14px;">
-          <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Specs (auto dari MediaInfo)</label>
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Spesifikasi Video & Audio (Auto MediaInfo)</label>
+            <button type="button" class="nav-btn" style="font-size: 0.7rem; padding: 2px 8px;" onclick="if(tgSelectedFiles[0]) extractSpecsAndMediaInfo(tgSelectedFiles[0]);">⚡ Auto Scan MediaInfo</button>
+          </div>
           <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 4px;">
-            <input type="text" id="tgSpecVideo" class="form-input-pro" placeholder="1080p AV1 10-bit \u2022 24fps">
-            <input type="text" id="tgSpecDuration" class="form-input-pro" placeholder="24 min/ep">
-            <input type="text" id="tgSpecAudio" class="form-input-pro" placeholder="Japanese DD 5.1">
-            <input type="text" id="tgSpecSubs" class="form-input-pro" placeholder="Indonesia, English">
+            <div>
+              <span style="font-size: 0.7rem; color: var(--text-dim);">Video:</span>
+              <input type="text" id="tgSpecVideo" class="form-input-pro" placeholder="1080p AV1 10-bit • 24fps">
+            </div>
+            <div>
+              <span style="font-size: 0.7rem; color: var(--text-dim);">Durasi:</span>
+              <input type="text" id="tgSpecDuration" class="form-input-pro" placeholder="106 menit">
+            </div>
+            <div>
+              <span style="font-size: 0.7rem; color: var(--text-dim);">Audio:</span>
+              <input type="text" id="tgSpecAudio" class="form-input-pro" placeholder="Japanese DDP 5.1 (384 kb/s)">
+            </div>
+            <div>
+              <span style="font-size: 0.7rem; color: var(--text-dim);">Subtitle:</span>
+              <input type="text" id="tgSpecSubs" class="form-input-pro" placeholder="Indonesian, English">
+            </div>
           </div>
         </div>
 
@@ -5578,8 +5891,11 @@ function adminConsoleUI() {
 
         <!-- Hashtags -->
         <div style="margin-bottom: 14px;">
-          <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Hashtags</label>
-          <input type="text" id="tgHashtags" class="form-input-pro" placeholder="#Title #NF #AV1 (pisahkan spasi)" style="margin-top: 4px;">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Hashtags (Otomatis dibuat)</label>
+            <button type="button" class="nav-btn" style="font-size: 0.7rem; padding: 2px 8px;" onclick="generateAutoHashtags(); previewTelegramCaption();">⚡ Refresh Tags</button>
+          </div>
+          <input type="text" id="tgHashtags" class="form-input-pro" placeholder="#Title #Movies #1080p #Animasi" style="margin-top: 4px;">
         </div>
 
         <!-- Channel + Topic -->
@@ -5597,7 +5913,7 @@ function adminConsoleUI() {
         <!-- PIN -->
         <div style="margin-bottom: 14px;">
           <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">PIN Admin</label>
-          <input type="password" id="tgAdminPin" class="form-input-pro" placeholder="\u2022\u2022\u2022\u2022\u2022\u2022" autocomplete="off" style="margin-top: 4px;">
+          <input type="password" id="tgAdminPin" class="form-input-pro" placeholder="••••••" autocomplete="off" style="margin-top: 4px;">
         </div>
 
         <!-- Caption Preview -->
