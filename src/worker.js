@@ -5,12 +5,11 @@ export default {
     const HF_REPO_ID = env.HF_REPO_ID || 'username/harudrive-data';
     const HF_TOKEN = env.HF_TOKEN || '';
     const APP_PASSWORD = env.APP_PASSWORD || 'not_set_in_env';
-    const ADMIN_PIN = env.ADMIN_PIN || '290722';
-function verifyPin(inputPin) {
-  const p = String(inputPin || '').trim();
-  const target = String(ADMIN_PIN || '290722').trim();
-  return p === target || p === '290722';
-}
+    const ADMIN_PIN = String(env.ADMIN_PIN || '').trim() || '290722';
+    function verifyPin(inputPin) {
+      const p = String(inputPin || '').trim();
+      return p === ADMIN_PIN;
+    }
     const GITHUB_PAT = env.GITHUB_PAT || '';
     const GITHUB_REPO = env.GITHUB_REPO || 'IlhamRomadon297/haru-drive';
     const GDRIVE_CLIENT_ID = env.GDRIVE_CLIENT_ID || '';
@@ -742,7 +741,7 @@ function verifyPin(inputPin) {
     // API: TMDB Search (Supports Title Search & Direct Numeric TMDB ID)
     if (url.pathname === '/api/admin/tmdb-search') {
       try {
-        const tmdbKey = url.searchParams.get('api_key') || request.headers.get('X-TMDB-Key') || TMDB_API_KEY;
+        const tmdbKey = String(TMDB_API_KEY || '').trim() || url.searchParams.get('api_key') || request.headers.get('X-TMDB-Key') || '';
         if (!tmdbKey) {
           return new Response(JSON.stringify({ error: 'TMDB API key belum diset. Silakan masukkan TMDB API Key.', needs_key: true }), { status: 400, headers: { 'Content-Type': 'application/json' } });
         }
