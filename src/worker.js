@@ -769,8 +769,26 @@ export default {
           caption = caption.slice(0, 1020) + '...';
         }
 
-        const chatId = channel_id || TELEGRAM_CHAT_ID;
-        const finalTopicId = topic_id || TELEGRAM_TOPIC_ID;
+        // Target chats: primary group/channel + optional backup channel
+        const targets = [];
+        if (channel_id && channel_id.trim()) {
+          channel_id.split(',').map(s => s.trim()).filter(Boolean).forEach(c => {
+            targets.push({ chat_id: c, topic_id: topic_id || '' });
+          });
+        } else {
+          if (TELEGRAM_CHAT_ID) {
+            targets.push({ chat_id: TELEGRAM_CHAT_ID, topic_id: topic_id || TELEGRAM_TOPIC_ID });
+          }
+          const backupChannel = env.TELEGRAM_BACKUP_CHANNEL_ID || env.TELEGRAM_CHANNEL_ID;
+          if (backupChannel && backupChannel.trim() && !targets.some(t => t.chat_id === backupChannel.trim())) {
+            // Backup channel does not use topic_id
+            targets.push({ chat_id: backupChannel.trim(), topic_id: '' });
+          }
+        }
+
+        if (targets.length === 0) {
+          return new Response(JSON.stringify({ error: 'TELEGRAM_CHAT_ID belum diset di secrets atau form!' }), { status: 400 });
+        }
 
         // Auto HaruDrive banner generation
         let posterFinal = poster_url || 'https://via.placeholder.com/500x750/141414/0ea5e9?text=No+Poster';
@@ -787,15 +805,6 @@ export default {
           if (specs && specs.subs) bannerParams.set('subtitle', specs.subs);
           bannerParams.set('brand', 'HaruDrive');
           posterFinal = `${VERCEL_POSTER_URL}/api/poster?${bannerParams.toString()}`;
-        }
-
-        const formData = new FormData();
-        formData.append('chat_id', chatId);
-        formData.append('photo', posterFinal);
-        formData.append('caption', caption);
-        formData.append('parse_mode', 'HTML');
-        if (finalTopicId) {
-          formData.append('message_thread_id', finalTopicId);
         }
 
         // Inline Keyboard Buttons ala Screenshot 4: [ 📄 MediaInfo ] [ 📥 Download ]
@@ -828,18 +837,36 @@ export default {
           }
         }
 
-        if (keyboard.length > 0) {
-          formData.append('reply_markup', JSON.stringify({ inline_keyboard: keyboard }));
-        }
+        let lastMessageId = null;
+        let sentCount = 0;
+        for (const target of targets) {
+          const formData = new FormData();
+          formData.append('chat_id', target.chat_id);
+          formData.append('photo', posterFinal);
+          formData.append('caption', caption);
+          formData.append('parse_mode', 'HTML');
+          if (target.topic_id) {
+            formData.append('message_thread_id', target.topic_id);
+          }
+          if (keyboard.length > 0) {
+            formData.append('reply_markup', JSON.stringify({ inline_keyboard: keyboard }));
+          }
 
-        const tgRes = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto`, {
-          method: 'POST',
-          body: formData
-        });
+          const tgRes = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto`, {
+            method: 'POST',
+            body: formData
+          });
 
-        const tgData = await tgRes.json();
-        if (!tgRes.ok) {
-          return new Response(JSON.stringify({ error: `Telegram error: ${tgData.description || 'Unknown error'}` }), { status: 500 });
+          const tgData = await tgRes.json();
+          if (tgRes.ok) {
+            lastMessageId = tgData.result?.message_id;
+            sentCount++;
+          } else {
+            console.error(`Telegram error for ${target.chat_id}:`, tgData);
+            if (target === targets[0]) {
+              return new Response(JSON.stringify({ error: `Telegram error (${target.chat_id}): ${tgData.description || 'Unknown error'}` }), { status: 500 });
+            }
+          }
         }
 
         return new Response(JSON.stringify({
@@ -2017,7 +2044,7 @@ function htmlPage(content, env, pageMode = 'public') {
       overflow-y: auto !important;
       flex: 1 1 auto;
       min-height: 0;
-      max-height: calc(100vh - 180px);
+      max-height: calc(88vh - 120px) !important;
       -webkit-overflow-scrolling: touch;
       overscroll-behavior: contain;
     }
@@ -4197,21 +4224,58 @@ function cleanSubtitleLanguages(subs) {
   return cleanList.slice(0, 3).join(', ') + (cleanList.length > 3 ? ', etc.' : '');
 }
 
-function cleanAudioLanguage(rawAudio) {
-  if (!rawAudio) return 'Japanese';
-  const langs = ['Indonesian', 'Japanese', 'English', 'Malay', 'Korean', 'Chinese'];
-  const found = [];
-  langs.forEach(l => {
-    if (new RegExp(l, 'i').test(rawAudio) || (l === 'Indonesian' && /indonesia/i.test(rawAudio)) || (l === 'Japanese' && /jepang/i.test(rawAudio))) {
-      found.push(l);
+function cleanAudioLanguages(rawList) {
+  if (!rawList) return 'Japanese';
+  let arr = Array.isArray(rawList) ? rawList : String(rawList).split(/[,/&]/);
+
+  const langMap = {
+    'id': 'Indonesian', 'ind': 'Indonesian', 'indonesia': 'Indonesian', 'indonesian': 'Indonesian',
+    'en': 'English', 'eng': 'English',
+    'ja': 'Japanese', 'jpn': 'Japanese', 'jepang': 'Japanese',
+    'ko': 'Korean', 'kor': 'Korean',
+    'ms': 'Malay', 'zlm': 'Malay', 'may': 'Malay', 'malay': 'Malay', 'melayu': 'Malay',
+    'zh': 'Chinese', 'zho': 'Chinese', 'chi': 'Chinese',
+    'th': 'Thai', 'tha': 'Thai',
+    'de': 'German', 'ger': 'German', 'deu': 'German',
+    'fr': 'French', 'fre': 'French', 'fra': 'French',
+    'es': 'Spanish', 'spa': 'Spanish', 'es-419': 'Spanish', 'es-es': 'Spanish',
+    'it': 'Italian', 'ita': 'Italian',
+    'pt': 'Portuguese', 'por': 'Portuguese', 'pt-br': 'Portuguese'
+  };
+
+  const cleanList = [];
+  arr.forEach(s => {
+    let cleanStr = String(s).trim();
+    cleanStr = cleanStr.replace(/\s*(AAC.*|DDP.*|DTS.*|FLAC.*|AC3.*|Atmos.*|5\.1|2\.0|7\.1)/gi, '').trim();
+    const low = cleanStr.toLowerCase();
+    const mapped = langMap[low] || (cleanStr ? cleanStr.charAt(0).toUpperCase() + cleanStr.slice(1) : '');
+    if (mapped && !cleanList.includes(mapped)) {
+      cleanList.push(mapped);
     }
   });
-  if (found.length > 1) {
-    return found.join(', ');
-  } else if (found.length === 1) {
-    return found[0];
+
+  if (cleanList.length === 0) return 'Japanese';
+
+  const priority = ['Indonesian', 'English', 'Japanese', 'Korean', 'Malay'];
+  const matchedPrio = cleanList.filter(l => priority.includes(l));
+  const otherLangs = cleanList.filter(l => !priority.includes(l));
+
+  if (matchedPrio.length > 0) {
+    if (matchedPrio.length <= 2 && otherLangs.length === 0) {
+      return matchedPrio.join(', ');
+    }
+    const display = matchedPrio.slice(0, 3);
+    if (matchedPrio.length > 3 || otherLangs.length > 0) {
+      return display.join(', ') + ', etc.';
+    }
+    return display.join(', ');
   }
-  return String(rawAudio).replace(/\s*(AAC.*|DDP.*|DTS.*|FLAC.*|AC3.*|Atmos.*|5\.1|2\.0|7\.1)/gi, '').trim() || 'Japanese';
+
+  return cleanList.slice(0, 3).join(', ') + (cleanList.length > 3 ? ', etc.' : '');
+}
+
+function cleanAudioLanguage(rawAudio) {
+  return cleanAudioLanguages(rawAudio);
 }
 
 function formatCodec(raw) {
@@ -4440,7 +4504,7 @@ async function extractSpecsAndMediaInfo(file) {
   let audioCodec = audioTech.codec;
   let audioChannel = audioTech.channel;
   let atmos = audioTech.atmos;
-  let audioLang = cleanAudioLanguage(parsed.audio || '');
+  let audioLang = cleanAudioLanguages(parsed.audio || '');
 
   let durationSpec = '';
   let subsSpec = 'Indonesian, English';
@@ -4468,10 +4532,14 @@ async function extractSpecsAndMediaInfo(file) {
             }
           }
           const fmt = formatCodec(v.format || parsed.codec || 'AV1');
-          const bdepth = v.bitDepth ? v.bitDepth + '-bit' : bitDepth;
+          let bdepth = bitDepth;
+          if (v.bitDepth) {
+            const bNum = String(v.bitDepth).replace(/[^0-9]/g, '');
+            bdepth = bNum ? bNum + '-bit' : '10-bit';
+          }
           videoSpec = [resLabel, miHdr, fmt, bdepth].filter(Boolean).join(' ');
         }
-        if (j.audio && j.audio[0]) {
+        if (j.audio && j.audio.length > 0) {
           const a = j.audio[0];
           if (a.format) {
             const f = a.format.toUpperCase();
@@ -4493,17 +4561,8 @@ async function extractSpecsAndMediaInfo(file) {
           if (a.format_additionalfeatures && /joc|atmos/i.test(a.format_additionalfeatures)) atmos = true;
           if (a.title && /atmos/i.test(a.title)) atmos = true;
 
-          if (j.audio.length > 1) {
-            const langs = [];
-            j.audio.forEach(track => {
-              const l = cleanAudioLanguage(track.language || track.title || '');
-              if (l && !langs.includes(l)) langs.push(l);
-            });
-            if (langs.length > 0) audioLang = langs.join(', ');
-          } else {
-            const singleLang = cleanAudioLanguage(a.language || a.title || '');
-            if (singleLang) audioLang = singleLang;
-          }
+          // Priority filter across all audio tracks (Indonesian, English, Japanese, Korean, Malay, etc.)
+          audioLang = cleanAudioLanguages(j.audio.map(track => track.language || track.title || ''));
         }
         if (j.text && j.text.length > 0) {
           subsSpec = cleanSubtitleLanguages(j.text.map(t => t.language || t.title || ''));
@@ -4516,6 +4575,9 @@ async function extractSpecsAndMediaInfo(file) {
   } catch(e) {
     console.warn('MediaInfo auto-extract error:', e);
   }
+
+  // Clean duplicate bits-bit
+  videoSpec = videoSpec.replace(/\b(\d+)\s*bits?-bit\b/gi, '$1-bit').replace(/\b(\d+)\s*bits\b/gi, '$1-bit');
 
   // Gabungkan spec teknis di baris atas: Format Video & Codec Audio
   const audioTechLabel = (audioCodec + ' ' + audioChannel + (atmos ? ' Atmos' : '')).trim();
@@ -4871,7 +4933,12 @@ async function createTelegraphMediaInfo() {
   const btn = event?.currentTarget;
   if (btn) { btn.disabled = true; btn.textContent = '⏳ Mengupload...'; }
   const first = tgSelectedFiles && tgSelectedFiles[0];
-  const pageTitle = (first ? (first.name || first.path) : (document.getElementById('tgTitle')?.value || 'MediaInfo')).trim();
+  const title = (document.getElementById('tgTitle')?.value || '').trim() || 'MediaInfo';
+  const year = (document.getElementById('tgYear')?.value || '').trim();
+  const cat = document.getElementById('tgCategory')?.value || 'movies';
+  const catLabel = cat === 'series' ? 'Series' : cat === 'anime' ? 'Anime' : 'Movies';
+  const pageTitle = title + (year ? ' (' + year + ')' : '') + ' [' + catLabel + ']';
+  const fileName = (first ? (first.name || first.path) : title).trim();
   const pin = document.getElementById('tgAdminPin')?.value || '290722';
 
   let rawContent = '';
@@ -4891,11 +4958,11 @@ async function createTelegraphMediaInfo() {
   if (!rawContent) {
     const video = document.getElementById('tgSpecVideo')?.value || '1080p';
     const audio = document.getElementById('tgSpecAudio')?.value || 'Japanese';
-    const subs = document.getElementById('tgSpecSubs')?.value || 'Indonesian & English';
+    const subs = document.getElementById('tgSpecSubs')?.value || 'Indonesian, English';
     const dur = document.getElementById('tgSpecDuration')?.value || '';
     rawContent = [
       'General',
-      'Complete name: ' + pageTitle,
+      'Complete name: ' + fileName,
       'Duration: ' + dur,
       '',
       'Video',
@@ -6618,8 +6685,8 @@ function adminConsoleUI() {
   </div>
 
   <!-- TELEGRAM VISUAL PREVIEW MODAL -->
-  <div id="tgVisualPreviewModal" class="modal-backdrop tg-modal-scrollable" style="display: none; z-index: 10005;">
-    <div class="modal-card glass" style="max-width: 640px; width: 100%; border: 1px solid rgba(56, 189, 248, 0.4); box-shadow: 0 25px 60px rgba(0, 0, 0, 0.7);">
+  <div id="tgVisualPreviewModal" class="modal-backdrop tg-modal-scrollable" style="display: none; position: fixed; inset: 0; z-index: 10005; overflow-y: auto; padding: 20px 12px; align-items: center; justify-content: center;">
+    <div class="modal-card glass" style="max-width: 640px; width: 100%; max-height: 88vh; display: flex; flex-direction: column; border: 1px solid rgba(56, 189, 248, 0.4); box-shadow: 0 25px 60px rgba(0, 0, 0, 0.7); overflow: hidden;">
       <div class="modal-header" style="flex-shrink: 0; border-bottom: 1px solid var(--border); padding: 12px 18px; display: flex; justify-content: space-between; align-items: center;">
         <div style="display: flex; align-items: center; gap: 8px;">
           <span style="font-size: 1.1rem;">👁️</span>
@@ -6630,7 +6697,7 @@ function adminConsoleUI() {
         </button>
       </div>
 
-      <div class="modal-body" style="padding: 14px 18px;">
+      <div class="modal-body" style="flex: 1 1 auto; max-height: calc(88vh - 120px); overflow-y: auto; padding: 14px 18px; -webkit-overflow-scrolling: touch;">
         <!-- Telegram Dark Bubble Card Mockup -->
         <div style="background: #182533; border-radius: 14px; overflow: hidden; border: 1px solid rgba(255,255,255,0.08); box-shadow: 0 10px 30px rgba(0,0,0,0.5); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
           <!-- Bubble Banner Image (Limited max height for easy scrolling) -->
