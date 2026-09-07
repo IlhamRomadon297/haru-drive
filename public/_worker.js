@@ -719,7 +719,7 @@ export default {
         }
 
         if (synopsis) {
-          const synTrunc = synopsis.length > 200 ? synopsis.slice(0, 197) + '...' : synopsis;
+          const synTrunc = synopsis.length > 350 ? synopsis.slice(0, 347) + '...' : synopsis;
           caption += `\n\u{1F4DD} ${synTrunc}\n`;
         }
 
@@ -740,13 +740,13 @@ export default {
           caption += `\u{1F50A} Audio: ${audioSpec}\n`;
         }
         if (subsSpec) {
-          caption += `\u{1F4AC} Subtitles: ${subsSpec}\n`;
+          caption += `\u{1F4AC} Subtitle: ${subsSpec}\n`;
         }
         caption = caption.trim() + `</blockquote>\n`;
 
         // Available versions if multiple files
         if (versions && versions.length > 1) {
-          caption += `\n\u{1F4C1} <b>Available Versions:</b>\n`;
+          caption += `\n\u{1F4C1} <b>Pilihan Versi:</b>\n`;
           versions.forEach(v => {
             const vLabel = [v.quality || '', v.codec || ''].filter(Boolean).join(' ') || 'HD';
             caption += `  \u{1F4F9} ${vLabel} (${v.size || '?'})\n`.trim() + '\n';
@@ -4340,18 +4340,109 @@ async function triggerAutoMediaInfo() {
   setTimeout(() => { if (btn) btn.textContent = '⚡ Auto Generate MediaInfo'; }, 2000);
 }
 
+
+function detectHDR(fn) {
+  if (!fn) return '';
+  if (/(DV[\.\s_-]*HDR|HDR[\.\s_-]*DV|Dolby[\.\s_-]*Vision.*HDR)/i.test(fn)) return 'DV HDR';
+  if (/(DV|DoVi|Dolby[\.\s_-]*Vision)/i.test(fn)) return 'DV';
+  if (/HDR10\+/i.test(fn)) return 'HDR10+';
+  if (/HDR10/i.test(fn)) return 'HDR10';
+  if (/\bHDR\b/i.test(fn)) return 'HDR';
+  return '';
+}
+
+function detectAudioTech(fn) {
+  if (!fn) return { codec: 'AAC', channel: '2.0', atmos: false };
+  const atmos = /atmos/i.test(fn);
+  let codec = 'AAC';
+  let channel = '2.0';
+
+  if (/DDP?\s*5\.1/i.test(fn) || /EAC3\s*5\.1/i.test(fn) || /E-AC-3.*5\.1/i.test(fn)) {
+    codec = 'DDP'; channel = '5.1';
+  } else if (/DDP?\s*2\.0/i.test(fn) || /EAC3\s*2\.0/i.test(fn)) {
+    codec = 'DDP'; channel = '2.0';
+  } else if (/DDP|EAC3|E-AC-3/i.test(fn)) {
+    codec = 'DDP'; channel = '5.1';
+  } else if (/AAC\s*5\.1/i.test(fn) || /AAC5\.1/i.test(fn)) {
+    codec = 'AAC'; channel = '5.1';
+  } else if (/AAC\s*2\.0/i.test(fn) || /AAC2\.0/i.test(fn) || /AAC/i.test(fn)) {
+    codec = 'AAC'; channel = '2.0';
+  } else if (/AC3\s*5\.1/i.test(fn) || /DD\s*5\.1/i.test(fn) || /AC-?3/i.test(fn)) {
+    codec = 'AC3'; channel = '5.1';
+  } else if (/FLAC/i.test(fn)) {
+    codec = 'FLAC'; channel = '2.0';
+  } else if (/Opus/i.test(fn)) {
+    codec = 'Opus'; channel = '2.0';
+  } else if (/DTS-HD/i.test(fn)) {
+    codec = 'DTS-HD MA'; channel = '5.1';
+  } else if (/DTS/i.test(fn)) {
+    codec = 'DTS'; channel = '5.1';
+  } else if (/TrueHD/i.test(fn)) {
+    codec = 'TrueHD'; channel = '7.1';
+  }
+
+  return { codec, channel, atmos };
+}
+
+function detectPlatformTag(fn) {
+  if (!fn) return '';
+  if (/\b(NF|NETFLIX)\b/i.test(fn)) return 'Netflix';
+  if (/\b(BILI|BILIBILI)\b/i.test(fn)) return 'BiliBili';
+  if (/\b(CR|CRUNCHYROLL)\b/i.test(fn)) return 'Crunchyroll';
+  if (/\b(DSNP|DISNEY\+?|DISNEYPLUS)\b/i.test(fn)) return 'DisneyPlus';
+  if (/\bVIU\b/i.test(fn)) return 'VIU';
+  if (/\b(HMAX|HBOMAX|MAX)\b/i.test(fn)) return 'HBOMax';
+  if (/\b(AMZN|PRIMEVIDEO)\b/i.test(fn)) return 'PrimeVideo';
+  if (/\b(IQ|IQIYI)\b/i.test(fn)) return 'iQiyi';
+  if (/\b(WETV)\b/i.test(fn)) return 'WeTV';
+  return '';
+}
+
+function detectSubCategoryTag(category, genres, country, title) {
+  const g = (genres || '').toLowerCase();
+  const c = (country || '').toUpperCase();
+  const t = (title || '').toLowerCase();
+
+  if (g.includes('reality') || /variety/i.test(g) || /variety/i.test(t)) return 'VarietyShow';
+  if (g.includes('anim') || /anime/i.test(t) || /anime/i.test(category)) return 'Anime';
+  if (c === 'KR' || c === 'KOREA' || /kdrama|drakor/i.test(t) || /korean/i.test(g)) return 'KDrama';
+  if (c === 'JP' && category === 'series') return 'JDrama';
+  if (c === 'ID' && category === 'movies') return 'IndonesianMovie';
+  return '';
+}
+
+function formatCodecTag(raw) {
+  if (!raw) return 'AV1';
+  const c = raw.toUpperCase();
+  if (c.includes('AV1')) return 'AV1';
+  if (c.includes('HEVC') || c.includes('X265') || c.includes('H265') || c.includes('H.265')) return 'HEVC';
+  if (c.includes('AVC') || c.includes('X264') || c.includes('H264') || c.includes('H.264')) return 'H264';
+  return 'AV1';
+}
+
 async function extractSpecsAndMediaInfo(file) {
   if (!file) return;
-  const parsed = parseFileName(file.name || file.path || '');
+  const fn = file.name || file.path || '';
+  const parsed = parseFileName(fn);
   
   // 1. Initial smart specs from filename
   const q = formatQuality(parsed.quality || '1080p');
+  const hdr = detectHDR(fn);
   const c = formatCodec(parsed.codec || 'AV1');
-  let videoSpec = [q, c].filter(Boolean).join(' ');
-  if (file.name && /(10bit|10-bit|10\s*bit|hi10p)/i.test(file.name)) videoSpec += ' 10-bit';
-  let audioSpec = cleanAudioLanguage(parsed.audio || 'Japanese');
+  let bitDepth = '';
+  if (/(10bit|10-bit|10\s*bit|hi10p)/i.test(fn)) bitDepth = '10-bit';
+
+  // Format: [Resolusi] [HDR?] [Codec] [BitDepth?]
+  let videoSpec = [q, hdr, c, bitDepth].filter(Boolean).join(' ');
+
+  const audioTech = detectAudioTech(fn);
+  let audioCodec = audioTech.codec;
+  let audioChannel = audioTech.channel;
+  let atmos = audioTech.atmos;
+  let audioLang = cleanAudioLanguage(parsed.audio || '');
+
   let durationSpec = '';
-  let subsSpec = 'Indonesian & English';
+  let subsSpec = 'Indonesian, English';
 
   // 2. Check D1 / RAM cache
   try {
@@ -4364,13 +4455,55 @@ async function extractSpecsAndMediaInfo(file) {
         if (j.video && j.video[0]) {
           const v = j.video[0];
           const resLabel = v.height ? v.height + 'p' : (v.width >= 1900 ? '1080p' : v.width >= 1200 ? '720p' : '1080p');
+          let miHdr = hdr;
+          if (!miHdr) {
+            if (v.hdrFormat) {
+              if (/dolby\s*vision/i.test(v.hdrFormat)) miHdr = 'DV HDR';
+              else if (/hdr10\+/i.test(v.hdrFormat)) miHdr = 'HDR10+';
+              else if (/hdr10/i.test(v.hdrFormat)) miHdr = 'HDR10';
+              else if (/hdr/i.test(v.hdrFormat)) miHdr = 'HDR';
+            } else if (v.colour_primaries && /bt\.?2020/i.test(v.colour_primaries)) {
+              miHdr = 'HDR';
+            }
+          }
           const fmt = formatCodec(v.format || parsed.codec || 'AV1');
-          const bdepth = v.bitDepth ? v.bitDepth + '-bit' : '';
-          videoSpec = [resLabel, fmt, bdepth].filter(Boolean).join(' ');
+          const bdepth = v.bitDepth ? v.bitDepth + '-bit' : bitDepth;
+          videoSpec = [resLabel, miHdr, fmt, bdepth].filter(Boolean).join(' ');
         }
         if (j.audio && j.audio[0]) {
           const a = j.audio[0];
-          audioSpec = cleanAudioLanguage(a.language || a.title || 'Japanese');
+          if (a.format) {
+            const f = a.format.toUpperCase();
+            if (f.includes('E-AC-3') || f.includes('EAC3')) audioCodec = 'DDP';
+            else if (f.includes('AAC')) audioCodec = 'AAC';
+            else if (f.includes('AC-3')) audioCodec = 'AC3';
+            else if (f.includes('DTS')) audioCodec = 'DTS';
+            else if (f.includes('FLAC')) audioCodec = 'FLAC';
+            else if (f.includes('TRUEHD')) audioCodec = 'TrueHD';
+          }
+          if (a.channels) {
+            const ch = parseInt(a.channels);
+            if (ch >= 8) audioChannel = '7.1';
+            else if (ch >= 6) audioChannel = '5.1';
+            else if (ch === 2) audioChannel = '2.0';
+            else if (ch === 1) audioChannel = '1.0';
+          }
+          if (a.format_commercial && /atmos/i.test(a.format_commercial)) atmos = true;
+          if (a.format_additionalfeatures && /joc|atmos/i.test(a.format_additionalfeatures)) atmos = true;
+          if (a.title && /atmos/i.test(a.title)) atmos = true;
+
+          if (j.audio.length > 1) {
+            const langs = [];
+            j.audio.forEach(track => {
+              const l = cleanAudioLanguage(track.language || track.title || '');
+              if (l && !langs.includes(l)) langs.push(l);
+            });
+            if (langs.length > 1) audioLang = langs.slice(0, 2).join(', ');
+            else if (langs.length === 1) audioLang = langs[0];
+          } else {
+            const singleLang = cleanAudioLanguage(a.language || a.title || '');
+            if (singleLang) audioLang = singleLang;
+          }
         }
         if (j.text && j.text.length > 0) {
           subsSpec = cleanSubtitleLanguages(j.text.map(t => t.language || t.title || ''));
@@ -4383,6 +4516,10 @@ async function extractSpecsAndMediaInfo(file) {
   } catch(e) {
     console.warn('MediaInfo auto-extract error:', e);
   }
+
+  // Combine Language + Codec/Channel + Atmos:
+  const techLabel = (audioCodec + ' ' + audioChannel + (atmos ? ' Atmos' : '')).trim();
+  let audioSpec = audioLang ? (audioLang + ' ' + techLabel).trim() : techLabel;
 
   // Populate UI inputs
   if (videoSpec) document.getElementById('tgSpecVideo').value = videoSpec.trim();
@@ -4401,33 +4538,36 @@ function generateAutoHashtags() {
   const title = (document.getElementById('tgTitle')?.value || '').trim();
   const category = document.getElementById('tgCategory')?.value || 'movies';
   const first = tgSelectedFiles[0];
-  const parsed = first ? parseFileName(first.name || first.path) : {};
+  const fn = first ? (first.name || first.path || '') : '';
+  const parsed = first ? parseFileName(fn) : {};
   const specVideo = document.getElementById('tgSpecVideo')?.value || '';
+  const genres = document.getElementById('tgGenres') ? document.getElementById('tgGenres').value.trim() : '';
+  const country = document.getElementById('tgCountry') ? document.getElementById('tgCountry').value.trim() : '';
   
   const tags = [];
+  
+  // 1. Title tag
   if (title) {
     const cleanTag = title.replace(/[^a-zA-Z0-9]/g, '');
     if (cleanTag) tags.push('#' + cleanTag);
   }
-  const catLabel = { movies: 'Movies', series: 'Series', anime: 'Anime' }[category] || category;
-  if (catLabel) tags.push('#' + catLabel);
-  
-  const qTag = formatQuality(specVideo ? specVideo.split(' ')[0] : parsed.quality);
-  if (qTag) tags.push('#' + qTag);
-  
-  const cTag = formatCodec(parsed.codec || (specVideo.includes('AV1') ? 'AV1' : ''));
-  if (cTag) tags.push('#' + cTag.replace(/[^a-zA-Z0-9]/g, ''));
-  
-  if (parsed.source) tags.push('#' + parsed.source.replace(/[^a-zA-Z0-9]/g, ''));
-  
-  const genres = document.getElementById('tgGenres') ? document.getElementById('tgGenres').value.trim() : '';
-  if (genres) {
-    genres.split(',').forEach(g => {
-      const t = g.trim().replace(/[^a-zA-Z0-9]/g, '');
-      if (t && !tags.includes('#' + t)) tags.push('#' + t);
-    });
-  }
-  
+
+  // 2. Platform tag from filename
+  const plat = detectPlatformTag(fn);
+  if (plat) tags.push('#' + plat);
+
+  // 3. Category: #Movies atau #Series
+  const catTag = category === 'series' ? 'Series' : 'Movies';
+  tags.push('#' + catTag);
+
+  // 4. Sub-category: #KDrama / #Anime / #VarietyShow / #JDrama / #IndonesianMovie
+  const subCat = detectSubCategoryTag(category, genres, country, title);
+  if (subCat) tags.push('#' + subCat);
+
+  // 5. Video Codec: #AV1 / #H264 / #HEVC
+  const cTag = formatCodecTag(parsed.codec || specVideo);
+  if (cTag) tags.push('#' + cTag);
+
   const filteredTags = tags.filter((t, i) => tags.indexOf(t) === i && t !== '#');
   document.getElementById('tgHashtags').value = filteredTags.join(' ');
 }
@@ -4578,7 +4718,7 @@ async function applyTMDBResult(id, title, year, poster, rating, overview, genres
   }
   if (rating) document.getElementById('tgRating').value = rating;
   if (overview) {
-    document.getElementById('tgSynopsis').value = overview.length > 200 ? overview.slice(0, 197) + '...' : overview;
+    document.getElementById('tgSynopsis').value = overview.length > 350 ? overview.slice(0, 347) + '...' : overview;
   }
   if (genres && document.getElementById('tgGenres')) {
     document.getElementById('tgGenres').value = genres;
@@ -4620,13 +4760,13 @@ function generateTGCaption() {
     cap += '<code>' + fileName + '</code>' + nl;
   }
 
-  // 2. Short Synopsis if provided
+  // 2. Ringkasan Sinopsis
   if (synopsis) {
-    const synTrunc = synopsis.length > 200 ? synopsis.slice(0, 197) + '...' : synopsis;
+    const synTrunc = synopsis.length > 350 ? synopsis.slice(0, 347) + '...' : synopsis;
     cap += nl + '📝 ' + synTrunc + nl;
   }
 
-  // 3. Specs Block ala Screenshot 4 (Quote box)
+  // 3. Block Specs (Kotak Quote ala Screenshot 4)
   let sz = '';
   if (first && first.size) {
     sz = first.size > 1073741824 ? (first.size / 1073741824).toFixed(2) + ' GB' : first.size > 1048576 ? (first.size / 1048576).toFixed(1) + ' MB' : (first.size / 1024).toFixed(0) + ' KB';
@@ -4645,13 +4785,13 @@ function generateTGCaption() {
     cap += '🔊 Audio: ' + audioSpec + nl;
   }
   if (subsSpec) {
-    cap += '💬 Subtitles: ' + subsSpec + nl;
+    cap += '💬 Subtitle: ' + subsSpec + nl;
   }
   cap = cap.trim() + '</blockquote>' + nl;
 
-  // 4. Multiple versions if more than 1 file selected
+  // 4. Pilihan Versi jika lebih dari 1 file terpilih (Bahasa Indonesia)
   if (tgSelectedFiles && tgSelectedFiles.length > 1) {
-    cap += nl + '📁 <b>Available Versions:</b>' + nl;
+    cap += nl + '📁 <b>Pilihan Versi:</b>' + nl;
     tgSelectedFiles.forEach(f => {
       const parsed = parseFileName(f.name || f.path);
       const q = formatQuality(parsed.quality);
@@ -4662,7 +4802,7 @@ function generateTGCaption() {
     });
   }
 
-  // 5. Clean Hashtags
+  // 5. Hashtags Rapi & Akurat
   if (hashtagsRaw) {
     const validTags = hashtagsRaw.split(' ').map(t => t.trim()).filter(t => t && t !== '#').map(t => t.startsWith('#') ? t : '#' + t);
     if (validTags.length > 0) {
