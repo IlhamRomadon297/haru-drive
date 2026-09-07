@@ -641,6 +641,57 @@ export default {
       }
     }
 
+    // API: Create Telegra.ph MediaInfo Page
+    if (url.pathname === '/api/admin/create-telegraph' && request.method === 'POST') {
+      try {
+        const body = await request.json();
+        const pin = body.admin_pin || '';
+        if (!verifyPin(pin)) {
+          return new Response(JSON.stringify({ error: 'PIN Admin Salah!' }), { status: 403 });
+        }
+        const title = (body.title || 'MediaInfo').trim();
+        const rawContent = (body.content || '').trim() || 'No MediaInfo available';
+
+        // 1. Create temporary account
+        const accRes = await fetch('https://api.telegra.ph/createAccount', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ short_name: 'HaruDrive', author_name: 'HaruDrive' })
+        });
+        const accData = await accRes.json();
+        const token = accData?.result?.access_token;
+        if (!token) {
+          return new Response(JSON.stringify({ error: 'Gagal membuat akun Telegraph' }), { status: 500 });
+        }
+
+        // 2. Create Page with MediaInfo in <pre>
+        const pageRes = await fetch('https://api.telegra.ph/createPage', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            access_token: token,
+            title: title.slice(0, 60),
+            author_name: 'HaruDrive',
+            author_url: 'https://harudrive.eu.cc',
+            content: [{ tag: 'pre', children: [rawContent] }],
+            return_content: false
+          })
+        });
+        const pageData = await pageRes.json();
+        if (!pageData.ok) {
+          return new Response(JSON.stringify({ error: pageData.description || 'Gagal membuat page di Telegraph' }), { status: 500 });
+        }
+
+        return new Response(JSON.stringify({
+          success: true,
+          url: pageData.result.url,
+          path: pageData.result.path
+        }), { headers: { 'Content-Type': 'application/json' } });
+      } catch (err) {
+        return new Response(JSON.stringify({ error: err.message }), { status: 500 });
+      }
+    }
+
     // API: Telegram Post
     if (url.pathname === '/api/admin/telegram-post' && request.method === 'POST') {
       try {
@@ -678,6 +729,7 @@ export default {
         if (specs && specs.video && specs.video.trim()) details.push(`\u{1F3AC} <b>Video:</b> ${specs.video.trim()}`);
         if (specs && specs.audio && specs.audio.trim()) details.push(`\u{1F50A} <b>Audio:</b> ${specs.audio.trim()}`);
         if (specs && specs.subs && specs.subs.trim()) details.push(`\u{1F4AC} <b>Subtitle:</b> ${specs.subs.trim()}`);
+        if (body.mediainfo_url && body.mediainfo_url.trim()) details.push(`\u2139\uFE0F <b>MediaInfo:</b> <a href="${body.mediainfo_url.trim()}">Lihat Disini</a>`);
 
         if (details.length > 0) {
           caption += `\n` + details.join('\n') + `\n`;
@@ -1875,6 +1927,39 @@ function htmlPage(content, env, pageMode = 'public') {
       max-width: 360px;
     }
     .search-clear-btn:hover { background: rgba(236,72,153,0.15); border-color: rgba(236,72,153,0.4); color: #ec4899; }
+
+    #tgCaptionPreview b, #tgVisualCaptionText b {
+      color: #ffffff !important;
+      font-weight: 700;
+    }
+    #tgCaptionPreview, #tgVisualCaptionText {
+      color: #cbd5e1;
+      font-size: 0.85rem;
+      line-height: 1.6;
+    }
+    .tg-tag {
+      color: #38bdf8 !important;
+      font-weight: 600;
+    }
+    .tg-modal-scrollable {
+      overflow-y: auto !important;
+      -webkit-overflow-scrolling: touch;
+      align-items: flex-start !important;
+      padding: 24px 14px !important;
+    }
+    .tg-modal-scrollable .modal-card {
+      margin: auto;
+      max-height: calc(100vh - 48px);
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    .tg-modal-scrollable .modal-body {
+      overflow-y: auto !important;
+      flex: 1 1 auto;
+      min-height: 0;
+      -webkit-overflow-scrolling: touch;
+    }
     
         .btn-action-tool {
       display: inline-flex;
@@ -4551,15 +4636,91 @@ function formatCaptionForPreview(text) {
     .split('&').join('&amp;')
     .split('<').join('&lt;')
     .split('>').join('&gt;')
-    .split('&lt;b&gt;').join('<b style="color: #ffffff; font-weight: 700;">')
+    .split('&lt;b&gt;').join('<b>')
     .split('&lt;/b&gt;').join('</b>')
     .split('&lt;i&gt;').join('<i>')
     .split('&lt;/i&gt;').join('</i>')
-    .split(String.fromCharCode(10)).join('<br>');
+    .split('&lt;code&gt;').join('<code>')
+    .split('&lt;/code&gt;').join('</code>');
 
-  const tagRegex = new RegExp('(#[a-zA-Z0-9_]+)', 'g');
-  formatted = formatted.replace(tagRegex, '<span style="color: #58b9ff; font-weight: 500;">$1</span>');
+  // Parse allowed <a href="..."> links
+  const linkRegex = new RegExp('&lt;a href="([^"]+)"&gt;([\\s\\S]*?)&lt;\\/a&gt;', 'gi');
+  formatted = formatted.replace(linkRegex, '<a href="$1" target="_blank" style="color: #38bdf8; text-decoration: underline; font-weight: 600;">$2</a>');
+
+  // Convert newlines
+  formatted = formatted.split(String.fromCharCode(10)).join('<br>');
+
+  // Safely color hashtags preceded by whitespace or start
+  const tagRegex = new RegExp('(^|\\s)(#[a-zA-Z0-9_]+)', 'g');
+  formatted = formatted.replace(tagRegex, '$1<span class="tg-tag">$2</span>');
   return formatted;
+}
+
+async function createTelegraphMediaInfo() {
+  const btn = event?.currentTarget;
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Mengupload...'; }
+  const first = tgSelectedFiles && tgSelectedFiles[0];
+  const cleanTitle = (document.getElementById('tgTitle')?.value || (first ? first.name : 'MediaInfo')).trim();
+  const pin = document.getElementById('tgAdminPin')?.value || '290722';
+
+  let rawContent = '';
+  if (first) {
+    try {
+      const res = await fetch('/api/mediainfo?path=' + encodeURIComponent(first.path || first.id));
+      if (res.ok) {
+        const d = await res.json();
+        rawContent = d.mediainfo_raw || d.raw || '';
+        if (!rawContent && d.mediainfo_json) {
+          rawContent = JSON.stringify(d.mediainfo_json, null, 2);
+        }
+      }
+    } catch(e) {}
+  }
+
+  if (!rawContent) {
+    const video = document.getElementById('tgSpecVideo')?.value || '1080p';
+    const audio = document.getElementById('tgSpecAudio')?.value || 'Japanese';
+    const subs = document.getElementById('tgSpecSubs')?.value || 'Indonesia, English';
+    rawContent = [
+      'General',
+      'Filename: ' + (first ? first.name : cleanTitle),
+      'Duration: ' + dur,
+      '',
+      'Video',
+      'Specs: ' + video,
+      '',
+      'Audio',
+      'Language: ' + audio,
+      '',
+      'Text (Subtitles)',
+      'Languages: ' + subs
+    ].join(String.fromCharCode(10));
+  }
+
+  try {
+    const res = await fetch('/api/admin/create-telegraph', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        admin_pin: pin,
+        title: cleanTitle + ' - MediaInfo',
+        content: rawContent
+      })
+    });
+    const data = await res.json();
+    if (res.ok && data.success && data.url) {
+      document.getElementById('tgMediaInfoUrl').value = data.url;
+      previewTelegramCaption();
+      if (btn) btn.textContent = '✓ Berhasil dibuat!';
+      setTimeout(() => { if (btn) { btn.disabled = false; btn.textContent = '⚡ Buat ke Telegra.ph'; } }, 2000);
+    } else {
+      alert('Gagal membuat Telegra.ph: ' + (data.error || 'Unknown error'));
+      if (btn) { btn.disabled = false; btn.textContent = '⚡ Buat ke Telegra.ph'; }
+    }
+  } catch(err) {
+    alert('Error: ' + err.message);
+    if (btn) { btn.disabled = false; btn.textContent = '⚡ Buat ke Telegra.ph'; }
+  }
 }
 
 function previewTelegramCaption() {
@@ -4681,6 +4842,7 @@ async function sendToTelegram() {
     release_date: document.getElementById('tgReleaseDate') ? document.getElementById('tgReleaseDate').value : '',
     country: document.getElementById('tgCountry') ? document.getElementById('tgCountry').value : '',
     versions: versions,
+    mediainfo_url: (document.getElementById('tgMediaInfoUrl')?.value || '').trim(),
     specs: {
       video: document.getElementById('tgSpecVideo').value,
       duration: document.getElementById('tgSpecDuration').value,
@@ -6077,6 +6239,25 @@ function adminConsoleUI() {
               <input type="text" id="tgSpecSubs" class="form-input-pro" placeholder="Indonesia, English, etc." style="margin-top: 4px; font-size: 0.78rem;">
             </div>
           </div>
+
+          <!-- TELEGRA.PH MEDIAINFO LINK -->
+          <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(56, 189, 248, 0.15);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+              <label style="font-size: 0.74rem; font-weight: 600; color: #38bdf8; display: flex; align-items: center; gap: 6px;">
+                <span>🌐</span> MediaInfo Link (Telegra.ph)
+              </label>
+              <button type="button" class="nav-btn" style="background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.4); color: #38bdf8; font-size: 0.7rem; padding: 2px 8px; font-weight: 600;" onclick="createTelegraphMediaInfo()">
+                ⚡ Buat ke Telegra.ph
+              </button>
+            </div>
+            <div style="display: flex; gap: 6px;">
+              <input type="text" id="tgMediaInfoUrl" class="form-input-pro" placeholder="https://telegra.ph/... (Bisa auto generate atau isi manual)" style="flex: 1; font-size: 0.78rem;">
+              <button type="button" class="nav-btn" style="font-size: 0.74rem; padding: 0 10px;" onclick="const u = document.getElementById('tgMediaInfoUrl').value; if(u) window.open(u, '_blank'); else alert('Link MediaInfo masih kosong.');" title="Buka Link">
+                🔗
+              </button>
+            </div>
+          </div>
+
           <div style="font-size: 0.68rem; color: var(--text-dim); margin-top: 6px;">
             💡 Otomatis mendeteksi nama file & metadata D1 MediaInfo. Audio & Subtitle hanya menampilkan nama bahasa (tanpa teknis codec/channel berantakan).
           </div>
@@ -6191,9 +6372,9 @@ function adminConsoleUI() {
   </div>
 
   <!-- TELEGRAM VISUAL PREVIEW MODAL -->
-  <div id="tgVisualPreviewModal" class="modal-backdrop" style="display: none; z-index: 10005;">
-    <div class="modal-card glass" style="max-width: 680px; width: 100%; border: 1px solid rgba(56, 189, 248, 0.4); max-height: 90vh; display: flex; flex-direction: column;">
-      <div class="modal-header" style="border-bottom: 1px solid var(--border); padding: 12px 18px; display: flex; justify-content: space-between; align-items: center;">
+  <div id="tgVisualPreviewModal" class="modal-backdrop tg-modal-scrollable" style="display: none; z-index: 10005;">
+    <div class="modal-card glass" style="max-width: 640px; width: 100%; border: 1px solid rgba(56, 189, 248, 0.4); box-shadow: 0 25px 60px rgba(0, 0, 0, 0.7);">
+      <div class="modal-header" style="flex-shrink: 0; border-bottom: 1px solid var(--border); padding: 12px 18px; display: flex; justify-content: space-between; align-items: center;">
         <div style="display: flex; align-items: center; gap: 8px;">
           <span style="font-size: 1.1rem;">👁️</span>
           <span class="modal-title" style="font-size: 0.95rem; font-weight: 700; color: #38bdf8;">Preview Post Telegram (HaruDrive)</span>
@@ -6203,11 +6384,11 @@ function adminConsoleUI() {
         </button>
       </div>
 
-      <div class="modal-body" style="padding: 16px 20px; overflow-y: auto; flex: 1;">
+      <div class="modal-body" style="padding: 14px 18px;">
         <!-- Telegram Dark Bubble Card Mockup -->
         <div style="background: #182533; border-radius: 14px; overflow: hidden; border: 1px solid rgba(255,255,255,0.08); box-shadow: 0 10px 30px rgba(0,0,0,0.5); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
-          <!-- Bubble Banner Image -->
-          <div style="position: relative; width: 100%; background: #0f172a; aspect-ratio: 1200 / 630; overflow: hidden;">
+          <!-- Bubble Banner Image (Limited max height for easy scrolling) -->
+          <div style="position: relative; width: 100%; background: #0f172a; max-height: 250px; aspect-ratio: 1200 / 630; overflow: hidden;">
             <img id="tgVisualImg" src="" alt="Banner HaruDrive" style="width: 100%; height: 100%; object-fit: cover; display: block;">
             <div id="tgVisualLoading" style="position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(15,23,42,0.85); color: #38bdf8; font-size: 0.85rem; font-weight: 600;">
               Memuat Banner HaruDrive...
@@ -6224,7 +6405,7 @@ function adminConsoleUI() {
         </div>
       </div>
 
-      <div class="modal-footer" style="padding: 12px 18px; border-top: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center;">
+      <div class="modal-footer" style="flex-shrink: 0; padding: 12px 18px; border-top: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center;">
         <div id="tgVisualCharCounter" style="font-size: 0.74rem; color: var(--text-muted);">0 / 1024 karakter</div>
         <div style="display: flex; gap: 8px;">
           <button class="nav-btn" onclick="closeTelegramVisualPreview()" style="font-size: 0.8rem; padding: 6px 14px;">Tutup</button>
