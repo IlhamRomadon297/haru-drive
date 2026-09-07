@@ -14,6 +14,7 @@ export default {
     const GDRIVE_ROOT_ID = env.GDRIVE_ROOT_ID || '1Sq1JHBCQ9REXWyhpvdjfwwJP7HJCB7Z9';
     const TELEGRAM_BOT_TOKEN = env.TELEGRAM_BOT_TOKEN || '';
     const TELEGRAM_CHAT_ID = env.TELEGRAM_CHAT_ID || '';
+    const TELEGRAM_TOPIC_ID = env.TELEGRAM_TOPIC_ID || '';
     const TMDB_API_KEY = env.TMDB_API_KEY || '';
     const VERCEL_POSTER_URL = env.VERCEL_POSTER_URL || 'https://haru-drive.vercel.app';
 
@@ -692,6 +693,7 @@ export default {
         }
 
         const chatId = channel_id || TELEGRAM_CHAT_ID;
+        const finalTopicId = topic_id || TELEGRAM_TOPIC_ID;
         const posterFinal = poster_url || 'https://via.placeholder.com/500x750/1a1a2e/ec4899?text=No+Poster';
 
         const formData = new FormData();
@@ -699,8 +701,8 @@ export default {
         formData.append('photo', posterFinal);
         formData.append('caption', caption);
         formData.append('parse_mode', 'HTML');
-        if (topic_id) {
-          formData.append('message_thread_id', topic_id);
+        if (finalTopicId) {
+          formData.append('message_thread_id', finalTopicId);
         }
 
         if (versions && versions.length > 0 && versions[0].link) {
@@ -5462,12 +5464,12 @@ function adminConsoleUI() {
         <!-- Channel + Topic -->
         <div style="display: flex; gap: 10px; margin-bottom: 14px;">
           <div style="flex: 1;">
-            <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Channel ID</label>
-            <input type="text" id="tgChannelId" class="form-input-pro" placeholder="-100xxxxx" style="margin-top: 4px;">
+            <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Channel ID (opsional)</label>
+            <input type="text" id="tgChannelId" class="form-input-pro" placeholder="Kosongkan jika pakai default dari secret" style="margin-top: 4px;">
           </div>
           <div style="flex: 1;">
             <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Topic ID (opsional)</label>
-            <input type="text" id="tgTopicId" class="form-input-pro" placeholder="123" style="margin-top: 4px;">
+            <input type="text" id="tgTopicId" class="form-input-pro" placeholder="Kosongkan jika pakai default dari secret" style="margin-top: 4px;">
           </div>
         </div>
 

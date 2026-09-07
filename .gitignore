@@ -146,3 +146,4 @@ bower_components/
 .env*
 *.env
 .env.deploy
+.vercel
