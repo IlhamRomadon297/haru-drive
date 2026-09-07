@@ -714,8 +714,9 @@ export default {
 
         // HaruDrive clean caption ala Screenshot 4
         let caption = `\u{1F3AC} <b>${title}${yearText}</b>\n`;
-        if (mainFile) {
-          caption += `<code>${mainFile}</code>\n`;
+        // Quote untuk filename HANYA jika rilisan tunggal (1 file)
+        if (versions && versions.length === 1 && mainFile) {
+          caption += `<blockquote>${mainFile}</blockquote>\n`;
         }
 
         if (synopsis) {
@@ -728,7 +729,7 @@ export default {
         const durSpec = (specs && specs.duration && specs.duration.trim()) || '';
         const subsSpec = (specs && specs.subs && specs.subs.trim()) || '';
         const audioSpec = (specs && specs.audio && specs.audio.trim()) || '';
-        const sz = (versions && versions[0] && versions[0].size) || '';
+        const sz = (versions && versions.length === 1 && versions[0] && versions[0].size) || '';
 
         const specHeader = [videoSpec, durSpec, sz].filter(Boolean).join(' \u2022 ');
         
@@ -748,7 +749,7 @@ export default {
         if (versions && versions.length > 1) {
           caption += `\n\u{1F4C1} <b>Pilihan Versi:</b>\n`;
           versions.forEach(v => {
-            const vLabel = [v.quality || '', v.codec || ''].filter(Boolean).join(' ') || 'HD';
+            const vLabel = v.label || [v.quality || '', v.codec || ''].filter(Boolean).join(' ') || 'HD';
             caption += `  \u{1F4F9} ${vLabel} (${v.size || '?'})\n`.trim() + '\n';
           });
         }
@@ -817,7 +818,7 @@ export default {
           if (versions && versions.length > 1) {
             versions.forEach(v => {
               if (v.link) {
-                const label = [v.quality || '', v.codec || ''].filter(Boolean).join(' ') || 'Download';
+                const label = v.label || [v.quality || '', v.codec || ''].filter(Boolean).join(' ') || 'Download';
                 keyboard.push([{
                   text: `\u{1F4E5} Download ${label}`,
                   url: v.link
@@ -4206,11 +4207,11 @@ function cleanAudioLanguage(rawAudio) {
     }
   });
   if (found.length > 1) {
-    return 'Multi Audio (' + found.join(', ') + ')';
+    return found.join(', ');
   } else if (found.length === 1) {
     return found[0];
   }
-  return 'Japanese';
+  return String(rawAudio).replace(/\s*(AAC.*|DDP.*|DTS.*|FLAC.*|AC3.*|Atmos.*|5\.1|2\.0|7\.1)/gi, '').trim() || 'Japanese';
 }
 
 function formatCodec(raw) {
@@ -4498,8 +4499,7 @@ async function extractSpecsAndMediaInfo(file) {
               const l = cleanAudioLanguage(track.language || track.title || '');
               if (l && !langs.includes(l)) langs.push(l);
             });
-            if (langs.length > 1) audioLang = langs.slice(0, 2).join(', ');
-            else if (langs.length === 1) audioLang = langs[0];
+            if (langs.length > 0) audioLang = langs.join(', ');
           } else {
             const singleLang = cleanAudioLanguage(a.language || a.title || '');
             if (singleLang) audioLang = singleLang;
@@ -4517,13 +4517,18 @@ async function extractSpecsAndMediaInfo(file) {
     console.warn('MediaInfo auto-extract error:', e);
   }
 
-  // Combine Language + Codec/Channel + Atmos:
-  const techLabel = (audioCodec + ' ' + audioChannel + (atmos ? ' Atmos' : '')).trim();
-  let audioSpec = audioLang ? (audioLang + ' ' + techLabel).trim() : techLabel;
+  // Gabungkan spec teknis di baris atas: Format Video & Codec Audio
+  const audioTechLabel = (audioCodec + ' ' + audioChannel + (atmos ? ' Atmos' : '')).trim();
+  let topTechSpec = videoSpec;
+  if (tgSelectedFiles && tgSelectedFiles.length > 1) {
+    topTechSpec = q + ' Multi-Codec';
+  } else if (audioTechLabel) {
+    topTechSpec = videoSpec + ' • ' + audioTechLabel;
+  }
 
   // Populate UI inputs
-  if (videoSpec) document.getElementById('tgSpecVideo').value = videoSpec.trim();
-  if (audioSpec) document.getElementById('tgSpecAudio').value = audioSpec.trim();
+  if (topTechSpec) document.getElementById('tgSpecVideo').value = topTechSpec.trim();
+  if (audioLang) document.getElementById('tgSpecAudio').value = audioLang.trim();
   if (subsSpec) document.getElementById('tgSpecSubs').value = subsSpec.trim();
   if (durationSpec && !document.getElementById('tgSpecDuration').value) {
     document.getElementById('tgSpecDuration').value = durationSpec.trim();
@@ -4564,9 +4569,20 @@ function generateAutoHashtags() {
   const subCat = detectSubCategoryTag(category, genres, country, title);
   if (subCat) tags.push('#' + subCat);
 
-  // 5. Video Codec: #AV1 / #H264 / #HEVC
-  const cTag = formatCodecTag(parsed.codec || specVideo);
-  if (cTag) tags.push('#' + cTag);
+  // 5. Video Codecs (detect all codecs from selected files for multi-codec!)
+  const codecs = [];
+  if (tgSelectedFiles && tgSelectedFiles.length > 0) {
+    tgSelectedFiles.forEach(f => {
+      const p = parseFileName(f.name || f.path || '');
+      const ct = formatCodecTag(p.codec || f.name || '');
+      if (ct && !codecs.includes(ct)) codecs.push(ct);
+    });
+  }
+  if (codecs.length === 0) {
+    const ct = formatCodecTag(parsed.codec || specVideo);
+    if (ct) codecs.push(ct);
+  }
+  codecs.forEach(ct => tags.push('#' + ct));
 
   const filteredTags = tags.filter((t, i) => tags.indexOf(t) === i && t !== '#');
   document.getElementById('tgHashtags').value = filteredTags.join(' ');
@@ -4748,16 +4764,19 @@ function generateTGCaption() {
   const fileName = (first ? (first.name || first.path) : '').trim();
   const videoSpec = (document.getElementById('tgSpecVideo')?.value || '1080p AV1 10-bit').trim();
   const duration = (document.getElementById('tgSpecDuration')?.value || '').trim();
-  const subsSpec = (document.getElementById('tgSpecSubs')?.value || 'Indonesian & English').trim();
+  const subsSpec = (document.getElementById('tgSpecSubs')?.value || 'Indonesian, English').trim();
   const audioSpec = (document.getElementById('tgSpecAudio')?.value || '').trim();
   const hashtagsRaw = (document.getElementById('tgHashtags')?.value || '').trim();
   const synopsis = (document.getElementById('tgSynopsis')?.value || '').trim();
   const nl = String.fromCharCode(10);
 
-  // 1. Header with Title and Monospace Filename
+  // 1. Header with Title
   let cap = '🎬 <b>' + title + yearText + '</b>' + nl;
-  if (fileName) {
-    cap += '<code>' + fileName + '</code>' + nl;
+
+  // Quote untuk Filename HANYA jika rilisan tunggal (1 file).
+  // Jika multi-codec atau series/banyak file, omit filename di atas agar tidak rancu!
+  if (tgSelectedFiles && tgSelectedFiles.length === 1 && fileName) {
+    cap += '<blockquote>' + fileName + '</blockquote>' + nl;
   }
 
   // 2. Ringkasan Sinopsis
@@ -4768,7 +4787,7 @@ function generateTGCaption() {
 
   // 3. Block Specs (Kotak Quote ala Screenshot 4)
   let sz = '';
-  if (first && first.size) {
+  if (first && first.size && (!tgSelectedFiles || tgSelectedFiles.length === 1)) {
     sz = first.size > 1073741824 ? (first.size / 1073741824).toFixed(2) + ' GB' : first.size > 1048576 ? (first.size / 1048576).toFixed(1) + ' MB' : (first.size / 1024).toFixed(0) + ' KB';
   }
   
@@ -4793,12 +4812,21 @@ function generateTGCaption() {
   if (tgSelectedFiles && tgSelectedFiles.length > 1) {
     cap += nl + '📁 <b>Pilihan Versi:</b>' + nl;
     tgSelectedFiles.forEach(f => {
-      const parsed = parseFileName(f.name || f.path);
+      const fn = f.name || f.path || '';
+      const parsed = parseFileName(fn);
       const q = formatQuality(parsed.quality);
+      const hdr = detectHDR(fn);
       const c = formatCodec(parsed.codec);
-      const label = [q, c].filter(Boolean).join(' ') || 'HD';
+      const aTech = detectAudioTech(fn);
+      const aLabel = (aTech.codec + ' ' + aTech.channel + (aTech.atmos ? ' Atmos' : '')).trim();
+      let bit = '';
+      if (/(10bit|10-bit|10\s*bit|hi10p)/i.test(fn)) bit = '10-bit';
+
+      const vLabel = [q, hdr, c, bit].filter(Boolean).join(' ');
+      const fullLabel = [vLabel, aLabel].filter(Boolean).join(' • ');
+
       const fsz = f.size > 1073741824 ? (f.size / 1073741824).toFixed(2) + ' GB' : f.size > 1048576 ? (f.size / 1048576).toFixed(1) + ' MB' : (f.size / 1024).toFixed(0) + ' KB';
-      cap += '  🎥 ' + label + ' (' + fsz + ')' + nl;
+      cap += '  🎥 ' + fullLabel + ' (' + fsz + ')' + nl;
     });
   }
 
@@ -5017,17 +5045,27 @@ async function sendToTelegram() {
   const specQ = specVideo ? specVideo.split(' ')[0] : '';
   
   const versions = tgSelectedFiles.map(f => {
-    const parsed = parseFileName(f.name || f.path);
-    const q = formatQuality(specQ || parsed.quality || '1080p');
-    const c = formatCodec(parsed.codec || (specVideo.includes('AV1') ? 'AV1' : ''));
+    const fn = f.name || f.path || '';
+    const parsed = parseFileName(fn);
+    const q = formatQuality(parsed.quality || '1080p');
+    const hdr = detectHDR(fn);
+    const c = formatCodec(parsed.codec || 'AV1');
+    const aTech = detectAudioTech(fn);
+    const aLabel = (aTech.codec + ' ' + aTech.channel + (aTech.atmos ? ' Atmos' : '')).trim();
+    let bit = '';
+    if (/(10bit|10-bit|10\s*bit|hi10p)/i.test(fn)) bit = '10-bit';
+    const vLabel = [q, hdr, c, bit].filter(Boolean).join(' ');
+    const fullLabel = [vLabel, aLabel].filter(Boolean).join(' • ');
+
     const sz = f.size > 1073741824 ? (f.size / 1073741824).toFixed(2) + ' GB' : f.size > 1048576 ? (f.size / 1048576).toFixed(1) + ' MB' : (f.size / 1024).toFixed(0) + ' KB';
     const dlLink = f.id ? (origin + '/file/' + f.id) : (f.path ? (origin + '/d/' + encodeURIComponent(f.path)) : '');
     return {
       quality: q,
       codec: c,
+      label: fullLabel,
       size: sz,
       link: dlLink,
-      name: f.name || f.path
+      name: fn
     };
   });
 
@@ -6431,8 +6469,8 @@ function adminConsoleUI() {
           
           <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px;">
             <div>
-              <label style="font-size: 0.74rem; font-weight: 600; color: var(--text-muted);">Video Specs (Resolusi, Codec, FPS)</label>
-              <input type="text" id="tgSpecVideo" class="form-input-pro" placeholder="1080p AV1 10 bits • 23.976 fps" style="margin-top: 4px; font-size: 0.78rem;">
+              <label style="font-size: 0.74rem; font-weight: 600; color: var(--text-muted);">Format Video & Audio Specs</label>
+              <input type="text" id="tgSpecVideo" class="form-input-pro" placeholder="1080p AV1 10-bit • AAC 2.0" style="margin-top: 4px; font-size: 0.78rem;">
             </div>
             <div>
               <label style="font-size: 0.74rem; font-weight: 600; color: var(--text-muted);">Durasi</label>
