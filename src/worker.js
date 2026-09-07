@@ -4257,7 +4257,18 @@ function cleanAudioLanguages(rawList) {
   if (cleanList.length === 0) return 'Japanese';
 
   const priority = ['Indonesian', 'English', 'Japanese', 'Korean', 'Malay'];
-  const matchedPrio = cleanList.filter(l => priority.includes(l));
+  const hasIndonesian = cleanList.includes('Indonesian');
+  const otherClean = cleanList.filter(l => l !== 'Indonesian');
+
+  let matchedPrio = [];
+  if (hasIndonesian) {
+    matchedPrio.push('Indonesian');
+  }
+  otherClean.forEach(l => {
+    if (priority.includes(l) && !matchedPrio.includes(l)) {
+      matchedPrio.push(l);
+    }
+  });
   const otherLangs = cleanList.filter(l => !priority.includes(l));
 
   if (matchedPrio.length > 0) {
