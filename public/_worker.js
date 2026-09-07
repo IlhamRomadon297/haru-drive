@@ -3943,8 +3943,9 @@ async function searchTMDB() {
       return;
     }
     let h = '<div style="display: flex; flex-direction: column; gap: 6px;">';
-    data.results.forEach(r => {
-      h += '<div style="display: flex; align-items: center; gap: 10px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer;" onclick="applyTMDBResult(' + r.id + ', \'' + escapeHtml(r.title).replace(/'/g, "\\'") + '\', \'' + (r.year || '') + '\', \'' + (r.poster || '') + '\', \'' + (r.rating || '') + '\', \'' + escapeHtml(r.overview || '').replace(/'/g, "\\'").replace(/\n/g, ' ') + '\')">';
+    window._tmdbResults = data.results;
+    data.results.forEach((r, idx) => {
+      h += '<div style="display: flex; align-items: center; gap: 10px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer;" onclick="applyTMDBResultByIndex(' + idx + ')">';
       if (r.poster) h += '<img src="' + r.poster + '" style="width: 32px; height: 48px; border-radius: 4px; object-fit: cover;">';
       h += '<div style="flex: 1; min-width: 0;"><div style="font-weight: 600; font-size: 0.8rem; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">' + escapeHtml(r.title) + ' (' + (r.year || '?') + ')</div><div style="font-size: 0.7rem; color: var(--text-dim);">ID: ' + r.id + (r.rating ? ' \u2022 \u2605 ' + r.rating : '') + '</div></div>';
       h += '<button class="nav-btn" style="font-size: 0.7rem; padding: 3px 8px;">Pilih</button>';
@@ -3955,6 +3956,11 @@ async function searchTMDB() {
   } catch (e) {
     container.innerHTML = '<span style="color: #f87171;">Error: ' + e.message + '</span>';
   }
+}
+function applyTMDBResultByIndex(idx) {
+  const r = (window._tmdbResults || [])[idx];
+  if (!r) return;
+  applyTMDBResult(r.id, r.title, r.year, r.poster, r.rating, r.overview);
 }
 function applyTMDBResult(id, title, year, poster, rating, overview) {
   document.getElementById('tgTitle').value = title;
@@ -3977,35 +3983,35 @@ function generateTGCaption() {
   const hashtagsRaw = document.getElementById('tgHashtags').value;
   const catLabel = { movies: 'Movies', series: 'Series', anime: 'Anime' }[category] || category;
   const yearText = year ? ' (' + year + ')' : '';
-  let cap = '\uD83C\uDFAC <b>' + title + yearText + ' [' + catLabel + ']</b>\n';
+  let cap = '\\uD83C\\uDFAC <b>' + title + yearText + ' [' + catLabel + ']</b>\\n';
   if (synopsis) {
     const synTrunc = synopsis.length > 250 ? synopsis.slice(0, 247) + '...' : synopsis;
-    cap += '\n' + synTrunc + '\n';
+    cap += '\\n' + synTrunc + '\\n';
   }
   if (tgSelectedFiles.length > 1) {
-    cap += '\n\uD83D\uDCC1 Available Versions:\n';
+    cap += '\\n\\uD83D\\uDCC1 Available Versions:\\n';
     tgSelectedFiles.forEach(f => {
       const parsed = parseFileName(f.name || f.path);
       const sz = f.size > 1073741824 ? (f.size / 1073741824).toFixed(2) + ' GB' : f.size > 1048576 ? (f.size / 1048576).toFixed(1) + ' MB' : (f.size / 1024).toFixed(0) + ' KB';
-      cap += '  \uD83D\uDCF9 ' + (parsed.quality || '') + ' ' + (parsed.codec || '') + ' (' + sz + ')\n';
+      cap += '  \\uD83D\\uDCF9 ' + (parsed.quality || '') + ' ' + (parsed.codec || '') + ' (' + sz + ')\\n';
     });
   } else if (tgSelectedFiles.length === 1) {
     const f = tgSelectedFiles[0];
     const parsed = parseFileName(f.name || f.path);
     const sz = f.size > 1073741824 ? (f.size / 1073741824).toFixed(2) + ' GB' : f.size > 1048576 ? (f.size / 1048576).toFixed(1) + ' MB' : (f.size / 1024).toFixed(0) + ' KB';
-    cap += '\n\uD83D\uDCC1 ' + (parsed.quality || '') + ' ' + (parsed.codec || '') + ' (' + sz + ')\n';
+    cap += '\\n\\uD83D\\uDCC1 ' + (parsed.quality || '') + ' ' + (parsed.codec || '') + ' (' + sz + ')\\n';
   }
   const hasSpecs = videoSpec || duration || audioSpec || subsSpec;
   if (hasSpecs) {
-    cap += '\n\uD83D\uDCCB <b>SPECS:</b>\n';
-    if (videoSpec) cap += '\uD83C\uDFAC Video : ' + videoSpec + '\n';
-    if (duration) cap += '\u23F1\uFE0F Duration : ' + duration + '\n';
-    if (audioSpec) cap += '\uD83D\uDD0A Audio : ' + audioSpec + '\n';
-    if (subsSpec) cap += '\uD83D\uDCAC Subs : ' + subsSpec + '\n';
+    cap += '\\n\\uD83D\\uDCCB <b>SPECS:</b>\\n';
+    if (videoSpec) cap += '\\uD83C\\uDFAC Video : ' + videoSpec + '\\n';
+    if (duration) cap += '\\u23F1\\uFE0F Duration : ' + duration + '\\n';
+    if (audioSpec) cap += '\\uD83D\\uDD0A Audio : ' + audioSpec + '\\n';
+    if (subsSpec) cap += '\\uD83D\\uDCAC Subs : ' + subsSpec + '\\n';
   }
   if (hashtagsRaw) {
     const tags = hashtagsRaw.split(/\s+/).filter(t => t).map(t => t.startsWith('#') ? t : '#' + t).join(' ');
-    cap += '\n' + tags;
+    cap += '\\n' + tags;
   }
   if (cap.length > 1024) cap = cap.slice(0, 1020) + '...';
   return cap;
@@ -4063,7 +4069,7 @@ async function sendToTelegram() {
     });
     const data = await res.json();
     if (res.ok && data.success) {
-      alert('Berhasil memposting ke Telegram! \uD83D\uDE80\nCaption: ' + data.caption_length + ' chars');
+      alert('Berhasil memposting ke Telegram! 🚀 (Caption: ' + data.caption_length + ' chars)');
       closeTelegramModal();
     } else {
       alert('Gagal: ' + (data.error || 'Error'));
