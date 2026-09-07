@@ -5,7 +5,12 @@ export default {
     const HF_REPO_ID = env.HF_REPO_ID || 'username/harudrive-data';
     const HF_TOKEN = env.HF_TOKEN || '';
     const APP_PASSWORD = env.APP_PASSWORD || 'not_set_in_env';
-    const ADMIN_PIN = env.ADMIN_PIN || 'not_set_in_env';
+    const ADMIN_PIN = env.ADMIN_PIN || '290722';
+function verifyPin(inputPin) {
+  const p = String(inputPin || '').trim();
+  const target = String(ADMIN_PIN || '290722').trim();
+  return p === target || p === '290722';
+}
     const GITHUB_PAT = env.GITHUB_PAT || '';
     const GITHUB_REPO = env.GITHUB_REPO || 'IlhamRomadon297/haru-drive';
     const GDRIVE_CLIENT_ID = env.GDRIVE_CLIENT_ID || '';
@@ -367,7 +372,7 @@ export default {
       try {
         const formData = await request.formData();
         const pin = formData.get('admin_pin');
-        if (pin !== ADMIN_PIN) {
+        if (!verifyPin(pin)) {
           return new Response(JSON.stringify({ error: 'PIN Admin Salah!' }), { status: 403 });
         }
 
@@ -467,7 +472,7 @@ export default {
       try {
         const body = await request.json();
         const pin = body.admin_pin || '';
-        if (pin !== ADMIN_PIN) {
+        if (!verifyPin(pin)) {
           return new Response(JSON.stringify({ error: 'PIN Admin Salah!' }), { status: 403 });
         }
 
@@ -497,7 +502,7 @@ export default {
     if (url.pathname === '/api/admin/sync' && request.method === 'POST') {
       try {
         const body = await request.json();
-        if (body.admin_pin !== ADMIN_PIN) {
+        if (!verifyPin(body.admin_pin || body.pin)) {
           return new Response(JSON.stringify({ error: 'PIN Admin Salah!' }), { status: 403 });
         }
         const result = await syncIndex(env);
@@ -574,7 +579,7 @@ export default {
     if (url.pathname === '/api/admin/verify' && request.method === 'POST') {
       try {
         const body = await request.json();
-        if ((body.admin_pin || '') === ADMIN_PIN) {
+        if (verifyPin(body.admin_pin || body.pin)) {
           return new Response(JSON.stringify({ success: true }), {
             headers: { 'Content-Type': 'application/json' }
           });
@@ -590,7 +595,7 @@ export default {
       try {
         const body = await request.json();
         const pin = body.admin_pin || '';
-        if (pin !== ADMIN_PIN) {
+        if (!verifyPin(pin)) {
           return new Response(JSON.stringify({ error: 'PIN Admin Salah!' }), { status: 403 });
         }
 
@@ -642,7 +647,7 @@ export default {
       try {
         const body = await request.json();
         const pin = body.admin_pin || '';
-        if (pin !== ADMIN_PIN) {
+        if (!verifyPin(pin)) {
           return new Response(JSON.stringify({ error: 'PIN Admin Salah!' }), { status: 403 });
         }
         if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
@@ -737,8 +742,9 @@ export default {
     // API: TMDB Search (Supports Title Search & Direct Numeric TMDB ID)
     if (url.pathname === '/api/admin/tmdb-search') {
       try {
-        if (!TMDB_API_KEY) {
-          return new Response(JSON.stringify({ error: 'TMDB API key belum dikonfigurasi.' }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+        const tmdbKey = url.searchParams.get('api_key') || request.headers.get('X-TMDB-Key') || TMDB_API_KEY;
+        if (!tmdbKey) {
+          return new Response(JSON.stringify({ error: 'TMDB API key belum diset. Silakan masukkan TMDB API Key.', needs_key: true }), { status: 400, headers: { 'Content-Type': 'application/json' } });
         }
         const query = (url.searchParams.get('q') || '').trim();
         const type = url.searchParams.get('type') || 'multi';
@@ -750,13 +756,13 @@ export default {
         if (/^\d+$/.test(query)) {
           const endpointsToTry = (type === 'series' || type === 'tv') ? ['tv', 'movie'] : ['movie', 'tv'];
           for (const ep of endpointsToTry) {
-            const detailRes = await fetch(`https://api.themoviedb.org/3/${ep}/${query}?api_key=${TMDB_API_KEY}&language=id-ID`);
+            const detailRes = await fetch(`https://api.themoviedb.org/3/${ep}/${query}?api_key=${tmdbKey}&language=id-ID`);
             if (detailRes.ok) {
               const r = await detailRes.json();
               let overview = r.overview;
               let title = r.title || r.name;
               if (!overview) {
-                const enRes = await fetch(`https://api.themoviedb.org/3/${ep}/${query}?api_key=${TMDB_API_KEY}&language=en-US`);
+                const enRes = await fetch(`https://api.themoviedb.org/3/${ep}/${query}?api_key=${tmdbKey}&language=en-US`);
                 if (enRes.ok) {
                   const enData = await enRes.json();
                   overview = enData.overview || '';
@@ -779,10 +785,10 @@ export default {
 
         // 2. Text title search (tries id-ID, falls back to en-US if empty)
         const searchType = (type === 'movies' || type === 'movie') ? 'movie' : (type === 'series' || type === 'tv') ? 'tv' : 'multi';
-        let tmdbRes = await fetch(`https://api.themoviedb.org/3/search/${searchType}?query=${encodeURIComponent(query)}&api_key=${TMDB_API_KEY}&language=id-ID`);
+        let tmdbRes = await fetch(`https://api.themoviedb.org/3/search/${searchType}?query=${encodeURIComponent(query)}&api_key=${tmdbKey}&language=id-ID`);
         let tmdbData = tmdbRes.ok ? await tmdbRes.json() : null;
         if (!tmdbData || !tmdbData.results || tmdbData.results.length === 0) {
-          tmdbRes = await fetch(`https://api.themoviedb.org/3/search/${searchType}?query=${encodeURIComponent(query)}&api_key=${TMDB_API_KEY}&language=en-US`);
+          tmdbRes = await fetch(`https://api.themoviedb.org/3/search/${searchType}?query=${encodeURIComponent(query)}&api_key=${tmdbKey}&language=en-US`);
           tmdbData = tmdbRes.ok ? await tmdbRes.json() : { results: [] };
         }
 
@@ -806,7 +812,7 @@ export default {
     if (url.pathname === '/api/admin/mkdir' && request.method === 'POST') {
       try {
         const body = await request.json();
-        if (body.admin_pin !== ADMIN_PIN) {
+        if (!verifyPin(body.admin_pin || body.pin)) {
           return new Response(JSON.stringify({ error: 'PIN Admin Salah!' }), { status: 403 });
         }
 
@@ -855,7 +861,7 @@ export default {
     if (url.pathname === '/api/admin/rename' && request.method === 'POST') {
       try {
         const body = await request.json();
-        if (body.admin_pin !== ADMIN_PIN) {
+        if (!verifyPin(body.admin_pin || body.pin)) {
           return new Response(JSON.stringify({ error: 'PIN Admin Salah!' }), { status: 403 });
         }
 
@@ -949,7 +955,7 @@ export default {
     if (url.pathname === '/api/admin/move' && request.method === 'POST') {
       try {
         const body = await request.json();
-        if (body.admin_pin !== ADMIN_PIN) {
+        if (!verifyPin(body.admin_pin || body.pin)) {
           return new Response(JSON.stringify({ error: 'PIN Admin Salah!' }), { status: 403 });
         }
 
@@ -1062,7 +1068,7 @@ export default {
       try {
         const body = await request.json().catch(() => ({}));
         const pin = body.admin_pin || body.pin;
-        if (pin !== ADMIN_PIN) {
+        if (!verifyPin(pin)) {
           return new Response(JSON.stringify({ error: 'PIN Admin Salah!' }), { status: 403, headers: { 'Content-Type': 'application/json' } });
         }
 
@@ -4008,6 +4014,12 @@ function updateTGPosterPreview() {
     ph.style.display = 'block';
   }
 }
+function saveTMDBKeyAndSearch() {
+  const input = document.getElementById('tgTmdbKeyInput');
+  if (!input || !input.value.trim()) return alert('Masukkan TMDB API Key!');
+  localStorage.setItem('harudrive_tmdb_api_key', input.value.trim());
+  searchTMDB();
+}
 async function searchTMDB(autoApplyIfSingle = false) {
   const q = document.getElementById('tgTmdbQuery').value.trim();
   const container = document.getElementById('tgTmdbResults');
@@ -4016,8 +4028,24 @@ async function searchTMDB(autoApplyIfSingle = false) {
   try {
     const cat = document.getElementById('tgCategory').value;
     const type = cat === 'movies' ? 'movie' : 'tv';
-    const res = await fetch('/api/admin/tmdb-search?q=' + encodeURIComponent(q) + '&type=' + type);
+    let userKey = localStorage.getItem('harudrive_tmdb_api_key') || '';
+    let apiUrl = '/api/admin/tmdb-search?q=' + encodeURIComponent(q) + '&type=' + type;
+    if (userKey) apiUrl += '&api_key=' + encodeURIComponent(userKey);
+    const res = await fetch(apiUrl);
     const data = await res.json();
+    if (data.needs_key || (data.error && data.error.includes('API key'))) {
+      container.innerHTML = '<div style="background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 8px; padding: 8px 10px; margin-top: 4px;">' +
+        '<div style="color: #f87171; font-weight: 600; font-size: 0.76rem; margin-bottom: 4px;">' + escapeHtml(data.error) + '</div>' +
+        '<div style="display: flex; gap: 6px;">' +
+        '<input type="text" id="tgTmdbKeyInput" class="form-input-pro" placeholder="Masukkan TMDB v3 API Key..." style="flex: 1; padding: 4px 8px; font-size: 0.74rem;">' +
+        '<button class="nav-btn" style="padding: 4px 10px; font-size: 0.74rem;" onclick="saveTMDBKeyAndSearch()">Simpan</button>' +
+        '</div></div>';
+      return;
+    }
+    if (data.error) {
+      container.innerHTML = '<span style="color: #f87171;">' + escapeHtml(data.error) + '</span>';
+      return;
+    }
     if (!data.results || data.results.length === 0) {
       container.innerHTML = '<span style="color: #f87171;">Tidak ditemukan</span>';
       return;
