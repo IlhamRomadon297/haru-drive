@@ -2021,32 +2021,25 @@ function htmlPage(content, env, pageMode = 'public') {
       font-weight: 600;
     }
     #tgVisualPreviewModal {
-      position: fixed !important;
-      inset: 0 !important;
       z-index: 10005 !important;
-      overflow-y: auto !important;
-      -webkit-overflow-scrolling: touch;
-      overscroll-behavior: contain;
-      display: none;
-      align-items: flex-start !important;
-      justify-content: center;
-      padding: 24px 12px !important;
     }
-    #tgVisualPreviewModal .modal-card {
-      margin: auto;
-      max-height: calc(100vh - 48px);
-      display: flex;
-      flex-direction: column;
-      min-height: 0;
-      overscroll-behavior: contain;
-    }
-    #tgVisualPreviewModal .modal-body {
-      overflow-y: auto !important;
-      flex: 1 1 auto;
-      min-height: 0;
-      max-height: calc(88vh - 120px) !important;
+    #tgVisualPreviewBody {
+      max-height: 70vh !important;
+      overflow-y: scroll !important;
       -webkit-overflow-scrolling: touch;
-      overscroll-behavior: contain;
+      scrollbar-width: thin;
+      scrollbar-color: #38bdf8 rgba(255, 255, 255, 0.1);
+    }
+    #tgVisualPreviewBody::-webkit-scrollbar {
+      width: 7px;
+    }
+    #tgVisualPreviewBody::-webkit-scrollbar-track {
+      background: rgba(0, 0, 0, 0.25);
+      border-radius: 4px;
+    }
+    #tgVisualPreviewBody::-webkit-scrollbar-thumb {
+      background: #38bdf8;
+      border-radius: 4px;
     }
 
     .btn-action-tool {
@@ -4460,17 +4453,24 @@ function detectAudioTech(fn) {
   return { codec, channel, atmos };
 }
 
-function detectPlatformTag(fn) {
-  if (!fn) return '';
-  if (/\b(NF|NETFLIX)\b/i.test(fn)) return 'Netflix';
-  if (/\b(BILI|BILIBILI)\b/i.test(fn)) return 'BiliBili';
-  if (/\b(CR|CRUNCHYROLL)\b/i.test(fn)) return 'Crunchyroll';
-  if (/\b(DSNP|DISNEY\+?|DISNEYPLUS)\b/i.test(fn)) return 'DisneyPlus';
-  if (/\bVIU\b/i.test(fn)) return 'VIU';
-  if (/\b(HMAX|HBOMAX|MAX)\b/i.test(fn)) return 'HBOMax';
-  if (/\b(AMZN|PRIMEVIDEO)\b/i.test(fn)) return 'PrimeVideo';
-  if (/\b(IQ|IQIYI)\b/i.test(fn)) return 'iQiyi';
-  if (/\b(WETV)\b/i.test(fn)) return 'WeTV';
+function detectPlatformTag(str) {
+  if (!str) return '';
+  const s = ' ' + String(str).replace(/[\.\-_\+]/g, ' ') + ' ';
+  if (/\b(NF|NETFLIX)\b/i.test(s)) return 'Netflix';
+  if (/\b(BILI|BILIBILI|BSTATION)\b/i.test(s)) return 'BiliBili';
+  if (/\b(CR|CRUNCHYROLL)\b/i.test(s)) return 'Crunchyroll';
+  if (/\b(DSNP|DISNEY\+?|DISNEYPLUS)\b/i.test(s)) return 'DisneyPlus';
+  if (/\b(VIU)\b/i.test(s)) return 'VIU';
+  if (/\b(HMAX|HBOMAX|MAX)\b/i.test(s)) return 'HBOMax';
+  if (/\b(AMZN|PRIMEVIDEO|PRIME)\b/i.test(s)) return 'PrimeVideo';
+  if (/\b(ATVP|APPLETV|APPLE\s*TV)\b/i.test(s)) return 'AppleTV';
+  if (/\b(IQ|IQIYI)\b/i.test(s)) return 'iQiyi';
+  if (/\b(WETV)\b/i.test(s)) return 'WeTV';
+  if (/\b(CP|CATCHPLAY)\b/i.test(s)) return 'Catchplay';
+  if (/\b(HOTSTAR)\b/i.test(s)) return 'Hotstar';
+  if (/\b(HULU)\b/i.test(s)) return 'Hulu';
+  if (/\b(PEAC|PEACOCK)\b/i.test(s)) return 'Peacock';
+  if (/\b(PARAMOUNT\+?|PARAMOUNTPLUS|PMNT)\b/i.test(s)) return 'ParamountPlus';
   return '';
 }
 
@@ -4613,56 +4613,61 @@ async function extractSpecsAndMediaInfo(file) {
 }
 
 function generateAutoHashtags() {
-  const title = (document.getElementById('tgTitle')?.value || '').trim();
   const category = document.getElementById('tgCategory')?.value || 'movies';
-  const first = tgSelectedFiles[0];
-  const fn = first ? (first.name || first.path || '') : '';
-  const parsed = first ? parseFileName(fn) : {};
-  const specVideo = document.getElementById('tgSpecVideo')?.value || '';
   const genres = document.getElementById('tgGenres') ? document.getElementById('tgGenres').value.trim() : '';
   const country = document.getElementById('tgCountry') ? document.getElementById('tgCountry').value.trim() : '';
-  
-  const tags = [];
-  
-  // 1. Title tag
-  if (title) {
-    const cleanTag = title.replace(/[^a-zA-Z0-9]/g, '');
-    if (cleanTag) tags.push('#' + cleanTag);
-  }
+  const title = (document.getElementById('tgTitle')?.value || '').trim();
+  const specVideo = document.getElementById('tgSpecVideo')?.value || '';
 
-  // 2. Platform tag from filename
-  const plat = detectPlatformTag(fn);
+  const files = (typeof tgSelectedFiles !== 'undefined' && Array.isArray(tgSelectedFiles) && tgSelectedFiles.length > 0)
+    ? tgSelectedFiles
+    : (window._tgSelectedFiles || []);
+
+  const tags = [];
+
+  // 1. OTT Streaming / Platform (Paling pertama, NO judul!)
+  let plat = '';
+  for (const f of files) {
+    const name = f.name || f.path || '';
+    plat = detectPlatformTag(name);
+    if (plat) break;
+  }
+  if (!plat && files.length === 0) {
+    plat = detectPlatformTag(document.getElementById('tgTmdbQuery')?.value || '');
+  }
   if (plat) tags.push('#' + plat);
 
-  // 3. Category: #Movies atau #Series
+  // 2. Kategori (#Movies atau #Series)
   const catTag = category === 'series' ? 'Series' : 'Movies';
   tags.push('#' + catTag);
 
-  // 4. Sub-category: #KDrama / #Anime / #VarietyShow / #JDrama / #IndonesianMovie
+  // 3. Sub-kategori (#Anime / #KDrama / #VarietyShow / #JDrama / #IndonesianMovie)
   const subCat = detectSubCategoryTag(category, genres, country, title);
   if (subCat) tags.push('#' + subCat);
 
-  // 5. Video Codecs (detect all codecs from selected files for multi-codec!)
+  // 4. Video Codecs (seluruh codec dari file yang dipilih)
   const codecs = [];
-  if (tgSelectedFiles && tgSelectedFiles.length > 0) {
-    tgSelectedFiles.forEach(f => {
+  if (files.length > 0) {
+    files.forEach(f => {
       const p = parseFileName(f.name || f.path || '');
       const ct = formatCodecTag(p.codec || f.name || '');
       if (ct && !codecs.includes(ct)) codecs.push(ct);
     });
   }
   if (codecs.length === 0) {
-    const ct = formatCodecTag(parsed.codec || specVideo);
+    const ct = formatCodecTag(specVideo);
     if (ct) codecs.push(ct);
   }
   codecs.forEach(ct => tags.push('#' + ct));
 
   const filteredTags = tags.filter((t, i) => tags.indexOf(t) === i && t !== '#');
-  document.getElementById('tgHashtags').value = filteredTags.join(' ');
+  const tagInput = document.getElementById('tgHashtags');
+  if (tagInput) tagInput.value = filteredTags.join(' ');
 }
 
 function openTelegramModal(files) {
   tgSelectedFiles = files || [];
+  window._tgSelectedFiles = tgSelectedFiles;
   const m = document.getElementById('telegramModal');
   if (!m) return;
   const pin = localStorage.getItem('harudrive_admin_pin') || getCookie('harudrive_admin_pin') || '290722';
@@ -4673,7 +4678,7 @@ function openTelegramModal(files) {
   if (savedPoster) {
     document.getElementById('tgPosterUrl').value = savedPoster;
   }
-  const fileContainer = document.getElementById('tgSelectedFiles');
+  const fileContainer = document.getElementById('tgSelectedFilesList') || document.getElementById('tgSelectedFiles');
   if (tgSelectedFiles.length === 0) {
     fileContainer.innerHTML = '<span style="color: var(--text-dim);">Tidak ada file dipilih. Centang file terlebih dahulu.</span>';
   } else {
@@ -5031,8 +5036,7 @@ function openTelegramVisualPreview() {
   const modal = document.getElementById('tgVisualPreviewModal');
   if (!modal) return;
 
-  // Lock background scroll completely!
-  document.body.style.overflow = 'hidden';
+  const vb = document.getElementById('tgVisualPreviewBody'); if (vb) vb.scrollTop = 0;
 
   const cap = generateTGCaption();
   const captionEl = document.getElementById('tgVisualCaptionText');
@@ -5099,7 +5103,6 @@ function openTelegramVisualPreview() {
 function closeTelegramVisualPreview() {
   const modal = document.getElementById('tgVisualPreviewModal');
   if (modal) modal.style.display = 'none';
-  document.body.style.overflow = '';
 }
 
 async function sendToTelegram() {
@@ -6510,7 +6513,7 @@ function adminConsoleUI() {
         <!-- File Terpilih -->
         <div style="margin-bottom: 14px;">
           <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">File Terpilih</label>
-          <div id="tgSelectedFiles" class="folder-tree-box" style="margin-top: 4px; font-size: 0.76rem; max-height: 90px; overflow-y: auto; padding: 8px 12px;"></div>
+          <div id="tgSelectedFilesList" class="folder-tree-box" style="margin-top: 4px; font-size: 0.76rem; max-height: 90px; overflow-y: auto; padding: 8px 12px;"></div>
         </div>
 
         <!-- LIVE BANNER PREVIEW ALA HARUDRIVE -->
@@ -6696,9 +6699,9 @@ function adminConsoleUI() {
   </div>
 
   <!-- TELEGRAM VISUAL PREVIEW MODAL -->
-  <div id="tgVisualPreviewModal" class="modal-backdrop tg-modal-scrollable" style="display: none; position: fixed; inset: 0; z-index: 10005; overflow-y: auto; padding: 20px 12px; align-items: center; justify-content: center;">
-    <div class="modal-card glass" style="max-width: 640px; width: 100%; max-height: 88vh; display: flex; flex-direction: column; border: 1px solid rgba(56, 189, 248, 0.4); box-shadow: 0 25px 60px rgba(0, 0, 0, 0.7); overflow: hidden;">
-      <div class="modal-header" style="flex-shrink: 0; border-bottom: 1px solid var(--border); padding: 12px 18px; display: flex; justify-content: space-between; align-items: center;">
+  <div id="tgVisualPreviewModal" class="modal-backdrop" style="display: none; z-index: 10005;">
+    <div class="modal-card glass" style="max-width: 640px; width: 100%; border: 1px solid rgba(56, 189, 248, 0.4); box-shadow: 0 25px 60px rgba(0, 0, 0, 0.7);">
+      <div class="modal-header" style="border-bottom: 1px solid var(--border); padding: 12px 18px; display: flex; justify-content: space-between; align-items: center;">
         <div style="display: flex; align-items: center; gap: 8px;">
           <span style="font-size: 1.1rem;">👁️</span>
           <span class="modal-title" style="font-size: 0.95rem; font-weight: 700; color: #38bdf8;">Preview Post Telegram (HaruDrive)</span>
@@ -6708,11 +6711,11 @@ function adminConsoleUI() {
         </button>
       </div>
 
-      <div class="modal-body" style="flex: 1 1 auto; max-height: calc(88vh - 120px); overflow-y: auto; padding: 14px 18px; -webkit-overflow-scrolling: touch;">
+      <div id="tgVisualPreviewBody" class="modal-body" style="max-height: 70vh; overflow-y: scroll; padding: 14px 18px; -webkit-overflow-scrolling: touch;">
         <!-- Telegram Dark Bubble Card Mockup -->
         <div style="background: #182533; border-radius: 14px; overflow: hidden; border: 1px solid rgba(255,255,255,0.08); box-shadow: 0 10px 30px rgba(0,0,0,0.5); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
           <!-- Bubble Banner Image (Limited max height for easy scrolling) -->
-          <div style="position: relative; width: 100%; background: #0f172a; max-height: 250px; aspect-ratio: 1200 / 630; overflow: hidden;">
+          <div style="position: relative; width: 100%; background: #0f172a; max-height: 240px; aspect-ratio: 1200 / 630; overflow: hidden;">
             <img id="tgVisualImg" src="" alt="Banner HaruDrive" style="width: 100%; height: 100%; object-fit: cover; display: block;">
             <div id="tgVisualLoading" style="position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(15,23,42,0.85); color: #38bdf8; font-size: 0.85rem; font-weight: 600;">
               Memuat Banner HaruDrive...
