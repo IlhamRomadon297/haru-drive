@@ -734,23 +734,58 @@ export default {
       }
     }
 
-    // API: TMDB Search
+    // API: TMDB Search (Supports Title Search & Direct Numeric TMDB ID)
     if (url.pathname === '/api/admin/tmdb-search') {
       try {
         if (!TMDB_API_KEY) {
-          return new Response(JSON.stringify({ error: 'TMDB API key belum dikonfigurasi.' }), { status: 500 });
+          return new Response(JSON.stringify({ error: 'TMDB API key belum dikonfigurasi.' }), { status: 500, headers: { 'Content-Type': 'application/json' } });
         }
-        const query = url.searchParams.get('q') || '';
+        const query = (url.searchParams.get('q') || '').trim();
         const type = url.searchParams.get('type') || 'multi';
         if (!query) {
-          return new Response(JSON.stringify({ error: 'Query wajib diisi.' }), { status: 400 });
+          return new Response(JSON.stringify({ error: 'Query wajib diisi.' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
         }
 
-        const tmdbRes = await fetch(`https://api.themoviedb.org/3/search/${type}?query=${encodeURIComponent(query)}&api_key=${TMDB_API_KEY}&language=id-ID`);
-        if (!tmdbRes.ok) {
-          return new Response(JSON.stringify({ error: 'TMDB API error' }), { status: 500 });
+        // 1. Direct ID lookup if query is numeric (e.g. 667520)
+        if (/^\d+$/.test(query)) {
+          const endpointsToTry = (type === 'series' || type === 'tv') ? ['tv', 'movie'] : ['movie', 'tv'];
+          for (const ep of endpointsToTry) {
+            const detailRes = await fetch(`https://api.themoviedb.org/3/${ep}/${query}?api_key=${TMDB_API_KEY}&language=id-ID`);
+            if (detailRes.ok) {
+              const r = await detailRes.json();
+              let overview = r.overview;
+              let title = r.title || r.name;
+              if (!overview) {
+                const enRes = await fetch(`https://api.themoviedb.org/3/${ep}/${query}?api_key=${TMDB_API_KEY}&language=en-US`);
+                if (enRes.ok) {
+                  const enData = await enRes.json();
+                  overview = enData.overview || '';
+                  if (!title) title = enData.title || enData.name;
+                }
+              }
+              const results = [{
+                id: r.id,
+                title: title || '',
+                year: (r.release_date || r.first_air_date || '').slice(0, 4),
+                poster: r.poster_path ? `https://image.tmdb.org/t/p/w500${r.poster_path}` : null,
+                rating: r.vote_average ? r.vote_average.toFixed(1) : null,
+                overview: overview || '',
+                media_type: ep
+              }];
+              return new Response(JSON.stringify({ results }), { headers: { 'Content-Type': 'application/json' } });
+            }
+          }
         }
-        const tmdbData = await tmdbRes.json();
+
+        // 2. Text title search (tries id-ID, falls back to en-US if empty)
+        const searchType = (type === 'movies' || type === 'movie') ? 'movie' : (type === 'series' || type === 'tv') ? 'tv' : 'multi';
+        let tmdbRes = await fetch(`https://api.themoviedb.org/3/search/${searchType}?query=${encodeURIComponent(query)}&api_key=${TMDB_API_KEY}&language=id-ID`);
+        let tmdbData = tmdbRes.ok ? await tmdbRes.json() : null;
+        if (!tmdbData || !tmdbData.results || tmdbData.results.length === 0) {
+          tmdbRes = await fetch(`https://api.themoviedb.org/3/search/${searchType}?query=${encodeURIComponent(query)}&api_key=${TMDB_API_KEY}&language=en-US`);
+          tmdbData = tmdbRes.ok ? await tmdbRes.json() : { results: [] };
+        }
+
         const results = (tmdbData.results || []).slice(0, 5).map(r => ({
           id: r.id,
           title: r.title || r.name || '',
@@ -758,12 +793,12 @@ export default {
           poster: r.poster_path ? `https://image.tmdb.org/t/p/w500${r.poster_path}` : null,
           rating: r.vote_average ? r.vote_average.toFixed(1) : null,
           overview: r.overview || '',
-          media_type: r.media_type || type
+          media_type: r.media_type || searchType
         }));
 
         return new Response(JSON.stringify({ results }), { headers: { 'Content-Type': 'application/json' } });
       } catch (err) {
-        return new Response(JSON.stringify({ error: err.message }), { status: 500 });
+        return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: { 'Content-Type': 'application/json' } });
       }
     }
 
@@ -1022,17 +1057,18 @@ export default {
       }
     }
 
-    // API: Delete (Guaranteed Full Deletion of Files & Folders via NDJSON Protocol)
-    if (url.pathname === '/api/admin/delete' && request.method === 'POST') {
+    // API: Delete & Bulk Delete (Guaranteed Full Deletion of Files & Folders via NDJSON Protocol)
+    if ((url.pathname === '/api/admin/delete' || url.pathname === '/api/admin/bulk-delete') && request.method === 'POST') {
       try {
-        const body = await request.json();
-        if (body.admin_pin !== ADMIN_PIN) {
-          return new Response(JSON.stringify({ error: 'PIN Admin Salah!' }), { status: 403 });
+        const body = await request.json().catch(() => ({}));
+        const pin = body.admin_pin || body.pin;
+        if (pin !== ADMIN_PIN) {
+          return new Response(JSON.stringify({ error: 'PIN Admin Salah!' }), { status: 403, headers: { 'Content-Type': 'application/json' } });
         }
 
         const paths = body.paths || (body.path ? [body.path] : []);
         if (!paths.length) {
-          return new Response(JSON.stringify({ error: 'Tidak ada item yang dipilih untuk dihapus.' }), { status: 400 });
+          return new Response(JSON.stringify({ error: 'Tidak ada item yang dipilih untuk dihapus.' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
         }
 
         // Fetch repo tree to identify directory vs file
@@ -3423,12 +3459,17 @@ async function bulkDeleteSelected() {
   if (!pin) return;
 
   try {
-    const res = await fetch('/api/admin/bulk-delete', {
+    const res = await fetch('/api/admin/delete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ paths: Array.from(selectedFiles), pin })
+      body: JSON.stringify({ paths: Array.from(selectedFiles), admin_pin: pin, pin: pin })
     });
-    const data = await res.json();
+    let data;
+    try {
+      data = await res.json();
+    } catch (parseErr) {
+      throw new Error('Server merespon dengan status ' + res.status + ' (' + res.statusText + ')');
+    }
     if (res.ok && data.success) {
       clearBulkSelection();
       loadFolder(currentPath, currentFolderId);
@@ -3631,15 +3672,20 @@ async function submitNewFolder() {
 
 async function deleteItem(itemPath) {
   if (!confirm('Yakin ingin menghapus ' + itemPath + '?')) return;
-  const pin = localStorage.getItem('harudrive_admin_pin') || '290722';
+  const pin = localStorage.getItem('harudrive_admin_pin') || getCookie('harudrive_admin_pin') || '290722';
 
   try {
     const res = await fetch('/api/admin/delete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: itemPath, admin_pin: pin })
+      body: JSON.stringify({ path: itemPath, paths: [itemPath], admin_pin: pin, pin: pin })
     });
-    const data = await res.json();
+    let data;
+    try {
+      data = await res.json();
+    } catch (parseErr) {
+      throw new Error('Server merespon dengan status ' + res.status + ' (' + res.statusText + ')');
+    }
     if (res.ok && data.success) {
       loadFolder(currentPath, currentFolderId);
       fetchFolderTree();
@@ -3845,6 +3891,33 @@ async function cancelMirrorTask(runId) {
 
 // Telegram Post Modal
 let tgSelectedFiles = [];
+let _tgLivePreviewSetup = false;
+function setupTelegramLivePreview() {
+  if (_tgLivePreviewSetup) return;
+  _tgLivePreviewSetup = true;
+  const inputIds = [
+    'tgTitle', 'tgYear', 'tgRating', 'tgCategory', 'tgPosterUrl',
+    'tgSpecVideo', 'tgSpecDuration', 'tgSpecAudio', 'tgSpecSubs',
+    'tgSynopsis', 'tgHashtags'
+  ];
+  inputIds.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) {
+      el.addEventListener('input', previewTelegramCaption);
+      el.addEventListener('change', previewTelegramCaption);
+    }
+  });
+  const qInput = document.getElementById('tgTmdbQuery');
+  if (qInput) {
+    qInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        searchTMDB();
+      }
+    });
+  }
+}
+
 function openTelegramModal(files) {
   tgSelectedFiles = files || [];
   const m = document.getElementById('telegramModal');
@@ -3870,20 +3943,27 @@ function openTelegramModal(files) {
     fileContainer.innerHTML = fh;
     const first = tgSelectedFiles[0];
     const parsed = parseFileName(first.name || first.path || '');
-    if (parsed.title && !document.getElementById('tgTitle').value) document.getElementById('tgTitle').value = parsed.title;
-    if (parsed.year && !document.getElementById('tgYear').value) document.getElementById('tgYear').value = parsed.year;
-    if (parsed.quality && !document.getElementById('tgSpecVideo').value) document.getElementById('tgSpecVideo').value = parsed.quality;
-    if (parsed.codec && !document.getElementById('tgSpecVideo').value.includes(parsed.codec)) {
-      const cur = document.getElementById('tgSpecVideo').value;
-      document.getElementById('tgSpecVideo').value = (cur ? cur + ' ' : '') + parsed.codec;
-    }
+    document.getElementById('tgTitle').value = parsed.title || first.name || '';
+    document.getElementById('tgYear').value = parsed.year || '';
+    document.getElementById('tgSpecVideo').value = [parsed.quality, parsed.codec].filter(Boolean).join(' ');
+    document.getElementById('tgSpecAudio').value = parsed.audio || '';
     if (parsed.season) document.getElementById('tgCategory').value = 'series';
-    if (parsed.source) {
-      const tags = ['#' + parsed.cleanTitle.replace(/\s+/g, '')];
-      if (parsed.codec) tags.push('#' + parsed.codec);
-      if (parsed.source) tags.push('#' + parsed.source);
-      document.getElementById('tgHashtags').value = tags.join(' ');
+    else document.getElementById('tgCategory').value = 'movies';
+    if (parsed.cleanTitle) {
+      document.getElementById('tgTmdbQuery').value = parsed.cleanTitle;
     }
+    const tags = [];
+    if (parsed.cleanTitle) tags.push('#' + parsed.cleanTitle.replace(/\s+/g, ''));
+    if (parsed.codec) tags.push('#' + parsed.codec);
+    if (parsed.source) tags.push('#' + parsed.source);
+    if (parsed.quality) tags.push('#' + parsed.quality);
+    document.getElementById('tgHashtags').value = tags.join(' ');
+  }
+  setupTelegramLivePreview();
+  previewTelegramCaption();
+  const autoQ = document.getElementById('tgTmdbQuery').value.trim();
+  if (autoQ && autoQ.length >= 2) {
+    searchTMDB(true);
   }
   m.style.display = 'flex';
 }
@@ -3928,7 +4008,7 @@ function updateTGPosterPreview() {
     ph.style.display = 'block';
   }
 }
-async function searchTMDB() {
+async function searchTMDB(autoApplyIfSingle = false) {
   const q = document.getElementById('tgTmdbQuery').value.trim();
   const container = document.getElementById('tgTmdbResults');
   if (!q) return;
@@ -3942,8 +4022,12 @@ async function searchTMDB() {
       container.innerHTML = '<span style="color: #f87171;">Tidak ditemukan</span>';
       return;
     }
-    let h = '<div style="display: flex; flex-direction: column; gap: 6px;">';
     window._tmdbResults = data.results;
+    if (autoApplyIfSingle && data.results.length === 1) {
+      applyTMDBResultByIndex(0);
+      return;
+    }
+    let h = '<div style="display: flex; flex-direction: column; gap: 6px;">';
     data.results.forEach((r, idx) => {
       h += '<div style="display: flex; align-items: center; gap: 10px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer;" onclick="applyTMDBResultByIndex(' + idx + ')">';
       if (r.poster) h += '<img src="' + r.poster + '" style="width: 32px; height: 48px; border-radius: 4px; object-fit: cover;">';
@@ -3953,6 +4037,9 @@ async function searchTMDB() {
     });
     h += '</div>';
     container.innerHTML = h;
+    if (data.results.length === 1 && /^\d+$/.test(q)) {
+      applyTMDBResultByIndex(0);
+    }
   } catch (e) {
     container.innerHTML = '<span style="color: #f87171;">Error: ' + e.message + '</span>';
   }
@@ -3969,6 +4056,7 @@ function applyTMDBResult(id, title, year, poster, rating, overview) {
   if (rating) document.getElementById('tgRating').value = rating;
   if (overview) document.getElementById('tgSynopsis').value = overview.length > 250 ? overview.slice(0, 247) + '...' : overview;
   document.getElementById('tgTmdbResults').innerHTML = '<span style="color: #34d399;">\u2713 Berhasil diisi dari TMDB</span>';
+  previewTelegramCaption();
 }
 function generateTGCaption() {
   const title = document.getElementById('tgTitle').value || 'Untitled';
