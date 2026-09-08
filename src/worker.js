@@ -4693,7 +4693,7 @@ function detectAudioTech(fn) {
 
 function detectPlatformTag(str) {
   if (!str) return '';
-  const s = ' ' + String(str).replace(/[\.\-_\+\/\\]/g, ' ') + ' ';
+  const s = ' ' + String(str).replace(/[^a-zA-Z0-9]/g, ' ') + ' ';
   if (/\b(NF|NETFLIX)\b/i.test(s)) return 'Netflix';
   if (/\b(BILI|BILIBILI|BSTATION)\b/i.test(s)) return 'BiliBili';
   if (/\b(CR|CRUNCHYROLL)\b/i.test(s)) return 'Crunchyroll';
@@ -5142,27 +5142,6 @@ async function translateToIndonesian(text) {
   } catch(e) {
     console.warn('Translate endpoint error:', e);
   }
-  return text;
-}
-  try {
-    const url = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=id&dt=t&q=' + encodeURIComponent(text);
-    const res = await fetch(url);
-    if (res.ok) {
-      const j = await res.json();
-      return j[0].map(s => s[0]).join('');
-    }
-  } catch(e) {
-    console.warn('Google translate error:', e);
-  }
-  try {
-    const res2 = await fetch('https://api.mymemory.translated.net/get?q=' + encodeURIComponent(text) + '&langpair=en|id');
-    if (res2.ok) {
-      const j2 = await res2.json();
-      if (j2.responseData && j2.responseData.translatedText) {
-        return j2.responseData.translatedText;
-      }
-    }
-  } catch(e) {}
   return text;
 }
 
