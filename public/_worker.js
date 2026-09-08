@@ -839,6 +839,7 @@ export default {
 
         let lastMessageId = null;
         let sentCount = 0;
+        let lastTgData = null;
         for (const target of targets) {
           const formData = new FormData();
           formData.append('chat_id', target.chat_id);
@@ -858,6 +859,7 @@ export default {
           });
 
           const tgData = await tgRes.json();
+          lastTgData = tgData;
           if (tgRes.ok) {
             lastMessageId = tgData.result?.message_id;
             sentCount++;
@@ -872,7 +874,7 @@ export default {
         return new Response(JSON.stringify({
           success: true,
           message: 'Berhasil memposting ke Telegram!',
-          message_id: tgData.result?.message_id,
+          message_id: lastMessageId || lastTgData?.result?.message_id,
           caption_length: caption.length
         }), { headers: { 'Content-Type': 'application/json' } });
       } catch (err) {
@@ -2029,6 +2031,7 @@ function htmlPage(content, env, pageMode = 'public') {
       -webkit-overflow-scrolling: touch;
       scrollbar-width: thin;
       scrollbar-color: #38bdf8 rgba(255, 255, 255, 0.1);
+      touch-action: pan-y;
     }
     #tgVisualPreviewBody::-webkit-scrollbar {
       width: 7px;
@@ -2040,6 +2043,69 @@ function htmlPage(content, env, pageMode = 'public') {
     #tgVisualPreviewBody::-webkit-scrollbar-thumb {
       background: #38bdf8;
       border-radius: 4px;
+    }
+    
+    /* Responsive Form Grids for Telegram Modal */
+    .tg-form-grid-4 {
+      display: grid;
+      grid-template-columns: 2fr 1fr 1fr 1.2fr;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    .tg-form-grid-3 {
+      display: grid;
+      grid-template-columns: 2fr 1.2fr 1.2fr;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    .tg-form-grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    .tg-form-specs-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: 10px;
+    }
+
+    @media (max-width: 640px) {
+      .tg-form-grid-4 {
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+      }
+      .tg-form-grid-4 > div:first-child {
+        grid-column: span 2;
+      }
+      .tg-form-grid-3 {
+        grid-template-columns: 1fr;
+        gap: 8px;
+      }
+      .tg-form-grid-2 {
+        grid-template-columns: 1fr;
+        gap: 8px;
+      }
+      .tg-form-specs-grid {
+        grid-template-columns: 1fr;
+        gap: 8px;
+      }
+      #telegramModal .modal-body {
+        padding: 14px 12px !important;
+        max-height: 82vh !important;
+      }
+      #tgVisualPreviewModal .modal-card {
+        margin: 8px auto !important;
+        max-width: 96% !important;
+      }
+      #tgVisualPreviewBody {
+        padding: 10px 10px !important;
+        max-height: 72vh !important;
+      }
+      .form-input-pro {
+        font-size: 14px !important;
+        padding: 8px 10px !important;
+      }
     }
 
     .btn-action-tool {
@@ -4292,13 +4358,22 @@ function formatCodec(raw) {
   return raw;
 }
 
+function detectQuality(name) {
+  if (!name) return '1080p';
+  const s = ' ' + String(name).replace(/[\.\-_\+\[\]\(\)]/g, ' ') + ' ';
+  if (/\b(4K|2160p?|UHD|3840x2160)\b/i.test(s)) return '2160p';
+  if (/\b(1080p?|1080i|FHD|1920x1080)\b/i.test(s)) return '1080p';
+  if (/\b(720p?|HD|1280x720)\b/i.test(s)) return '720p';
+  if (/\b(576p?|480p?|SD|360p?)\b/i.test(s)) {
+    const m = s.match(/\b(576p?|480p?|360p?)\b/i);
+    return m ? m[0].toLowerCase() : '480p';
+  }
+  return '1080p';
+}
+
 function formatQuality(raw) {
   if (!raw) return '1080p';
-  const l = raw.toLowerCase();
-  if (l.includes('2160') || l.includes('4k')) return '2160p';
-  if (l.includes('1080')) return '1080p';
-  if (l.includes('720')) return '720p';
-  return l.endsWith('p') ? l : l.toUpperCase();
+  return detectQuality(raw);
 }
 
 function setupTelegramLivePreview() {
@@ -4502,7 +4577,7 @@ async function extractSpecsAndMediaInfo(file) {
   const parsed = parseFileName(fn);
   
   // 1. Initial smart specs from filename
-  const q = formatQuality(parsed.quality || '1080p');
+  let q = detectQuality(fn);
   const hdr = detectHDR(fn);
   const c = formatCodec(parsed.codec || 'AV1');
   let bitDepth = '';
@@ -4528,9 +4603,19 @@ async function extractSpecsAndMediaInfo(file) {
       let j = d.mediainfo_json;
       if (typeof j === 'string') { try { j = JSON.parse(j); } catch(e){} }
       if (j) {
+        window._currentMediaInfo = j;
         if (j.video && j.video[0]) {
           const v = j.video[0];
-          const resLabel = v.height ? v.height + 'p' : (v.width >= 1900 ? '1080p' : v.width >= 1200 ? '720p' : '1080p');
+          let resLabel = q;
+          const h = parseInt(String(v.height || 0).replace(/[^0-9]/g, ''));
+          const w = parseInt(String(v.width || 0).replace(/[^0-9]/g, ''));
+          if (h >= 1800 || w >= 3500) resLabel = '2160p';
+          else if (h >= 900 || w >= 1800) resLabel = '1080p';
+          else if (h >= 650 || w >= 1200) resLabel = '720p';
+          else if (h >= 400 || w >= 650) resLabel = '480p';
+          else if (h) resLabel = h + 'p';
+          q = resLabel;
+
           let miHdr = hdr;
           if (!miHdr) {
             if (v.hdrFormat) {
@@ -4572,7 +4657,6 @@ async function extractSpecsAndMediaInfo(file) {
           if (a.format_additionalfeatures && /joc|atmos/i.test(a.format_additionalfeatures)) atmos = true;
           if (a.title && /atmos/i.test(a.title)) atmos = true;
 
-          // Priority filter across all audio tracks (Indonesian, English, Japanese, Korean, Malay, etc.)
           audioLang = cleanAudioLanguages(j.audio.map(track => track.language || track.title || ''));
         }
         if (j.text && j.text.length > 0) {
@@ -4593,8 +4677,18 @@ async function extractSpecsAndMediaInfo(file) {
   // Gabungkan spec teknis di baris atas: Format Video & Codec Audio
   const audioTechLabel = (audioCodec + ' ' + audioChannel + (atmos ? ' Atmos' : '')).trim();
   let topTechSpec = videoSpec;
+  
   if (tgSelectedFiles && tgSelectedFiles.length > 1) {
-    topTechSpec = q + ' Multi-Codec';
+    // Kumpulkan seluruh resolusi unik dari seluruh file terpilih
+    const qList = [];
+    tgSelectedFiles.forEach(f => {
+      const fq = detectQuality(f.name || f.path || '');
+      if (!qList.includes(fq)) qList.push(fq);
+    });
+    const qOrder = ['2160p', '1080p', '720p', '480p', '360p'];
+    qList.sort((a, b) => qOrder.indexOf(a) - qOrder.indexOf(b));
+    const combinedQ = qList.join(' & ');
+    topTechSpec = combinedQ + ' Multi-Codec';
   } else if (audioTechLabel) {
     topTechSpec = videoSpec + ' • ' + audioTechLabel;
   }
@@ -4612,6 +4706,36 @@ async function extractSpecsAndMediaInfo(file) {
   previewTelegramCaption();
 }
 
+function extractPlatformFromEverything() {
+  const sources = [];
+  const files = (typeof tgSelectedFiles !== 'undefined' && Array.isArray(tgSelectedFiles)) ? tgSelectedFiles : (window._tgSelectedFiles || []);
+  files.forEach(f => {
+    if (f.name) sources.push(f.name);
+    if (f.path) sources.push(f.path);
+  });
+  if (typeof currentPath !== 'undefined' && currentPath) sources.push(currentPath);
+  const crumb = document.querySelector('.crumb-group') || document.querySelector('.folder-header');
+  if (crumb && crumb.textContent) sources.push(crumb.textContent);
+
+  const titleEl = document.getElementById('tgTitle');
+  if (titleEl && titleEl.value) sources.push(titleEl.value);
+  const qEl = document.getElementById('tgTmdbQuery');
+  if (qEl && qEl.value) sources.push(qEl.value);
+
+  if (window._currentMediaInfo) {
+    const g = window._currentMediaInfo.general || {};
+    if (g.title) sources.push(g.title);
+    if (g.comment) sources.push(g.comment);
+    if (g.encoded_library_name) sources.push(g.encoded_library_name);
+  }
+
+  for (const s of sources) {
+    const p = detectPlatformTag(s);
+    if (p) return p;
+  }
+  return '';
+}
+
 function generateAutoHashtags() {
   const category = document.getElementById('tgCategory')?.value || 'movies';
   const genres = document.getElementById('tgGenres') ? document.getElementById('tgGenres').value.trim() : '';
@@ -4626,15 +4750,7 @@ function generateAutoHashtags() {
   const tags = [];
 
   // 1. OTT Streaming / Platform (Paling pertama, NO judul!)
-  let plat = '';
-  for (const f of files) {
-    const name = f.name || f.path || '';
-    plat = detectPlatformTag(name);
-    if (plat) break;
-  }
-  if (!plat && files.length === 0) {
-    plat = detectPlatformTag(document.getElementById('tgTmdbQuery')?.value || '');
-  }
+  const plat = extractPlatformFromEverything();
   if (plat) tags.push('#' + plat);
 
   // 2. Kategori (#Movies atau #Series)
@@ -4668,16 +4784,31 @@ function generateAutoHashtags() {
 function openTelegramModal(files) {
   tgSelectedFiles = files || [];
   window._tgSelectedFiles = tgSelectedFiles;
+  window._currentMediaInfo = null;
   const m = document.getElementById('telegramModal');
   if (!m) return;
   const pin = localStorage.getItem('harudrive_admin_pin') || getCookie('harudrive_admin_pin') || '290722';
   document.getElementById('tgAdminPin').value = pin;
   document.getElementById('tgChannelId').value = localStorage.getItem('harudrive_tg_channel') || '';
   document.getElementById('tgTopicId').value = localStorage.getItem('harudrive_tg_topic') || '';
-  const savedPoster = localStorage.getItem('harudrive_tg_poster') || '';
-  if (savedPoster) {
-    document.getElementById('tgPosterUrl').value = savedPoster;
-  }
+  
+  // RESET ALL FIELDS FOR A FRESH NEW POST (Avoid leftover synopsis/poster/etc)
+  document.getElementById('tgTitle').value = '';
+  document.getElementById('tgYear').value = '';
+  document.getElementById('tgSynopsis').value = '';
+  document.getElementById('tgPosterUrl').value = '';
+  document.getElementById('tgRating').value = '';
+  document.getElementById('tgGenres').value = '';
+  document.getElementById('tgReleaseDate').value = '';
+  document.getElementById('tgCountry').value = '';
+  document.getElementById('tgSpecDuration').value = '';
+  document.getElementById('tgSpecVideo').value = '';
+  document.getElementById('tgSpecAudio').value = '';
+  document.getElementById('tgSpecSubs').value = '';
+  document.getElementById('tgHashtags').value = '';
+  document.getElementById('tgMediaInfoUrl').value = '';
+  const resBox = document.getElementById('tgTmdbResults');
+  if (resBox) resBox.innerHTML = '';
   const fileContainer = document.getElementById('tgSelectedFilesList') || document.getElementById('tgSelectedFiles');
   if (tgSelectedFiles.length === 0) {
     fileContainer.innerHTML = '<span style="color: var(--text-dim);">Tidak ada file dipilih. Centang file terlebih dahulu.</span>';
@@ -4811,9 +4942,7 @@ async function applyTMDBResult(id, title, year, poster, rating, overview, genres
     document.getElementById('tgPosterUrl').value = poster;
   }
   if (rating) document.getElementById('tgRating').value = rating;
-  if (overview) {
-    document.getElementById('tgSynopsis').value = overview.length > 350 ? overview.slice(0, 347) + '...' : overview;
-  }
+  document.getElementById('tgSynopsis').value = overview ? (overview.length > 350 ? overview.slice(0, 347) + '...' : overview) : '';
   if (genres && document.getElementById('tgGenres')) {
     document.getElementById('tgGenres').value = genres;
   }
@@ -5036,7 +5165,36 @@ function openTelegramVisualPreview() {
   const modal = document.getElementById('tgVisualPreviewModal');
   if (!modal) return;
 
-  const vb = document.getElementById('tgVisualPreviewBody'); if (vb) vb.scrollTop = 0;
+  document.body.classList.add('modal-open');
+  const vb = document.getElementById('tgVisualPreviewBody');
+  if (vb) vb.scrollTop = 0;
+
+  // Bind wheel & touch scroll interception once to prevent background scrolling
+  if (!modal._scrollBound) {
+    modal._scrollBound = true;
+    modal.addEventListener('wheel', function(e) {
+      const body = document.getElementById('tgVisualPreviewBody');
+      if (body) {
+        body.scrollTop += e.deltaY;
+      }
+      e.preventDefault();
+    }, { passive: false });
+
+    let touchStartY = 0;
+    modal.addEventListener('touchstart', function(e) {
+      if (e.touches && e.touches.length) touchStartY = e.touches[0].clientY;
+    }, { passive: true });
+    modal.addEventListener('touchmove', function(e) {
+      const body = document.getElementById('tgVisualPreviewBody');
+      if (body && e.touches && e.touches.length) {
+        const touchY = e.touches[0].clientY;
+        const delta = touchStartY - touchY;
+        touchStartY = touchY;
+        body.scrollTop += delta;
+      }
+      e.preventDefault();
+    }, { passive: false });
+  }
 
   const cap = generateTGCaption();
   const captionEl = document.getElementById('tgVisualCaptionText');
@@ -5103,6 +5261,7 @@ function openTelegramVisualPreview() {
 function closeTelegramVisualPreview() {
   const modal = document.getElementById('tgVisualPreviewModal');
   if (modal) modal.style.display = 'none';
+  document.body.classList.remove('modal-open');
 }
 
 async function sendToTelegram() {
@@ -6548,7 +6707,7 @@ function adminConsoleUI() {
             </button>
           </div>
           
-          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px;">
+          <div class="tg-form-specs-grid">
             <div>
               <label style="font-size: 0.74rem; font-weight: 600; color: var(--text-muted);">Format Video & Audio Specs</label>
               <input type="text" id="tgSpecVideo" class="form-input-pro" placeholder="1080p AV1 10-bit • AAC 2.0" style="margin-top: 4px; font-size: 0.78rem;">
@@ -6591,7 +6750,7 @@ function adminConsoleUI() {
         </div>
 
         <!-- Judul, Tahun, Rating, Kategori -->
-        <div style="display: grid; grid-template-columns: 2fr 1fr 1fr 1.2fr; gap: 10px; margin-bottom: 12px;">
+        <div class="tg-form-grid-4">
           <div>
             <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Title</label>
             <input type="text" id="tgTitle" class="form-input-pro" placeholder="Judul Film / Series" style="margin-top: 4px;">
@@ -6625,7 +6784,7 @@ function adminConsoleUI() {
         </div>
 
         <!-- Genre, Release Date, Country -->
-        <div style="display: grid; grid-template-columns: 2fr 1.2fr 1.2fr; gap: 10px; margin-bottom: 12px;">
+        <div class="tg-form-grid-3">
           <div>
             <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Genre</label>
             <input type="text" id="tgGenres" class="form-input-pro" placeholder="Action, Thriller, Drama" style="margin-top: 4px;">
@@ -6662,8 +6821,8 @@ function adminConsoleUI() {
         </div>
 
         <!-- Channel + Topic -->
-        <div style="display: flex; gap: 10px; margin-bottom: 14px;">
-          <div style="flex: 1;">
+        <div class="tg-form-grid-2">
+          <div>
             <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Channel ID (opsional)</label>
             <input type="text" id="tgChannelId" class="form-input-pro" placeholder="Kosongkan jika pakai default dari secret" style="margin-top: 4px;">
           </div>
