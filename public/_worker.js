@@ -712,10 +712,13 @@ export default {
         const yearText = year ? ` (${year})` : '';
         const mainFile = filename || (versions && versions[0] && versions[0].name) || '';
 
+        const cat = (body.category || '').toLowerCase();
+        const isSeries = cat === 'series' || cat === 'anime';
+
         // HaruDrive clean caption ala Screenshot 4
         let caption = `\u{1F3AC} <b>${title}${yearText}</b>\n`;
-        // Quote untuk filename HANYA jika rilisan tunggal (1 file)
-        if (versions && versions.length === 1 && mainFile) {
+        // Quote untuk filename HANYA jika rilisan tunggal (1 file) film
+        if (!isSeries && versions && versions.length === 1 && mainFile) {
           caption += `<blockquote>${mainFile}</blockquote>\n`;
         }
 
@@ -729,7 +732,7 @@ export default {
         const durSpec = (specs && specs.duration && specs.duration.trim()) || '';
         const subsSpec = (specs && specs.subs && specs.subs.trim()) || '';
         const audioSpec = (specs && specs.audio && specs.audio.trim()) || '';
-        const sz = (versions && versions.length === 1 && versions[0] && versions[0].size) || '';
+        const sz = (!isSeries && versions && versions.length === 1 && versions[0] && versions[0].size) ? versions[0].size : '';
 
         const specHeader = [videoSpec, durSpec, sz].filter(Boolean).join(' \u2022 ');
         
@@ -745,7 +748,7 @@ export default {
         }
         caption = caption.trim() + `</blockquote>\n`;
 
-        // Available versions if multiple files
+        // Available versions if multiple files (film multi-resolusi / series multi-season)
         if (versions && versions.length > 1) {
           caption += `\n\u{1F4C1} <b>Pilihan Versi:</b>\n`;
           versions.forEach(v => {
@@ -816,15 +819,31 @@ export default {
             url: mediainfo_url.trim()
           });
         }
-        const cat = (body.category || '').toLowerCase();
-        const isSeries = cat === 'series' || cat === 'anime';
-
-        if (isSeries && body.folder_url) {
-          topRow.push({
-            text: '\u{1F4C1} Buka Folder',
-            url: body.folder_url
-          });
-          keyboard.push(topRow);
+        if (isSeries) {
+          const seasonVersions = versions ? versions.filter(v => v.isSeason || (v.seasonName && v.seasonName.startsWith('Season'))) : [];
+          if (seasonVersions.length > 1) {
+            // Multi-season: MediaInfo di baris 1 (jika ada), tombol Season di baris 2
+            if (topRow.length > 0) keyboard.push(topRow);
+            const seasonRow = [];
+            seasonVersions.forEach(sv => {
+              if (sv.link) {
+                seasonRow.push({
+                  text: `\u{1F4C1} ${sv.seasonName || sv.label || 'Season'}`,
+                  url: sv.link
+                });
+              }
+            });
+            if (seasonRow.length > 0) keyboard.push(seasonRow);
+          } else {
+            // Single-season: [ 📄 MediaInfo ] [ 📁 Buka Folder ] (sejajar jika ada dua-duanya)
+            if (body.folder_url) {
+              topRow.push({
+                text: '\u{1F4C1} Buka Folder',
+                url: body.folder_url
+              });
+            }
+            if (topRow.length > 0) keyboard.push(topRow);
+          }
         } else if (versions && versions.length === 1 && versions[0].link) {
           topRow.push({
             text: '\u{1F4E5} Download',
@@ -4876,7 +4895,27 @@ async function extractSpecsAndMediaInfo(file) {
   const audioTechLabel = (audioCodec + ' ' + audioChannel + (atmos ? ' Atmos' : '')).trim();
   let topTechSpec = videoSpec;
   
-  if (tgSelectedFiles && tgSelectedFiles.length > 1) {
+  const cat = (document.getElementById('tgCategory')?.value || 'movies').toLowerCase();
+  const isSeries = cat === 'series' || cat === 'anime';
+
+  if (isSeries && tgSelectedFiles && tgSelectedFiles.length > 0) {
+    const seasonMap = new Map();
+    tgSelectedFiles.forEach(f => {
+      const fn = f.name || f.path || '';
+      const m = (fn + ' ' + (f.path || '')).match(/(?:^|[\/\s\.\-_])(?:S|Season\s*)(\d{1,2})(?:[\/\s\.\-_E]|$)/i);
+      const sNum = m ? parseInt(m[1], 10) : 1;
+      const sKey = 'Season ' + sNum;
+      if (!seasonMap.has(sKey)) seasonMap.set(sKey, []);
+      seasonMap.get(sKey).push(f);
+    });
+
+    if (seasonMap.size > 1) {
+      const tag = seasonMap.size === 2 ? 'Dual-Season' : 'Multi-Season';
+      topTechSpec = videoSpec ? (videoSpec + ' • ' + tag) : tag;
+    } else if (audioTechLabel) {
+      topTechSpec = videoSpec + ' • ' + audioTechLabel;
+    }
+  } else if (tgSelectedFiles && tgSelectedFiles.length > 1) {
     // Kumpulkan seluruh resolusi unik dari seluruh file terpilih
     const qList = [];
     tgSelectedFiles.forEach(f => {
@@ -5311,9 +5350,12 @@ function generateTGCaption() {
   // 1. Header with Title
   let cap = '🎬 <b>' + title + yearText + '</b>' + nl;
 
-  // Quote untuk Filename HANYA jika rilisan tunggal (1 file).
+  const cat = (document.getElementById('tgCategory')?.value || 'movies').toLowerCase();
+  const isSeries = cat === 'series' || cat === 'anime';
+
+  // Quote untuk Filename HANYA jika rilisan tunggal (1 file) film.
   // Jika multi-codec atau series/banyak file, omit filename di atas agar tidak rancu!
-  if (tgSelectedFiles && tgSelectedFiles.length === 1 && fileName) {
+  if (!isSeries && tgSelectedFiles && tgSelectedFiles.length === 1 && fileName) {
     cap += '<blockquote>' + fileName + '</blockquote>' + nl;
   }
 
@@ -5325,7 +5367,7 @@ function generateTGCaption() {
 
   // 3. Block Specs (Kotak Quote ala Screenshot 4)
   let sz = '';
-  if (first && first.size && (!tgSelectedFiles || tgSelectedFiles.length === 1)) {
+  if (!isSeries && first && first.size && (!tgSelectedFiles || tgSelectedFiles.length === 1)) {
     sz = first.size > 1073741824 ? (first.size / 1073741824).toFixed(2) + ' GB' : first.size > 1048576 ? (first.size / 1048576).toFixed(1) + ' MB' : (first.size / 1024).toFixed(0) + ' KB';
   }
   
@@ -5346,8 +5388,50 @@ function generateTGCaption() {
   }
   cap = cap.trim() + '</blockquote>' + nl;
 
-  // 4. Pilihan Versi jika lebih dari 1 file terpilih (Bahasa Indonesia)
-  if (tgSelectedFiles && tgSelectedFiles.length > 1) {
+  // 4. Pilihan Versi jika lebih dari 1 file/season terpilih (Bahasa Indonesia)
+  if (isSeries) {
+    // Skenario 3: Series / Anime - Kelompokkan HANYA berdasarkan Season!
+    const seasonMap = new Map();
+    if (tgSelectedFiles && tgSelectedFiles.length > 0) {
+      tgSelectedFiles.forEach(f => {
+        const fn = f.name || f.path || '';
+        const m = (fn + ' ' + (f.path || '')).match(/(?:^|[\/\s\.\-_])(?:S|Season\s*)(\d{1,2})(?:[\/\s\.\-_E]|$)/i);
+        const sNum = m ? parseInt(m[1], 10) : 1;
+        const sKey = 'Season ' + sNum;
+        if (!seasonMap.has(sKey)) seasonMap.set(sKey, []);
+        seasonMap.get(sKey).push(f);
+      });
+    }
+
+    // HANYA jika ada 2 atau lebih season (Dual/Multi Season), tampilkan Pilihan Versi season
+    if (seasonMap.size > 1) {
+      const sortedSeasons = Array.from(seasonMap.keys()).sort((a, b) => {
+        const na = parseInt(a.replace(/\D/g, '')) || 0;
+        const nb = parseInt(b.replace(/\D/g, '')) || 0;
+        return na - nb;
+      });
+
+      cap += nl + '📁 <b>Pilihan Versi:</b>' + nl;
+      sortedSeasons.forEach(sName => {
+        const sFiles = seasonMap.get(sName);
+        let totalBytes = 0;
+        let sQuality = '';
+        let sCodec = '';
+        sFiles.forEach(f => {
+          totalBytes += (f.size || 0);
+          if (!sQuality) sQuality = detectQuality(f.name || f.path || '');
+          if (!sCodec) {
+            const p = parseFileName(f.name || f.path || '');
+            sCodec = formatCodec(p.codec || 'AV1');
+          }
+        });
+        const sz = totalBytes > 1073741824 ? (totalBytes / 1073741824).toFixed(2) + ' GB' : totalBytes > 1048576 ? (totalBytes / 1048576).toFixed(1) + ' MB' : (totalBytes / 1024).toFixed(0) + ' KB';
+        const sSpec = [sQuality, sCodec].filter(Boolean).join(' ');
+        cap += '  🎥 ' + sName + (sSpec ? ' • ' + sSpec : '') + ' (' + sz + ')' + nl;
+      });
+    }
+  } else if (tgSelectedFiles && tgSelectedFiles.length > 1) {
+    // Skenario 2: Film dengan banyak resolusi / codec
     const qOrder = ['360p', '480p', '576p', '720p', '1080p', '2160p'];
     const sortedFiles = [...tgSelectedFiles].sort((a, b) => {
       const qa = detectQuality(a.name || a.path || '');
@@ -5552,28 +5636,66 @@ function openTelegramVisualPreview() {
   const btnContainer = document.getElementById('tgVisualButtons');
   if (btnContainer) {
     const mediaInfoUrl = (document.getElementById('tgMediaInfoUrl')?.value || '').trim();
-    let bh = '<div style="display: flex; gap: 8px; flex-wrap: wrap;">';
-    if (mediaInfoUrl) {
-      bh += '<div style="flex: 1; min-width: 120px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); padding: 8px 12px; border-radius: 8px; font-size: 0.8rem; color: #ffffff; text-align: center; font-weight: 600;">📄 MediaInfo ↗️</div>';
-    }
+    let bh = '';
     const selFiles = (typeof tgSelectedFiles !== 'undefined' && tgSelectedFiles.length > 0) ? tgSelectedFiles : (window._tgSelectedFiles || []);
     const cat = (document.getElementById('tgCategory')?.value || 'movies').toLowerCase();
     const isSeries = cat === 'series' || cat === 'anime';
+
     if (isSeries) {
-      bh += '<div style="flex: 1; min-width: 120px; background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.4); padding: 8px 12px; border-radius: 8px; font-size: 0.8rem; color: #38bdf8; text-align: center; font-weight: 600;">📁 Buka Folder ↗️</div>';
-    } else if (selFiles && selFiles.length > 0) {
+      const seasonMap = new Map();
+      selFiles.forEach(f => {
+        const fn = f.name || f.path || '';
+        const m = (fn + ' ' + (f.path || '')).match(/(?:^|[\/\s\.\-_])(?:S|Season\s*)(\d{1,2})(?:[\/\s\.\-_E]|$)/i);
+        const sNum = m ? parseInt(m[1], 10) : 1;
+        const sKey = 'Season ' + sNum;
+        if (!seasonMap.has(sKey)) seasonMap.set(sKey, []);
+        seasonMap.get(sKey).push(f);
+      });
+
+      if (seasonMap.size > 1) {
+        bh += '<div style="display: flex; flex-direction: column; gap: 8px;">';
+        if (mediaInfoUrl) {
+          bh += '<div style="background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); padding: 8px 12px; border-radius: 8px; font-size: 0.8rem; color: #ffffff; text-align: center; font-weight: 600;">📄 MediaInfo ↗️</div>';
+        }
+        bh += '<div style="display: flex; gap: 8px; flex-wrap: wrap;">';
+        Array.from(seasonMap.keys()).sort((a, b) => {
+          const na = parseInt(a.replace(/\D/g, '')) || 0;
+          const nb = parseInt(b.replace(/\D/g, '')) || 0;
+          return na - nb;
+        }).forEach(sName => {
+          bh += '<div style="flex: 1; min-width: 120px; background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.4); padding: 8px 12px; border-radius: 8px; font-size: 0.8rem; color: #38bdf8; text-align: center; font-weight: 600;">📁 ' + escapeHtml(sName) + ' ↗️</div>';
+        });
+        bh += '</div></div>';
+      } else {
+        bh += '<div style="display: flex; gap: 8px; flex-wrap: wrap;">';
+        if (mediaInfoUrl) {
+          bh += '<div style="flex: 1; min-width: 120px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); padding: 8px 12px; border-radius: 8px; font-size: 0.8rem; color: #ffffff; text-align: center; font-weight: 600;">📄 MediaInfo ↗️</div>';
+        }
+        bh += '<div style="flex: 1; min-width: 120px; background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.4); padding: 8px 12px; border-radius: 8px; font-size: 0.8rem; color: #38bdf8; text-align: center; font-weight: 600;">📁 Buka Folder ↗️</div>';
+        bh += '</div>';
+      }
+    } else if (selFiles && selFiles.length > 1) {
+      bh += '<div style="display: flex; flex-direction: column; gap: 8px;">';
+      if (mediaInfoUrl) {
+        bh += '<div style="background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); padding: 8px 12px; border-radius: 8px; font-size: 0.8rem; color: #ffffff; text-align: center; font-weight: 600;">📄 MediaInfo ↗️</div>';
+      }
       selFiles.forEach(f => {
         const fn = f.name || f.path || '';
         const parsed = parseFileName(fn);
         const q = detectQuality(fn);
         const c = formatCodec(parsed.codec || 'AV1');
-        const btnLabel = (selFiles.length > 1) ? (q + ' ' + c) : q;
-        bh += '<div style="flex: 1; min-width: 120px; background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.4); padding: 8px 12px; border-radius: 8px; font-size: 0.8rem; color: #38bdf8; text-align: center; font-weight: 600;">📥 Download ' + escapeHtml(btnLabel) + ' ↗️</div>';
+        const btnLabel = (q + ' ' + c).trim();
+        bh += '<div style="background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.4); padding: 8px 12px; border-radius: 8px; font-size: 0.8rem; color: #38bdf8; text-align: center; font-weight: 600;">📥 Download ' + escapeHtml(btnLabel) + ' ↗️</div>';
       });
+      bh += '</div>';
     } else {
+      bh += '<div style="display: flex; gap: 8px; flex-wrap: wrap;">';
+      if (mediaInfoUrl) {
+        bh += '<div style="flex: 1; min-width: 120px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); padding: 8px 12px; border-radius: 8px; font-size: 0.8rem; color: #ffffff; text-align: center; font-weight: 600;">📄 MediaInfo ↗️</div>';
+      }
       bh += '<div style="flex: 1; min-width: 120px; background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.4); padding: 8px 12px; border-radius: 8px; font-size: 0.8rem; color: #38bdf8; text-align: center; font-weight: 600;">📥 Download ↗️</div>';
+      bh += '</div>';
     }
-    bh += '</div>';
     btnContainer.innerHTML = bh;
   }
 
@@ -5613,30 +5735,85 @@ async function sendToTelegram() {
     return qOrder.indexOf(qa) - qOrder.indexOf(qb);
   });
 
-  const versions = sortedFiles.map(f => {
-    const fn = f.name || f.path || '';
-    const parsed = parseFileName(fn);
-    const q = detectQuality(fn);
-    const hdr = detectHDR(fn);
-    const c = formatCodec(parsed.codec || 'AV1');
-    const aTech = detectAudioTech(fn);
-    const aLabel = (aTech.codec + ' ' + aTech.channel + (aTech.atmos ? ' Atmos' : '')).trim();
-    let bit = '';
-    if (/(10bit|10-bit|10\s*bit|hi10p)/i.test(fn)) bit = '10-bit';
-    const vLabel = [q, hdr, c, bit].filter(Boolean).join(' ');
-    const fullLabel = [vLabel, aLabel].filter(Boolean).join(' • ');
+  const cat = (document.getElementById('tgCategory')?.value || 'movies').toLowerCase();
+  const isSeries = cat === 'series' || cat === 'anime';
 
-    const sz = f.size > 1073741824 ? (f.size / 1073741824).toFixed(2) + ' GB' : f.size > 1048576 ? (f.size / 1048576).toFixed(1) + ' MB' : (f.size / 1024).toFixed(0) + ' KB';
-    const dlLink = f.id ? (origin + '/file/' + f.id) : (f.path ? (origin + '/d/' + encodeURIComponent(f.path)) : '');
-    return {
-      quality: q,
-      codec: c,
-      label: fullLabel,
-      size: sz,
-      link: dlLink,
-      name: fn
-    };
-  });
+  let versions = [];
+  if (isSeries) {
+    const seasonMap = new Map();
+    sortedFiles.forEach(f => {
+      const fn = f.name || f.path || '';
+      const m = (fn + ' ' + (f.path || '')).match(/(?:^|[\/\s\.\-_])(?:S|Season\s*)(\d{1,2})(?:[\/\s\.\-_E]|$)/i);
+      const sNum = m ? parseInt(m[1], 10) : 1;
+      const sKey = 'Season ' + sNum;
+      if (!seasonMap.has(sKey)) seasonMap.set(sKey, []);
+      seasonMap.get(sKey).push(f);
+    });
+
+    if (seasonMap.size > 1) {
+      const sortedSeasons = Array.from(seasonMap.keys()).sort((a, b) => {
+        const na = parseInt(a.replace(/\D/g, '')) || 0;
+        const nb = parseInt(b.replace(/\D/g, '')) || 0;
+        return na - nb;
+      });
+      versions = sortedSeasons.map(sName => {
+        const sFiles = seasonMap.get(sName);
+        let totalBytes = 0;
+        let sQuality = '';
+        let sCodec = '';
+        sFiles.forEach(f => {
+          totalBytes += (f.size || 0);
+          if (!sQuality) sQuality = detectQuality(f.name || f.path || '');
+          if (!sCodec) {
+            const p = parseFileName(f.name || f.path || '');
+            sCodec = formatCodec(p.codec || 'AV1');
+          }
+        });
+        const fsz = totalBytes > 1073741824 ? (totalBytes / 1073741824).toFixed(2) + ' GB' : totalBytes > 1048576 ? (totalBytes / 1048576).toFixed(1) + ' MB' : (totalBytes / 1024).toFixed(0) + ' KB';
+        const sSpec = [sQuality, sCodec].filter(Boolean).join(' ');
+        const f0 = sFiles[0];
+        let sPath = '';
+        if (f0 && f0.path && f0.path.includes('/')) {
+          sPath = f0.path.substring(0, f0.path.lastIndexOf('/'));
+        } else if (typeof currentPath !== 'undefined' && currentPath) {
+          sPath = currentPath;
+        }
+        const sUrl = sPath ? (origin + '/?p=' + encodeURIComponent(sPath)) : origin;
+        return {
+          label: sName + (sSpec ? ' • ' + sSpec : ''),
+          size: fsz,
+          link: sUrl,
+          isSeason: true,
+          seasonName: sName
+        };
+      });
+    }
+  } else {
+    versions = sortedFiles.map(f => {
+      const fn = f.name || f.path || '';
+      const parsed = parseFileName(fn);
+      const q = detectQuality(fn);
+      const hdr = detectHDR(fn);
+      const c = formatCodec(parsed.codec || 'AV1');
+      const aTech = detectAudioTech(fn);
+      const aLabel = (aTech.codec + ' ' + aTech.channel + (aTech.atmos ? ' Atmos' : '')).trim();
+      let bit = '';
+      if (/(10bit|10-bit|10\s*bit|hi10p)/i.test(fn)) bit = '10-bit';
+      const vLabel = [q, hdr, c, bit].filter(Boolean).join(' ');
+      const fullLabel = [vLabel, aLabel].filter(Boolean).join(' • ');
+
+      const sz = f.size > 1073741824 ? (f.size / 1073741824).toFixed(2) + ' GB' : f.size > 1048576 ? (f.size / 1048576).toFixed(1) + ' MB' : (f.size / 1024).toFixed(0) + ' KB';
+      const dlLink = f.id ? (origin + '/file/' + f.id) : (f.path ? (origin + '/d/' + encodeURIComponent(f.path)) : '');
+      return {
+        quality: q,
+        codec: c,
+        label: fullLabel,
+        size: sz,
+        link: dlLink,
+        name: fn
+      };
+    });
+  }
 
   const hashtagsRaw = document.getElementById('tgHashtags').value;
   const hashtags = hashtagsRaw.split(' ').map(t => t.trim()).filter(t => t && t !== '#').map(t => t.startsWith('#') ? t.slice(1) : t);
