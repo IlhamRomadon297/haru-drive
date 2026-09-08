@@ -4877,7 +4877,7 @@ async function extractSpecsAndMediaInfo(file) {
     // Urutan resolusi: 720p dsb -> 1080p -> 2160p
     const qOrder = ['360p', '480p', '576p', '720p', '1080p', '2160p'];
     qList.sort((a, b) => qOrder.indexOf(a) - qOrder.indexOf(b));
-    const combinedQ = qList.join(' & ');
+    const combinedQ = qList.length > 2 ? qList.join(', ') : qList.join(' & ');
 
     // Kumpulkan seluruh codec unik
     const cList = [];
