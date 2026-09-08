@@ -4409,7 +4409,11 @@ function cleanSubtitleLanguages(subs) {
   let str = typeof subs === 'string' ? subs : Array.isArray(subs) ? subs.join(', ') : JSON.stringify(subs);
   
   // Normalize capital letters immediately
-  str = str.replace(/\benglish\b/gi, 'English').replace(/\bindonesian\b/gi, 'Indonesian').replace(/\bjapanese\b/gi, 'Japanese').replace(/\bmalay\b/gi, 'Malay').replace(/\bkorean\b/gi, 'Korean');
+  str = str.replace(/(?:^|[^a-zA-Z])english(?:[^a-zA-Z]|$)/gi, ' English ')
+           .replace(/(?:^|[^a-zA-Z])indonesian(?:[^a-zA-Z]|$)/gi, ' Indonesian ')
+           .replace(/(?:^|[^a-zA-Z])japanese(?:[^a-zA-Z]|$)/gi, ' Japanese ')
+           .replace(/(?:^|[^a-zA-Z])malay(?:[^a-zA-Z]|$)/gi, ' Malay ')
+           .replace(/(?:^|[^a-zA-Z])korean(?:[^a-zA-Z]|$)/gi, ' Korean ');
 
   const langMap = {
     'id': 'Indonesian', 'ind': 'Indonesian', 'indonesia': 'Indonesian', 'indonesian': 'Indonesian',
@@ -4531,14 +4535,13 @@ function formatCodec(raw) {
 
 function detectQuality(name) {
   if (!name) return '1080p';
-  const s = ' ' + String(name).replace(/[\.\-_\+\[\]\(\)]/g, ' ') + ' ';
-  if (/\b(4K|2160p?|UHD|3840x2160)\b/i.test(s)) return '2160p';
-  if (/\b(1080p?|1080i|FHD|1920x1080)\b/i.test(s)) return '1080p';
-  if (/\b(720p?|HD|1280x720)\b/i.test(s)) return '720p';
-  if (/\b(576p?|480p?|SD|360p?)\b/i.test(s)) {
-    const m = s.match(/\b(576p?|480p?|360p?)\b/i);
-    return m ? m[0].toLowerCase() : '480p';
-  }
+  const s = ' ' + String(name).replace(/[^a-zA-Z0-9]/g, ' ').toUpperCase() + ' ';
+  if (s.includes(' 2160P ') || s.includes(' 2160 ') || s.includes(' 4K ') || s.includes(' UHD ') || s.includes(' 3840X2160 ')) return '2160p';
+  if (s.includes(' 1080P ') || s.includes(' 1080I ') || s.includes(' 1080 ') || s.includes(' FHD ') || s.includes(' 1920X1080 ')) return '1080p';
+  if (s.includes(' 720P ') || s.includes(' 720 ') || s.includes(' HD ') || s.includes(' 1280X720 ')) return '720p';
+  if (s.includes(' 576P ') || s.includes(' 576 ')) return '576p';
+  if (s.includes(' 480P ') || s.includes(' 480 ') || s.includes(' SD ')) return '480p';
+  if (s.includes(' 360P ') || s.includes(' 360 ')) return '360p';
   return '1080p';
 }
 
@@ -4662,7 +4665,7 @@ function detectHDR(fn) {
   if (/(DV|DoVi|Dolby[\.\s_-]*Vision)/i.test(fn)) return 'DV';
   if (/HDR10\+/i.test(fn)) return 'HDR10+';
   if (/HDR10/i.test(fn)) return 'HDR10';
-  if (/\bHDR\b/i.test(fn)) return 'HDR';
+  if (/(?:^|[^a-zA-Z0-9])HDR(?:[^a-zA-Z0-9]|$)/i.test(fn)) return 'HDR';
   return '';
 }
 
@@ -4701,22 +4704,22 @@ function detectAudioTech(fn) {
 
 function detectPlatformTag(str) {
   if (!str) return '';
-  const s = ' ' + String(str).replace(/[^a-zA-Z0-9]/g, ' ') + ' ';
-  if (/\b(NF|NETFLIX)\b/i.test(s)) return 'Netflix';
-  if (/\b(BILI|BILIBILI|BSTATION)\b/i.test(s)) return 'BiliBili';
-  if (/\b(CR|CRUNCHYROLL)\b/i.test(s)) return 'Crunchyroll';
-  if (/\b(DSNP|DISNEY\+?|DISNEYPLUS)\b/i.test(s)) return 'DisneyPlus';
-  if (/\b(VIU)\b/i.test(s)) return 'VIU';
-  if (/\b(HMAX|HBOMAX|MAX)\b/i.test(s)) return 'HBOMax';
-  if (/\b(AMZN|PRIMEVIDEO|PRIME)\b/i.test(s)) return 'PrimeVideo';
-  if (/\b(ATVP|APPLETV|APPLE\s*TV)\b/i.test(s)) return 'AppleTV';
-  if (/\b(IQ|IQIYI)\b/i.test(s)) return 'iQiyi';
-  if (/\b(WETV)\b/i.test(s)) return 'WeTV';
-  if (/\b(CP|CATCHPLAY)\b/i.test(s)) return 'Catchplay';
-  if (/\b(HOTSTAR)\b/i.test(s)) return 'Hotstar';
-  if (/\b(HULU)\b/i.test(s)) return 'Hulu';
-  if (/\b(PEAC|PEACOCK)\b/i.test(s)) return 'Peacock';
-  if (/\b(PARAMOUNT\+?|PARAMOUNTPLUS|PMNT)\b/i.test(s)) return 'ParamountPlus';
+  const s = ' ' + String(str).replace(/[^a-zA-Z0-9]/g, ' ').toUpperCase() + ' ';
+  if (s.includes(' NF ') || s.includes(' NETFLIX ')) return 'Netflix';
+  if (s.includes(' BILI ') || s.includes(' BILIBILI ') || s.includes(' BSTATION ')) return 'BiliBili';
+  if (s.includes(' CR ') || s.includes(' CRUNCHYROLL ')) return 'Crunchyroll';
+  if (s.includes(' DSNP ') || s.includes(' DISNEY ') || s.includes(' DISNEYPLUS ')) return 'DisneyPlus';
+  if (s.includes(' VIU ')) return 'VIU';
+  if (s.includes(' HMAX ') || s.includes(' HBOMAX ') || s.includes(' MAX ')) return 'HBOMax';
+  if (s.includes(' AMZN ') || s.includes(' PRIMEVIDEO ') || s.includes(' PRIME ')) return 'PrimeVideo';
+  if (s.includes(' ATVP ') || s.includes(' APPLETV ') || s.includes(' APPLE TV ')) return 'AppleTV';
+  if (s.includes(' IQ ') || s.includes(' IQIYI ')) return 'iQiyi';
+  if (s.includes(' WETV ')) return 'WeTV';
+  if (s.includes(' CP ') || s.includes(' CATCHPLAY ')) return 'Catchplay';
+  if (s.includes(' HOTSTAR ')) return 'Hotstar';
+  if (s.includes(' HULU ')) return 'Hulu';
+  if (s.includes(' PEAC ') || s.includes(' PEACOCK ')) return 'Peacock';
+  if (s.includes(' PMNT ') || s.includes(' PARAMOUNT ') || s.includes(' PARAMOUNTPLUS ')) return 'ParamountPlus';
   return '';
 }
 
@@ -4844,7 +4847,7 @@ async function extractSpecsAndMediaInfo(file) {
   }
 
   // Clean duplicate bits-bit
-  videoSpec = videoSpec.replace(/\b(\d+)\s*bits?-bit\b/gi, '$1-bit').replace(/\b(\d+)\s*bits\b/gi, '$1-bit');
+  videoSpec = videoSpec.replace(/(\d+)\s*bits?-bit/gi, '$1-bit').replace(/(\d+)\s*bits/gi, '$1-bit');
 
   // Gabungkan spec teknis di baris atas: Format Video & Codec Audio
   const audioTechLabel = (audioCodec + ' ' + audioChannel + (atmos ? ' Atmos' : '')).trim();
@@ -4855,12 +4858,31 @@ async function extractSpecsAndMediaInfo(file) {
     const qList = [];
     tgSelectedFiles.forEach(f => {
       const fq = detectQuality(f.name || f.path || '');
-      if (!qList.includes(fq)) qList.push(fq);
+      if (fq && !qList.includes(fq)) qList.push(fq);
     });
     const qOrder = ['2160p', '1080p', '720p', '480p', '360p'];
     qList.sort((a, b) => qOrder.indexOf(a) - qOrder.indexOf(b));
     const combinedQ = qList.join(' & ');
-    topTechSpec = combinedQ + ' Multi-Codec';
+
+    // Kumpulkan seluruh codec unik
+    const cList = [];
+    tgSelectedFiles.forEach(f => {
+      const p = parseFileName(f.name || f.path || '');
+      const c = formatCodec(p.codec || f.name || '');
+      if (c && !cList.includes(c)) cList.push(c);
+    });
+
+    const isDual = tgSelectedFiles.length === 2;
+    let type = 'Resolution';
+    if (cList.length > 1) {
+      type = 'Codec';
+    } else if (qList.length > 1) {
+      type = 'Resolution';
+    } else {
+      type = 'Version';
+    }
+    const tag = isDual ? ('Dual-' + type) : ('Multi-' + type);
+    topTechSpec = (combinedQ ? combinedQ + ' ' : '') + tag;
   } else if (audioTechLabel) {
     topTechSpec = videoSpec + ' • ' + audioTechLabel;
   }
@@ -5052,25 +5074,60 @@ function closeTelegramModal() {
 
 function parseFileName(name) {
   if (!name) return {};
-  const clean = name.replace(/\.[^.]+$/, '').replace(/_/g, ' ').replace(/\./g, ' ');
-  const yearMatch = clean.match(/\b(19|20)\d{2}\b/);
-  const year = yearMatch ? yearMatch[0] : '';
-  const seasonMatch = clean.match(/S\d{1,2}/i);
-  const season = seasonMatch ? seasonMatch[0].toUpperCase() : '';
-  const qualityMatch = clean.match(/\b(4K|2160p|1080p|1080i|720p|576p|480p|360p)\b/i);
-  const quality = qualityMatch ? qualityMatch[0].toLowerCase() : '1080p';
-  const codecMatch = clean.match(/\b(AV1|AVC|HEVC|x264|x265|H\.?264|H\.?265|XviD|VP9)\b/i);
-  const codec = codecMatch ? codecMatch[0].replace(/\./g, '') : 'AV1';
-  const sourceMatch = clean.match(/\b(NF|WEB\-?DL|WEB\-?RIP|BluRay|BDRip|HDRip|DVDRip|AMZN|Disney|Hulu)\b/i);
-  const source = sourceMatch ? sourceMatch[0].toUpperCase() : '';
-  const audioMatch = clean.match(/\b(AAC2\.0|AAC|DTS|DTS\-HD|Dolby|DDP?5\.1|Atmos|FLAC|AC3|EAC3|DDP2\.0)\b/i);
-  const audio = audioMatch ? audioMatch[0] : '';
-  let title = clean;
+  const clean = ' ' + String(name).replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9]/g, ' ') + ' ';
+  const upper = clean.toUpperCase();
+
+  // Year: 1900-2099
+  const yearMatch = clean.match(/(?:^|[^0-9])(19\d{2}|20\d{2})(?:[^0-9]|$)/);
+  const year = yearMatch ? yearMatch[1] : '';
+
+  // Season: S01, S1, etc.
+  const seasonMatch = upper.match(/(?:^|[^a-zA-Z0-9])S(\d{1,2})(?:[^a-zA-Z0-9]|$)/);
+  const season = seasonMatch ? 'S' + seasonMatch[1] : '';
+
+  // Quality: use detectQuality directly
+  const quality = detectQuality(name);
+
+  // Codec
+  let codec = 'AV1';
+  if (upper.includes(' AV1 ')) codec = 'AV1';
+  else if (upper.includes(' HEVC ') || upper.includes(' X265 ') || upper.includes(' H265 ')) codec = 'HEVC';
+  else if (upper.includes(' AVC ') || upper.includes(' X264 ') || upper.includes(' H264 ')) codec = 'H.264';
+  else if (upper.includes(' VP9 ')) codec = 'VP9';
+  else if (upper.includes(' XVID ')) codec = 'XviD';
+
+  // Source
+  let source = '';
+  if (upper.includes(' NF ') || upper.includes(' NETFLIX ')) source = 'NF';
+  else if (upper.includes(' WEB DL ') || upper.includes(' WEBDL ')) source = 'WEB-DL';
+  else if (upper.includes(' WEBRIP ') || upper.includes(' WEB RIP ')) source = 'WEBRip';
+  else if (upper.includes(' BLURAY ')) source = 'BluRay';
+  else if (upper.includes(' BDRIP ')) source = 'BDRip';
+  else if (upper.includes(' HDRIP ')) source = 'HDRip';
+  else if (upper.includes(' DVDRIP ')) source = 'DVDRip';
+  else if (upper.includes(' AMZN ')) source = 'AMZN';
+  else if (upper.includes(' DISNEY ') || upper.includes(' DSNP ')) source = 'Disney+';
+  else if (upper.includes(' HULU ')) source = 'Hulu';
+
+  // Audio
+  let audio = '';
+  if (upper.includes(' AAC2 0 ') || upper.includes(' AAC 2 0 ') || upper.includes(' AAC20 ')) audio = 'AAC 2.0';
+  else if (upper.includes(' AAC5 1 ') || upper.includes(' AAC 5 1 ') || upper.includes(' AAC51 ')) audio = 'AAC 5.1';
+  else if (upper.includes(' DDP5 1 ') || upper.includes(' DDP 5 1 ') || upper.includes(' EAC3 5 1 ')) audio = 'DDP 5.1';
+  else if (upper.includes(' DDP2 0 ') || upper.includes(' DDP 2 0 ') || upper.includes(' EAC3 2 0 ')) audio = 'DDP 2.0';
+  else if (upper.includes(' ATMOS ')) audio = 'Atmos';
+  else if (upper.includes(' DTS HD ') || upper.includes(' DTSHD ')) audio = 'DTS-HD';
+  else if (upper.includes(' DTS ')) audio = 'DTS';
+  else if (upper.includes(' FLAC ')) audio = 'FLAC';
+  else if (upper.includes(' AC3 ')) audio = 'AC3';
+  else if (upper.includes(' AAC ')) audio = 'AAC';
+
+  let title = String(name).replace(/\.[^.]+$/, '').replace(/[\.\-_]/g, ' ');
   if (year) title = title.split(year)[0].trim();
-  if (season) title = title.split(season)[0].trim();
-  title = title.replace(/\s*(NF|WEB\-?DL|BluRay|1080p|720p|4K|AV1|x264|x265|AAC.*|DDP?.*|HEVC|H\.264|H\.265).*$/i, '').trim();
+  if (season) title = title.split(new RegExp('S\\d{1,2}', 'i'))[0].trim();
+  title = title.replace(/\s*(NF|WEB[\s\-]?DL|BluRay|2160p|1080p|720p|4K|AV1|x264|x265|AAC.*|DDP?.*|HEVC|H[\.\s]?264|H[\.\s]?265).*$/i, '').trim();
   title = title.replace(/-/g, ' ').split(' ').filter(Boolean).join(' ').trim();
-  const cleanTitle = title || clean.split(' ').filter(Boolean).slice(0, 4).join(' ');
+  const cleanTitle = title || name.split('.')[0].replace(/[^a-zA-Z0-9]/g, ' ').split(' ').filter(Boolean).slice(0, 4).join(' ');
   return { title, cleanTitle, year, season, quality, codec, source, audio };
 }
 
@@ -5517,7 +5574,7 @@ async function sendToTelegram() {
   const versions = tgSelectedFiles.map(f => {
     const fn = f.name || f.path || '';
     const parsed = parseFileName(fn);
-    const q = formatQuality(parsed.quality || '1080p');
+    const q = detectQuality(fn);
     const hdr = detectHDR(fn);
     const c = formatCodec(parsed.codec || 'AV1');
     const aTech = detectAudioTech(fn);
