@@ -4404,39 +4404,52 @@ async function cancelMirrorTask(runId) {
 let tgSelectedFiles = [];
 let _tgLivePreviewSetup = false;
 
+function detectCleanLanguage(str) {
+  if (!str) return '';
+  const s = ' ' + String(str).replace(/[^a-zA-Z0-9]/g, ' ').toUpperCase() + ' ';
+  if (s.includes(' INDONESIA ') || s.includes(' INDONESIAN ') || s.includes(' IND ') || s.includes(' ID ')) return 'Indonesian';
+  if (s.includes(' ENGLISH ') || s.includes(' ENG ') || s.includes(' EN ')) return 'English';
+  if (s.includes(' JAPANESE ') || s.includes(' JPN ') || s.includes(' JA ') || s.includes(' JEPANG ')) return 'Japanese';
+  if (s.includes(' MALAY ') || s.includes(' MAY ') || s.includes(' MS ') || s.includes(' MELAYU ')) return 'Malay';
+  if (s.includes(' KOREAN ') || s.includes(' KOR ') || s.includes(' KO ')) return 'Korean';
+  if (s.includes(' CHINESE ') || s.includes(' CHI ') || s.includes(' ZH ') || s.includes(' ZHO ')) return 'Chinese';
+  if (s.includes(' ARABIC ') || s.includes(' ARA ') || s.includes(' AR ')) return 'Arabic';
+  if (s.includes(' GERMAN ') || s.includes(' GER ') || s.includes(' DE ') || s.includes(' DEU ')) return 'German';
+  if (s.includes(' SPANISH ') || s.includes(' SPA ') || s.includes(' ES ')) return 'Spanish';
+  if (s.includes(' FRENCH ') || s.includes(' FRE ') || s.includes(' FRA ') || s.includes(' FR ')) return 'French';
+  if (s.includes(' RUSSIAN ') || s.includes(' RUS ') || s.includes(' RU ')) return 'Russian';
+  if (s.includes(' THAI ') || s.includes(' THA ') || s.includes(' TH ')) return 'Thai';
+  if (s.includes(' VIETNAMESE ') || s.includes(' VIE ') || s.includes(' VI ')) return 'Vietnamese';
+  return '';
+}
+
 function cleanSubtitleLanguages(subs) {
   if (!subs) return 'Indonesian & English';
-  let str = typeof subs === 'string' ? subs : Array.isArray(subs) ? subs.join(', ') : JSON.stringify(subs);
-  
-  // Normalize capital letters immediately
-  str = str.replace(/(?:^|[^a-zA-Z])english(?:[^a-zA-Z]|$)/gi, ' English ')
-           .replace(/(?:^|[^a-zA-Z])indonesian(?:[^a-zA-Z]|$)/gi, ' Indonesian ')
-           .replace(/(?:^|[^a-zA-Z])japanese(?:[^a-zA-Z]|$)/gi, ' Japanese ')
-           .replace(/(?:^|[^a-zA-Z])malay(?:[^a-zA-Z]|$)/gi, ' Malay ')
-           .replace(/(?:^|[^a-zA-Z])korean(?:[^a-zA-Z]|$)/gi, ' Korean ');
+  let rawItems = [];
+  if (Array.isArray(subs)) {
+    rawItems = subs;
+  } else if (typeof subs === 'string') {
+    rawItems = subs.split(/[,&/+|]+/);
+  } else {
+    rawItems = [String(subs)];
+  }
 
-  const langMap = {
-    'id': 'Indonesian', 'ind': 'Indonesian', 'indonesia': 'Indonesian', 'indonesian': 'Indonesian',
-    'en': 'English', 'eng': 'English', 'english': 'English',
-    'ja': 'Japanese', 'jpn': 'Japanese', 'jepang': 'Japanese', 'japanese': 'Japanese',
-    'ms': 'Malay', 'zlm': 'Malay', 'may': 'Malay', 'malay': 'Malay', 'melayu': 'Malay',
-    'ko': 'Korean', 'kor': 'Korean', 'korean': 'Korean',
-    'zh': 'Chinese', 'zho': 'Chinese', 'chi': 'Chinese',
-    'ar': 'Arabic', 'ara': 'Arabic',
-    'de': 'German', 'ger': 'German', 'deu': 'German',
-    'es': 'Spanish', 'spa': 'Spanish',
-    'fr': 'French', 'fre': 'French', 'fra': 'French',
-    'ru': 'Russian', 'rus': 'Russian',
-    'th': 'Thai', 'tha': 'Thai',
-    'vi': 'Vietnamese', 'vie': 'Vietnamese'
-  };
-
-  const tokens = str.split(/[,&/+|]+/).map(s => s.trim()).filter(Boolean);
   const cleanList = [];
-  tokens.forEach(t => {
-    const lower = t.toLowerCase();
-    const mapped = langMap[lower] || (t ? t.charAt(0).toUpperCase() + t.slice(1) : '');
-    if (mapped && !cleanList.includes(mapped)) cleanList.push(mapped);
+  rawItems.forEach(item => {
+    if (!item) return;
+    const str = String(item).trim();
+    if (!str) return;
+    const detected = detectCleanLanguage(str);
+    if (detected) {
+      if (!cleanList.includes(detected)) cleanList.push(detected);
+    } else {
+      const cleanFallback = str.replace(/\[.*?\]|\(.*?\)/g, '').replace(/[^a-zA-Z]/g, ' ').trim();
+      const word = cleanFallback ? cleanFallback.split(' ')[0] : '';
+      if (word && word.length >= 2) {
+        const titleCase = word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+        if (!cleanList.includes(titleCase)) cleanList.push(titleCase);
+      }
+    }
   });
 
   if (cleanList.length === 0) return 'Indonesian & English';
@@ -4447,7 +4460,7 @@ function cleanSubtitleLanguages(subs) {
 
   if (matchedPrio.length > 0) {
     if (matchedPrio.length <= 2 && otherLangs.length === 0) {
-      return matchedPrio.join(' & ');
+      return matchedPrio.join(', ');
     }
     const display = matchedPrio.slice(0, 3);
     if (matchedPrio.length > 3 || otherLangs.length > 0) {
@@ -4459,36 +4472,28 @@ function cleanSubtitleLanguages(subs) {
 }
 
 function cleanAudioLanguages(rawList) {
-  if (!rawList) return 'Japanese';
+  if (!rawList) return 'Indonesian';
   let arr = Array.isArray(rawList) ? rawList : String(rawList).split(/[,/&]/);
-
-  const langMap = {
-    'id': 'Indonesian', 'ind': 'Indonesian', 'indonesia': 'Indonesian', 'indonesian': 'Indonesian',
-    'en': 'English', 'eng': 'English',
-    'ja': 'Japanese', 'jpn': 'Japanese', 'jepang': 'Japanese',
-    'ko': 'Korean', 'kor': 'Korean',
-    'ms': 'Malay', 'zlm': 'Malay', 'may': 'Malay', 'malay': 'Malay', 'melayu': 'Malay',
-    'zh': 'Chinese', 'zho': 'Chinese', 'chi': 'Chinese',
-    'th': 'Thai', 'tha': 'Thai',
-    'de': 'German', 'ger': 'German', 'deu': 'German',
-    'fr': 'French', 'fre': 'French', 'fra': 'French',
-    'es': 'Spanish', 'spa': 'Spanish', 'es-419': 'Spanish', 'es-es': 'Spanish',
-    'it': 'Italian', 'ita': 'Italian',
-    'pt': 'Portuguese', 'por': 'Portuguese', 'pt-br': 'Portuguese'
-  };
 
   const cleanList = [];
   arr.forEach(s => {
     let cleanStr = String(s).trim();
+    if (!cleanStr) return;
     cleanStr = cleanStr.replace(/\s*(AAC.*|DDP.*|DTS.*|FLAC.*|AC3.*|Atmos.*|5\.1|2\.0|7\.1)/gi, '').trim();
-    const low = cleanStr.toLowerCase();
-    const mapped = langMap[low] || (cleanStr ? cleanStr.charAt(0).toUpperCase() + cleanStr.slice(1) : '');
-    if (mapped && !cleanList.includes(mapped)) {
-      cleanList.push(mapped);
+    const detected = detectCleanLanguage(cleanStr);
+    if (detected) {
+      if (!cleanList.includes(detected)) cleanList.push(detected);
+    } else {
+      const cleanFallback = cleanStr.replace(/\[.*?\]|\(.*?\)/g, '').replace(/[^a-zA-Z]/g, ' ').trim();
+      const word = cleanFallback ? cleanFallback.split(' ')[0] : '';
+      if (word && word.length >= 2) {
+        const titleCase = word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+        if (!cleanList.includes(titleCase)) cleanList.push(titleCase);
+      }
     }
   });
 
-  if (cleanList.length === 0) return 'Japanese';
+  if (cleanList.length === 0) return 'Indonesian';
 
   const priority = ['Indonesian', 'English', 'Japanese', 'Korean', 'Malay'];
   const hasIndonesian = cleanList.includes('Indonesian');
@@ -4580,6 +4585,15 @@ function setupTelegramLivePreview() {
         searchTMDB();
       }
     });
+  }
+  const pModal = document.getElementById('tgVisualPreviewModal');
+  if (pModal) {
+    pModal.addEventListener('wheel', (e) => {
+      const vb = document.getElementById('tgVisualPreviewBody');
+      if (vb) {
+        vb.scrollTop += e.deltaY;
+      }
+    }, { passive: true });
   }
 }
 
@@ -4860,7 +4874,8 @@ async function extractSpecsAndMediaInfo(file) {
       const fq = detectQuality(f.name || f.path || '');
       if (fq && !qList.includes(fq)) qList.push(fq);
     });
-    const qOrder = ['2160p', '1080p', '720p', '480p', '360p'];
+    // Urutan resolusi: 720p dsb -> 1080p -> 2160p
+    const qOrder = ['360p', '480p', '576p', '720p', '1080p', '2160p'];
     qList.sort((a, b) => qOrder.indexOf(a) - qOrder.indexOf(b));
     const combinedQ = qList.join(' & ');
 
@@ -5324,8 +5339,15 @@ function generateTGCaption() {
 
   // 4. Pilihan Versi jika lebih dari 1 file terpilih (Bahasa Indonesia)
   if (tgSelectedFiles && tgSelectedFiles.length > 1) {
+    const qOrder = ['360p', '480p', '576p', '720p', '1080p', '2160p'];
+    const sortedFiles = [...tgSelectedFiles].sort((a, b) => {
+      const qa = detectQuality(a.name || a.path || '');
+      const qb = detectQuality(b.name || b.path || '');
+      return qOrder.indexOf(qa) - qOrder.indexOf(qb);
+    });
+
     cap += nl + '📁 <b>Pilihan Versi:</b>' + nl;
-    tgSelectedFiles.forEach(f => {
+    sortedFiles.forEach(f => {
       const fn = f.name || f.path || '';
       const parsed = parseFileName(fn);
       const q = detectQuality(fn);
@@ -5571,7 +5593,14 @@ async function sendToTelegram() {
   const specVideo = document.getElementById('tgSpecVideo')?.value || '';
   const specQ = specVideo ? specVideo.split(' ')[0] : '';
   
-  const versions = tgSelectedFiles.map(f => {
+  const qOrder = ['360p', '480p', '576p', '720p', '1080p', '2160p'];
+  const sortedFiles = [...tgSelectedFiles].sort((a, b) => {
+    const qa = detectQuality(a.name || a.path || '');
+    const qb = detectQuality(b.name || b.path || '');
+    return qOrder.indexOf(qa) - qOrder.indexOf(qb);
+  });
+
+  const versions = sortedFiles.map(f => {
     const fn = f.name || f.path || '';
     const parsed = parseFileName(fn);
     const q = detectQuality(fn);
@@ -7044,11 +7073,11 @@ function adminConsoleUI() {
           </div>
           <div>
             <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Year</label>
-            <input type="text" id="tgYear" class="form-input-pro" placeholder="2024" style="margin-top: 4px;">
+            <input type="text" id="tgYear" class="form-input-pro" placeholder="Contoh: 2025" style="margin-top: 4px;">
           </div>
           <div>
             <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Rating</label>
-            <input type="text" id="tgRating" class="form-input-pro" placeholder="8.5" style="margin-top: 4px;">
+            <input type="text" id="tgRating" class="form-input-pro" placeholder="Contoh: 7.8" style="margin-top: 4px;">
           </div>
           <div>
             <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Category</label>
@@ -7074,15 +7103,15 @@ function adminConsoleUI() {
         <div class="tg-form-grid-3">
           <div>
             <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Genre</label>
-            <input type="text" id="tgGenres" class="form-input-pro" placeholder="Action, Thriller, Drama" style="margin-top: 4px;">
+            <input type="text" id="tgGenres" class="form-input-pro" placeholder="Contoh: Action, Drama" style="margin-top: 4px;">
           </div>
           <div>
             <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Release Date</label>
-            <input type="text" id="tgReleaseDate" class="form-input-pro" placeholder="2024-05-18" style="margin-top: 4px;">
+            <input type="text" id="tgReleaseDate" class="form-input-pro" placeholder="YYYY-MM-DD" style="margin-top: 4px;">
           </div>
           <div>
             <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Negara</label>
-            <input type="text" id="tgCountry" class="form-input-pro" placeholder="Japan" style="margin-top: 4px;">
+            <input type="text" id="tgCountry" class="form-input-pro" placeholder="Contoh: Indonesia" style="margin-top: 4px;">
           </div>
         </div>
 
@@ -7149,8 +7178,8 @@ function adminConsoleUI() {
 
   <!-- TELEGRAM VISUAL PREVIEW MODAL -->
   <div id="tgVisualPreviewModal" class="modal-backdrop" style="display: none; z-index: 10005; overflow-y: auto;">
-    <div class="modal-card glass" style="max-width: 640px; width: 100%; border: 1px solid rgba(56, 189, 248, 0.4); box-shadow: 0 25px 60px rgba(0, 0, 0, 0.7); display: flex; flex-direction: column; max-height: 90vh; margin: auto;">
-      <div class="modal-header" style="border-bottom: 1px solid var(--border); padding: 12px 18px; display: flex; justify-content: space-between; align-items: center;">
+    <div class="modal-card glass" style="max-width: 640px; width: 100%; height: 85vh; max-height: 85vh; border: 1px solid rgba(56, 189, 248, 0.4); box-shadow: 0 25px 60px rgba(0, 0, 0, 0.7); display: flex; flex-direction: column; overflow: hidden; margin: auto;">
+      <div class="modal-header" style="flex-shrink: 0; border-bottom: 1px solid var(--border); padding: 12px 18px; display: flex; justify-content: space-between; align-items: center;">
         <div style="display: flex; align-items: center; gap: 8px;">
           <span style="font-size: 1.1rem;">👁️</span>
           <span class="modal-title" style="font-size: 0.95rem; font-weight: 700; color: #38bdf8;">Preview Post Telegram (HaruDrive)</span>
@@ -7160,7 +7189,7 @@ function adminConsoleUI() {
         </button>
       </div>
 
-      <div id="tgVisualPreviewBody" class="modal-body" style="flex: 1 1 auto; min-height: 0 !important; overflow-y: auto !important; max-height: calc(88vh - 120px); overscroll-behavior: contain; padding: 16px 20px; -webkit-overflow-scrolling: touch;">
+      <div id="tgVisualPreviewBody" class="modal-body" tabindex="0" style="flex: 1 1 0; min-height: 0; height: 100%; overflow-y: scroll; overscroll-behavior: contain; padding: 16px 20px; -webkit-overflow-scrolling: touch;">
         <!-- Telegram Dark Bubble Card Mockup -->
         <div style="background: #182533; border-radius: 14px; overflow: hidden; border: 1px solid rgba(255,255,255,0.08); box-shadow: 0 10px 30px rgba(0,0,0,0.5); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
           <!-- Bubble Banner Image (Limited max height for easy scrolling) -->
