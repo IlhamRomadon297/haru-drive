@@ -5369,6 +5369,23 @@ function generateTGCaption() {
   let sz = '';
   if (!isSeries && first && first.size && (!tgSelectedFiles || tgSelectedFiles.length === 1)) {
     sz = first.size > 1073741824 ? (first.size / 1073741824).toFixed(2) + ' GB' : first.size > 1048576 ? (first.size / 1048576).toFixed(1) + ' MB' : (first.size / 1024).toFixed(0) + ' KB';
+  } else if (isSeries && tgSelectedFiles && tgSelectedFiles.length > 0) {
+    // Untuk series single season, tampilkan total ukuran semua file di block spec
+    // Untuk multi-season, ukuran per season sudah ditampilkan di Pilihan Versi
+    const seasonNums = new Set();
+    tgSelectedFiles.forEach(f => {
+      const fn = f.name || f.path || '';
+      const m = (fn + ' ' + (f.path || '')).match(/(?:^|[\/\s\.\-_])(?:S|Season\s*)(\d{1,2})(?:[\/\s\.\-_E]|$)/i);
+      seasonNums.add(m ? parseInt(m[1], 10) : 1);
+    });
+    if (seasonNums.size === 1) {
+      // Single season: tampilkan total ukuran di block spec
+      const totalBytes = tgSelectedFiles.reduce((acc, f) => acc + (f.size || 0), 0);
+      if (totalBytes > 0) {
+        sz = totalBytes > 1073741824 ? (totalBytes / 1073741824).toFixed(2) + ' GB' : totalBytes > 1048576 ? (totalBytes / 1048576).toFixed(1) + ' MB' : (totalBytes / 1024).toFixed(0) + ' KB';
+      }
+    }
+    // Multi-season: omit sz dari block spec, sudah per-season di Pilihan Versi
   }
   
   const specParts = [];
@@ -5416,17 +5433,24 @@ function generateTGCaption() {
         const sFiles = seasonMap.get(sName);
         let totalBytes = 0;
         let sQuality = '';
-        let sCodec = '';
+        const sCodecs = [];
+        let sAudio = '';
         sFiles.forEach(f => {
           totalBytes += (f.size || 0);
           if (!sQuality) sQuality = detectQuality(f.name || f.path || '');
-          if (!sCodec) {
-            const p = parseFileName(f.name || f.path || '');
-            sCodec = formatCodec(p.codec || 'AV1');
+          const p = parseFileName(f.name || f.path || '');
+          const c = formatCodec(p.codec || 'AV1');
+          if (c && !sCodecs.includes(c)) sCodecs.push(c);
+          if (!sAudio) {
+            const aTech = detectAudioTech(f.name || f.path || '');
+            const aLabel = (aTech.codec + ' ' + aTech.channel + (aTech.atmos ? ' Atmos' : '')).trim();
+            if (aLabel) sAudio = aLabel;
           }
         });
         const sz = totalBytes > 1073741824 ? (totalBytes / 1073741824).toFixed(2) + ' GB' : totalBytes > 1048576 ? (totalBytes / 1048576).toFixed(1) + ' MB' : (totalBytes / 1024).toFixed(0) + ' KB';
-        const sSpec = [sQuality, sCodec].filter(Boolean).join(' ');
+        // Jika multi-codec dalam 1 season, gabung dengan '/'
+        const codecStr = sCodecs.join(' / ');
+        const sSpec = [sQuality, codecStr, sAudio].filter(Boolean).join(' • ');
         cap += '  🎥 ' + sName + (sSpec ? ' • ' + sSpec : '') + ' (' + sz + ')' + nl;
       });
     }
@@ -5760,17 +5784,23 @@ async function sendToTelegram() {
         const sFiles = seasonMap.get(sName);
         let totalBytes = 0;
         let sQuality = '';
-        let sCodec = '';
+        const sCodecs = [];
+        let sAudio = '';
         sFiles.forEach(f => {
           totalBytes += (f.size || 0);
           if (!sQuality) sQuality = detectQuality(f.name || f.path || '');
-          if (!sCodec) {
-            const p = parseFileName(f.name || f.path || '');
-            sCodec = formatCodec(p.codec || 'AV1');
+          const p = parseFileName(f.name || f.path || '');
+          const c = formatCodec(p.codec || 'AV1');
+          if (c && !sCodecs.includes(c)) sCodecs.push(c);
+          if (!sAudio) {
+            const aTech = detectAudioTech(f.name || f.path || '');
+            const aLabel = (aTech.codec + ' ' + aTech.channel + (aTech.atmos ? ' Atmos' : '')).trim();
+            if (aLabel) sAudio = aLabel;
           }
         });
         const fsz = totalBytes > 1073741824 ? (totalBytes / 1073741824).toFixed(2) + ' GB' : totalBytes > 1048576 ? (totalBytes / 1048576).toFixed(1) + ' MB' : (totalBytes / 1024).toFixed(0) + ' KB';
-        const sSpec = [sQuality, sCodec].filter(Boolean).join(' ');
+        const codecStr = sCodecs.join(' / ');
+        const sSpec = [sQuality, codecStr, sAudio].filter(Boolean).join(' • ');
         const f0 = sFiles[0];
         let sPath = '';
         if (f0 && f0.path && f0.path.includes('/')) {
