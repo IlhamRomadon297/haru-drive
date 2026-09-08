@@ -21,6 +21,84 @@ export default {
     const TELEGRAM_TOPIC_ID = env.TELEGRAM_TOPIC_ID || '';
     const TMDB_API_KEY = env.TMDB_API_KEY || '';
     const VERCEL_POSTER_URL = env.VERCEL_POSTER_URL || 'https://haru-drive.vercel.app';
+    const ADMIN_EMAIL = env.ADMIN_EMAIL || 'harumisatou@gmail.com';
+    const RESEND_API_KEY = env.RESEND_API_KEY || '';
+    const RESEND_FROM_EMAIL = env.RESEND_FROM_EMAIL || 'HaruDrive Security <noreply@mail.harufilm.my.id>';
+
+    async function ensureAdminAuthTables(e) {
+      if (!e.harudrive_db) return;
+      await e.harudrive_db.prepare(
+        'CREATE TABLE IF NOT EXISTS admin_otps (id TEXT PRIMARY KEY, email TEXT, otp_code TEXT, created_at INTEGER, expires_at INTEGER, attempts INTEGER DEFAULT 0)'
+      ).run().catch(function(){});
+      await e.harudrive_db.prepare(
+        'CREATE TABLE IF NOT EXISTS trusted_devices (token TEXT PRIMARY KEY, email TEXT, user_agent TEXT, ip TEXT, created_at INTEGER, expires_at INTEGER)'
+      ).run().catch(function(){});
+    }
+
+    async function sendResendOtpEmail(e, toEmail, otpCode, clientInfo) {
+      const apiKey = e.RESEND_API_KEY || RESEND_API_KEY;
+      if (!apiKey) {
+        console.warn('RESEND_API_KEY is not set.');
+        return { success: false, error: 'RESEND_API_KEY belum disetel di Cloudflare Secret / Env.' };
+      }
+      const fromAddr = e.RESEND_FROM_EMAIL || RESEND_FROM_EMAIL;
+      const htmlBody = [
+        '<div style="font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, sans-serif; max-width: 500px; margin: 0 auto; padding: 32px 24px; background: #0f172a; border-radius: 16px; border: 1px solid rgba(236,72,153,0.3); color: #f8fafc; text-align: center;">',
+        '  <div style="display: inline-block; padding: 6px 14px; background: rgba(236,72,153,0.15); border: 1px solid rgba(236,72,153,0.4); border-radius: 20px; font-size: 11px; font-weight: 700; color: #f472b6; margin-bottom: 16px; letter-spacing: 1px;">HARUDRIVE SECURITY 2FA</div>',
+        '  <h2 style="margin: 0 0 10px 0; color: #ffffff; font-size: 22px; font-weight: 800;">Kode Masuk Admin</h2>',
+        '  <p style="color: #94a3b8; font-size: 13px; margin: 0 0 20px 0; line-height: 1.5;">Seseorang (atau Anda) sedang mencoba membuka Console Admin HaruDrive. Gunakan kode verifikasi OTP berikut untuk melanjutkan:</p>',
+        '  <div style="background: rgba(15,23,42,0.85); border: 2px dashed #ec4899; border-radius: 12px; padding: 18px; margin: 0 auto 20px auto; max-width: 280px;">',
+        '    <div style="font-size: 11px; font-weight: 700; color: #38bdf8; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 6px;">KODE VERIFIKASI (OTP)</div>',
+        '    <div style="font-size: 36px; font-weight: 800; color: #ffffff; letter-spacing: 8px; font-family: monospace;">' + otpCode + '</div>',
+        '    <div style="font-size: 11px; color: #f43f5e; margin-top: 6px; font-weight: 600;">Berlaku selama 10 menit</div>',
+        '  </div>',
+        '  <div style="background: rgba(255,255,255,0.04); border-radius: 8px; padding: 10px 14px; font-size: 11px; color: #64748b; text-align: left; margin-bottom: 18px;">',
+        '    <div><strong>Waktu:</strong> ' + new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' }) + ' WIB</div>',
+        clientInfo && clientInfo.ip ? '    <div><strong>IP:</strong> ' + clientInfo.ip + '</div>' : '',
+        clientInfo && clientInfo.ua ? '    <div><strong>Perangkat:</strong> ' + clientInfo.ua.slice(0, 60) + '</div>' : '',
+        '  </div>',
+        '  <p style="font-size: 11px; color: #475569; margin: 0; line-height: 1.4;">Jika ini bukan Anda, segera amankan PIN Admin Anda. Jangan pernah memberikan kode OTP ini kepada siapa pun.</p>',
+        '</div>'
+      ].filter(Boolean).join(String.fromCharCode(10));
+
+      try {
+        let res = await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: {
+            'Authorization': 'Bearer ' + apiKey,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            from: fromAddr,
+            to: [toEmail],
+            subject: '[HaruDrive] Kode OTP Admin: ' + otpCode,
+            html: htmlBody
+          })
+        });
+        if (!res.ok) {
+          res = await fetch('https://api.resend.com/emails', {
+            method: 'POST',
+            headers: {
+              'Authorization': 'Bearer ' + apiKey,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              from: 'HaruDrive <onboarding@resend.dev>',
+              to: [toEmail],
+              subject: '[HaruDrive] Kode OTP Admin: ' + otpCode,
+              html: htmlBody
+            })
+          });
+        }
+        if (!res.ok) {
+          const errTxt = await res.text();
+          return { success: false, error: errTxt };
+        }
+        return { success: true };
+      } catch(err) {
+        return { success: false, error: err.message };
+      }
+    }
 
     // Best-effort background sync: keeps the D1 search index fresh automatically.
     // Only triggered on page loads (not /api/*) to avoid D1 write contention with file listing.
@@ -519,17 +597,24 @@ export default {
       try {
         await env.harudrive_db.prepare('CREATE TABLE IF NOT EXISTS mediainfo_cache (path TEXT PRIMARY KEY, raw TEXT, json TEXT, updated INTEGER)').run();
         if (request.method === 'GET') {
-          const qPath = url.searchParams.get('path') || '';
-          const qId = url.searchParams.get('id') || '';
-          let lookupPath = qPath;
-          if (!lookupPath && qId && env.harudrive_db) {
-            const r = await env.harudrive_db.prepare('SELECT file_path FROM shortlinks WHERE short_id = ?').bind(qId).first();
-            if (r && r.file_path) lookupPath = r.file_path;
-            else lookupPath = qId;
+          const qPath = (url.searchParams.get('path') || '').replace(/^\/+|\/+$/g, '');
+          const qId = (url.searchParams.get('id') || '').replace(/^\/+|\/+$/g, '');
+          let targetKey = qPath || qId;
+          if (!targetKey) return new Response(JSON.stringify({ error: 'path or id required' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+
+          let mappedPath = '';
+          if (env.harudrive_db) {
+            const r = await env.harudrive_db.prepare('SELECT file_path FROM shortlinks WHERE short_id = ? OR short_id = ?').bind(qId || targetKey, qPath || targetKey).first().catch(() => null);
+            if (r && r.file_path) mappedPath = r.file_path.replace(/^\/+|\/+$/g, '');
           }
-          lookupPath = (lookupPath || '').replace(/^\/+|\/+$/g, '');
-          if (!lookupPath) return new Response(JSON.stringify({ error: 'path or id required' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
-          const row = await env.harudrive_db.prepare('SELECT raw, json, updated FROM mediainfo_cache WHERE path = ?').bind(lookupPath).first();
+
+          let row = null;
+          if (mappedPath) {
+            row = await env.harudrive_db.prepare('SELECT raw, json, updated FROM mediainfo_cache WHERE path = ? OR path = ?').bind(mappedPath, targetKey).first().catch(() => null);
+          } else {
+            row = await env.harudrive_db.prepare('SELECT raw, json, updated FROM mediainfo_cache WHERE path = ?').bind(targetKey).first().catch(() => null);
+          }
+
           if (!row) return new Response(JSON.stringify({ success: true, cached: false, mediainfo_raw: null, mediainfo_json: null }), { headers: { 'Content-Type': 'application/json' } });
           let parsed = null;
           if (row.json) { try { parsed = JSON.parse(row.json); } catch(e) {} }
@@ -537,12 +622,11 @@ export default {
         } else if (request.method === 'POST' || request.method === 'PUT') {
           const body = await request.json().catch(() => ({}));
           let p = (body.path || url.searchParams.get('path') || '').replace(/^\/+|\/+$/g, '');
-          const qId = body.id || url.searchParams.get('id') || '';
-          if (!p && qId && env.harudrive_db) {
-            const r = await env.harudrive_db.prepare('SELECT file_path FROM shortlinks WHERE short_id = ?').bind(qId).first();
-            if (r && r.file_path) p = r.file_path;
-            else p = qId;
-            p = p.replace(/^\/+|\/+$/g, '');
+          const qId = (body.id || url.searchParams.get('id') || '').replace(/^\/+|\/+$/g, '');
+          if (!p && qId) p = qId;
+          if (p && env.harudrive_db) {
+            const r = await env.harudrive_db.prepare('SELECT file_path FROM shortlinks WHERE short_id = ?').bind(p).first().catch(() => null);
+            if (r && r.file_path) p = r.file_path.replace(/^\/+|\/+$/g, '');
           }
           if (!p) return new Response(JSON.stringify({ error: 'path required' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
           const raw = body.mediainfo_raw || body.raw || null;
@@ -574,18 +658,186 @@ export default {
       } catch(e) { return new Response(JSON.stringify({ stats: [] }), { headers: { 'Content-Type': 'application/json' } }); }
     }
 
-    // API: Verify Admin PIN (single source of truth for the console gate)
+    // API: Verify Admin PIN & 2FA Device Token
     if (url.pathname === '/api/admin/verify' && request.method === 'POST') {
       try {
-        const body = await request.json();
-        if (verifyPin(body.admin_pin || body.pin)) {
-          return new Response(JSON.stringify({ success: true }), {
-            headers: { 'Content-Type': 'application/json' }
-          });
+        const body = await request.json().catch(() => ({}));
+        const pin = body.admin_pin || body.pin;
+        if (!verifyPin(pin)) {
+          return new Response(JSON.stringify({ error: 'PIN Admin Salah!' }), { status: 403, headers: { 'Content-Type': 'application/json' } });
         }
-        return new Response(JSON.stringify({ error: 'PIN Admin Salah!' }), { status: 403 });
+
+        await ensureAdminAuthTables(env);
+        const deviceToken = (body.device_token || '').trim();
+
+        // 1. Check if device is trusted (< 7 days)
+        if (deviceToken && env.harudrive_db) {
+          const trusted = await env.harudrive_db.prepare(
+            'SELECT token, expires_at FROM trusted_devices WHERE token = ? AND expires_at > ?'
+          ).bind(deviceToken, Date.now()).first().catch(() => null);
+
+          if (trusted) {
+            return new Response(JSON.stringify({
+              success: true,
+              trusted: true,
+              email: ADMIN_EMAIL,
+              message: 'Perangkat terpercaya. Login berhasil!'
+            }), { headers: { 'Content-Type': 'application/json' } });
+          }
+        }
+
+        // 2. Device not trusted or token expired -> Generate & Send OTP to ADMIN_EMAIL
+        const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+        const now = Date.now();
+        const expiresAt = now + 10 * 60 * 1000; // 10 mins
+
+        if (env.harudrive_db) {
+          await env.harudrive_db.prepare('DELETE FROM admin_otps WHERE email = ?').bind(ADMIN_EMAIL).run().catch(() => {});
+          await env.harudrive_db.prepare(
+            'INSERT INTO admin_otps (id, email, otp_code, created_at, expires_at, attempts) VALUES (?, ?, ?, ?, ?, 0)'
+          ).bind(crypto.randomUUID(), ADMIN_EMAIL, otpCode, now, expiresAt).run().catch(() => {});
+        }
+
+        const clientIp = request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || '';
+        const clientUa = request.headers.get('User-Agent') || '';
+        const emailResult = await sendResendOtpEmail(env, ADMIN_EMAIL, otpCode, { ip: clientIp, ua: clientUa });
+
+        return new Response(JSON.stringify({
+          success: true,
+          trusted: false,
+          requires_otp: true,
+          email: ADMIN_EMAIL,
+          email_sent: emailResult.success,
+          error_detail: emailResult.success ? undefined : emailResult.error,
+          message: emailResult.success
+            ? 'Kode OTP 6-digit telah dikirim ke ' + ADMIN_EMAIL
+            : 'PIN benar. Namun pengiriman email gagal: ' + (emailResult.error || 'Cek konfigurasi RESEND_API_KEY')
+        }), { headers: { 'Content-Type': 'application/json' } });
       } catch (err) {
-        return new Response(JSON.stringify({ error: err.message }), { status: 500 });
+        return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+      }
+    }
+
+    // API: Verify OTP & Issue 7-Day Trusted Device Token
+    if (url.pathname === '/api/admin/auth/verify-otp' && request.method === 'POST') {
+      try {
+        const body = await request.json().catch(() => ({}));
+        const pin = body.admin_pin || body.pin;
+        if (!verifyPin(pin)) {
+          return new Response(JSON.stringify({ error: 'PIN Admin Salah!' }), { status: 403, headers: { 'Content-Type': 'application/json' } });
+        }
+
+        await ensureAdminAuthTables(env);
+        const inputOtp = String(body.otp_code || '').trim();
+        if (!inputOtp || inputOtp.length !== 6) {
+          return new Response(JSON.stringify({ error: 'Masukkan 6 digit kode OTP.' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+        }
+
+        if (!env.harudrive_db) {
+          return new Response(JSON.stringify({ error: 'Database tidak tersedia.' }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+        }
+
+        const record = await env.harudrive_db.prepare(
+          'SELECT id, otp_code, expires_at, attempts FROM admin_otps WHERE email = ?'
+        ).bind(ADMIN_EMAIL).first().catch(() => null);
+
+        if (!record) {
+          return new Response(JSON.stringify({ error: 'Kode OTP tidak ditemukan atau sudah kadaluarsa. Silakan minta kode baru.' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+        }
+
+        if (Date.now() > record.expires_at) {
+          await env.harudrive_db.prepare('DELETE FROM admin_otps WHERE email = ?').bind(ADMIN_EMAIL).run().catch(() => {});
+          return new Response(JSON.stringify({ error: 'Kode OTP sudah kadaluarsa. Silakan minta kode baru.' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+        }
+
+        if (record.attempts >= 5) {
+          await env.harudrive_db.prepare('DELETE FROM admin_otps WHERE email = ?').bind(ADMIN_EMAIL).run().catch(() => {});
+          return new Response(JSON.stringify({ error: 'Terlalu banyak percobaan salah. Silakan minta kode baru.' }), { status: 429, headers: { 'Content-Type': 'application/json' } });
+        }
+
+        if (record.otp_code !== inputOtp) {
+          await env.harudrive_db.prepare('UPDATE admin_otps SET attempts = attempts + 1 WHERE id = ?').bind(record.id).run().catch(() => {});
+          const remaining = 5 - (record.attempts + 1);
+          return new Response(JSON.stringify({ error: 'Kode OTP salah! Sisa percobaan: ' + remaining }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+        }
+
+        // OTP Valid! Delete OTP record
+        await env.harudrive_db.prepare('DELETE FROM admin_otps WHERE email = ?').bind(ADMIN_EMAIL).run().catch(() => {});
+
+        // Issue 7-Day Trusted Device Token
+        const token = crypto.randomUUID() + '-' + crypto.randomUUID();
+        const now = Date.now();
+        const expiresAt = now + (7 * 24 * 60 * 60 * 1000); // 7 Days
+        const clientIp = request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || '';
+        const clientUa = request.headers.get('User-Agent') || '';
+
+        await env.harudrive_db.prepare(
+          'INSERT OR REPLACE INTO trusted_devices (token, email, user_agent, ip, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)'
+        ).bind(token, ADMIN_EMAIL, clientUa, clientIp, now, expiresAt).run().catch(() => {});
+
+        return new Response(JSON.stringify({
+          success: true,
+          device_token: token,
+          expires_at: expiresAt,
+          message: 'Verifikasi berhasil! Perangkat dipercaya selama 7 hari.'
+        }), {
+          headers: {
+            'Content-Type': 'application/json',
+            'Set-Cookie': 'harudrive_auth=true; Path=/; Max-Age=604800; SameSite=Lax'
+          }
+        });
+      } catch (err) {
+        return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+      }
+    }
+
+    // API: Resend OTP
+    if (url.pathname === '/api/admin/auth/resend-otp' && request.method === 'POST') {
+      try {
+        const body = await request.json().catch(() => ({}));
+        const pin = body.admin_pin || body.pin;
+        if (!verifyPin(pin)) {
+          return new Response(JSON.stringify({ error: 'PIN Admin Salah!' }), { status: 403, headers: { 'Content-Type': 'application/json' } });
+        }
+
+        await ensureAdminAuthTables(env);
+
+        // Cooldown check (60s)
+        if (env.harudrive_db) {
+          const last = await env.harudrive_db.prepare(
+            'SELECT created_at FROM admin_otps WHERE email = ?'
+          ).bind(ADMIN_EMAIL).first().catch(() => null);
+
+          if (last && (Date.now() - last.created_at) < 60000) {
+            const waitSec = Math.ceil((60000 - (Date.now() - last.created_at)) / 1000);
+            return new Response(JSON.stringify({ error: 'Mohon tunggu ' + waitSec + ' detik sebelum meminta kode baru.' }), { status: 429, headers: { 'Content-Type': 'application/json' } });
+          }
+        }
+
+        const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+        const now = Date.now();
+        const expiresAt = now + 10 * 60 * 1000;
+
+        if (env.harudrive_db) {
+          await env.harudrive_db.prepare('DELETE FROM admin_otps WHERE email = ?').bind(ADMIN_EMAIL).run().catch(() => {});
+          await env.harudrive_db.prepare(
+            'INSERT INTO admin_otps (id, email, otp_code, created_at, expires_at, attempts) VALUES (?, ?, ?, ?, ?, 0)'
+          ).bind(crypto.randomUUID(), ADMIN_EMAIL, otpCode, now, expiresAt).run().catch(() => {});
+        }
+
+        const clientIp = request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || '';
+        const clientUa = request.headers.get('User-Agent') || '';
+        const emailResult = await sendResendOtpEmail(env, ADMIN_EMAIL, otpCode, { ip: clientIp, ua: clientUa });
+
+        return new Response(JSON.stringify({
+          success: true,
+          email_sent: emailResult.success,
+          message: emailResult.success
+            ? 'Kode OTP baru telah dikirim ke ' + ADMIN_EMAIL
+            : 'Pengiriman email gagal: ' + (emailResult.error || 'Cek RESEND_API_KEY')
+        }), { headers: { 'Content-Type': 'application/json' } });
+      } catch (err) {
+        return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: { 'Content-Type': 'application/json' } });
       }
     }
 
@@ -775,8 +1027,13 @@ export default {
         const audioTech = (audioCodec + ' ' + audioChannels + (atmos ? ' Atmos' : '')).trim();
 
         let duration = '';
-        const durMatch = text.match(/Duration\s*:\s*([^\n\r]+)/i);
-        if (durMatch) duration = durMatch[1].trim();
+        const durMatch = text.match(/Duration\s*:\s*([0-9]+\s*(?:h|hr|hour|min|m|s|sec)[^\n\r<]*|[0-9]{1,2}:[0-9]{2}:[0-9]{2})/i);
+        if (durMatch) {
+          const rawDur = durMatch[1].trim();
+          if (!/^(video|audio|general|text)$/i.test(rawDur)) {
+            duration = rawDur;
+          }
+        }
 
         return new Response(JSON.stringify({
           success: true,
@@ -2395,17 +2652,50 @@ function htmlPage(content, env, pageMode = 'public') {
         grid-template-columns: 1fr;
         gap: 8px;
       }
+      #telegramModal .modal-card {
+        max-width: 98% !important;
+        width: 98% !important;
+        max-height: 94vh !important;
+        margin: 4px auto !important;
+        border-radius: 16px !important;
+      }
       #telegramModal .modal-body {
-        padding: 14px 12px !important;
-        max-height: 82vh !important;
+        padding: 12px 10px !important;
+        max-height: calc(94vh - 125px) !important;
+        overflow-y: auto !important;
+      }
+      #telegramModal .modal-footer {
+        padding: 10px 12px !important;
+        flex-wrap: wrap !important;
+        gap: 8px !important;
+      }
+      #telegramModal .modal-footer > button {
+        width: 100% !important;
+      }
+      #telegramModal .modal-footer > div {
+        width: 100% !important;
+        display: flex !important;
+        gap: 8px !important;
+      }
+      #telegramModal .modal-footer > div > button {
+        flex: 1 !important;
       }
       #tgVisualPreviewModal .modal-card {
-        margin: 8px auto !important;
-        max-width: 96% !important;
+        margin: 4px auto !important;
+        max-width: 98% !important;
+        width: 98% !important;
+        height: 92vh !important;
+        max-height: 92vh !important;
+        border-radius: 16px !important;
       }
       #tgVisualPreviewBody {
         padding: 10px 10px !important;
-        max-height: 72vh !important;
+        max-height: calc(92vh - 110px) !important;
+      }
+      #tgVisualPreviewModal .modal-footer {
+        padding: 10px 12px !important;
+        flex-wrap: wrap !important;
+        gap: 8px !important;
       }
       .form-input-pro {
         font-size: 14px !important;
@@ -3036,22 +3326,29 @@ function htmlPage(content, env, pageMode = 'public') {
 
       /* Mobile Bulk Toolbar - Ultra Compact Fitting */
       .bulk-toolbar {
-        width: calc(100% - 16px);
+        width: calc(100% - 12px);
         max-width: 100%;
-        padding: 6px 8px;
-        gap: 4px;
-        bottom: 12px;
-      }
-      .bulk-count-badge { font-size: 0.74rem; padding-right: 2px; }
-      .btn-bulk {
-        padding: 5px 6px;
-        font-size: 0.72rem;
+        padding: 6px 6px;
         gap: 3px;
+        bottom: 10px;
+        overflow-x: auto;
+      }
+      .bulk-count-badge { font-size: 0.70rem; padding-right: 1px; }
+      .btn-bulk {
+        padding: 5px 5px;
+        font-size: 0.68rem;
+        gap: 2px;
         flex: 1;
+        min-width: 0;
         justify-content: center;
       }
       .btn-bulk svg { width: 12px; height: 12px; }
-      .btn-bulk-close { width: 24px; height: 24px; }
+      .btn-bulk-close { width: 22px; height: 22px; }
+      @media (max-width: 400px) {
+        .bulk-toolbar { padding: 4px 5px; gap: 2px; }
+        .btn-bulk { padding: 4px 3px; font-size: 0.62rem; }
+        .bulk-count-badge { font-size: 0.65rem; }
+      }
       
       .modal-backdrop { padding: 12px; align-items: center; }
       .modal-card { max-width: 100%; border-radius: 18px; }
@@ -3581,71 +3878,214 @@ document.addEventListener('DOMContentLoaded', () => {
   window.addEventListener('popstate', handlePopState);
 });
 
-// Admin Session & PIN Gate (PIN verified against server, single source of truth)
-async function verifyAdminPin(pin) {
-  try {
-    const res = await fetch('/api/admin/verify', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ admin_pin: pin })
-    });
-    return res.ok;
-  } catch (e) { return false; }
+// Admin Session, 2FA Resend OTP, and 7-Day Trusted Device Gate
+let currentPendingPin = '';
+let otpTimerInterval = null;
+
+function startOtpCountdown(seconds) {
+  if (otpTimerInterval) clearInterval(otpTimerInterval);
+  let remain = seconds;
+  const cdEl = document.getElementById('otpCountdown');
+  function updateDisplay() {
+    const m = Math.floor(remain / 60);
+    const s = remain % 60;
+    if (cdEl) cdEl.textContent = (m < 10 ? '0' + m : m) + ':' + (s < 10 ? '0' + s : s);
+    if (remain <= 0) {
+      clearInterval(otpTimerInterval);
+      if (cdEl) cdEl.textContent = 'Kadaluarsa';
+    }
+    remain--;
+  }
+  updateDisplay();
+  otpTimerInterval = setInterval(updateDisplay, 1000);
 }
 
-async function initAdminConsole() {
-  const gate = document.getElementById('adminLoginGate');
-  const main = document.getElementById('adminMainContent');
-  const savedPin = localStorage.getItem('harudrive_admin_pin') || getCookie('harudrive_admin_pin');
-
-  if (savedPin && await verifyAdminPin(savedPin)) {
-    if (gate) gate.style.display = 'none';
-    if (main) main.style.display = 'block';
-    const pathName = window.location.pathname;
-    if (pathName.startsWith('/folder/')) {
-      const fId = pathName.replace('/folder/', '').split('/')[0];
-      loadFolder('', fId);
-    } else {
-      const urlParams = new URLSearchParams(window.location.search);
-      loadFolder(urlParams.get('p') || '', '');
-    }
-    fetchFolderTree(); fetchAndRenderTasks();
-  } else {
-    if (gate) gate.style.display = 'flex';
-    if (main) main.style.display = 'none';
-  }
+function backToPinStep() {
+  if (otpTimerInterval) clearInterval(otpTimerInterval);
+  const pStep = document.getElementById('gatePinStep');
+  const oStep = document.getElementById('gateOtpStep');
+  if (pStep) pStep.style.display = 'block';
+  if (oStep) oStep.style.display = 'none';
+  const errOtp = document.getElementById('loginOtpError');
+  if (errOtp) errOtp.style.display = 'none';
 }
 
 async function unlockAdminConsole() {
   const pinInput = document.getElementById('gatePinInput');
   const errText = document.getElementById('loginPinError');
+  const btn = document.getElementById('btnUnlockAdmin');
   const pin = (pinInput?.value || '').trim();
 
   if (!pin) {
-    if (errText) {
-      errText.textContent = 'Masukkan PIN Admin terlebih dahulu.';
-      errText.style.display = 'block';
-    }
+    if (errText) { errText.textContent = 'Masukkan PIN Admin terlebih dahulu.'; errText.style.display = 'block'; }
     return;
   }
 
-  if (await verifyAdminPin(pin)) {
-    localStorage.setItem('harudrive_admin_pin', pin);
-    setCookie('harudrive_admin_pin', pin, 30);
-    if (errText) errText.style.display = 'none';
-    initAdminConsole();
-  } else {
-    if (errText) {
-      errText.textContent = 'PIN Admin salah. Silakan coba lagi.';
-      errText.style.display = 'block';
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Memeriksa PIN...'; }
+  if (errText) errText.style.display = 'none';
+
+  const deviceToken = localStorage.getItem('harudrive_device_token') || getCookie('harudrive_device_token') || '';
+
+  try {
+    const res = await fetch('/api/admin/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ admin_pin: pin, device_token: deviceToken })
+    });
+    const data = await res.json().catch(function(){ return {}; });
+    if (btn) { btn.disabled = false; btn.textContent = 'Buka Console Admin'; }
+
+    if (!res.ok) {
+      if (errText) { errText.textContent = data.error || 'PIN Admin salah.'; errText.style.display = 'block'; }
+      return;
     }
+
+    // Case 1: Device is already trusted (< 7 days) -> Immediate Login!
+    if (data.trusted) {
+      localStorage.setItem('harudrive_admin_pin', pin);
+      setCookie('harudrive_admin_pin', pin, 30);
+      initAdminConsole();
+      return;
+    }
+
+    // Case 2: Requires 2FA OTP verification
+    if (data.requires_otp) {
+      currentPendingPin = pin;
+      const emailEl = document.getElementById('otpEmailTarget');
+      if (emailEl && data.email) emailEl.textContent = data.email;
+      const pStep = document.getElementById('gatePinStep');
+      const oStep = document.getElementById('gateOtpStep');
+      if (pStep) pStep.style.display = 'none';
+      if (oStep) oStep.style.display = 'block';
+      const otpInput = document.getElementById('gateOtpInput');
+      if (otpInput) { otpInput.value = ''; otpInput.focus(); }
+      startOtpCountdown(600);
+      if (!data.email_sent && data.error_detail) {
+        const errOtp = document.getElementById('loginOtpError');
+        if (errOtp) { errOtp.textContent = 'Catatan: ' + data.error_detail; errOtp.style.display = 'block'; }
+      }
+    }
+  } catch(e) {
+    if (btn) { btn.disabled = false; btn.textContent = 'Buka Console Admin'; }
+    if (errText) { errText.textContent = 'Error: ' + e.message; errText.style.display = 'block'; }
+  }
+}
+
+async function submitAdminOtp() {
+  const otpInput = document.getElementById('gateOtpInput');
+  const errText = document.getElementById('loginOtpError');
+  const btn = document.getElementById('btnVerifyOtp');
+  const otp = (otpInput?.value || '').trim();
+
+  if (!otp || otp.length !== 6) {
+    if (errText) { errText.textContent = 'Masukkan 6 digit kode OTP yang diterima.'; errText.style.display = 'block'; }
+    return;
+  }
+
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Memverifikasi...'; }
+  if (errText) errText.style.display = 'none';
+
+  try {
+    const res = await fetch('/api/admin/auth/verify-otp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ admin_pin: currentPendingPin, otp_code: otp })
+    });
+    const data = await res.json().catch(function(){ return {}; });
+    if (btn) { btn.disabled = false; btn.textContent = 'Verifikasi & Masuk'; }
+
+    if (!res.ok || !data.success) {
+      if (errText) { errText.textContent = data.error || 'Verifikasi OTP gagal.'; errText.style.display = 'block'; }
+      return;
+    }
+
+    // Save 7-Day Trusted Device Token and PIN
+    if (data.device_token) {
+      localStorage.setItem('harudrive_device_token', data.device_token);
+      setCookie('harudrive_device_token', data.device_token, 7);
+    }
+    localStorage.setItem('harudrive_admin_pin', currentPendingPin);
+    setCookie('harudrive_admin_pin', currentPendingPin, 30);
+
+    if (otpTimerInterval) clearInterval(otpTimerInterval);
+    const pStep = document.getElementById('gatePinStep');
+    const oStep = document.getElementById('gateOtpStep');
+    if (oStep) oStep.style.display = 'none';
+    if (pStep) pStep.style.display = 'block';
+    initAdminConsole();
+  } catch(e) {
+    if (btn) { btn.disabled = false; btn.textContent = 'Verifikasi & Masuk'; }
+    if (errText) { errText.textContent = 'Error: ' + e.message; errText.style.display = 'block'; }
+  }
+}
+
+async function resendAdminOtp() {
+  const btn = document.getElementById('btnResendOtp');
+  const errText = document.getElementById('loginOtpError');
+  if (btn) { btn.disabled = true; btn.textContent = 'Mengirim...'; }
+  if (errText) errText.style.display = 'none';
+
+  try {
+    const res = await fetch('/api/admin/auth/resend-otp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ admin_pin: currentPendingPin })
+    });
+    const data = await res.json().catch(function(){ return {}; });
+    if (!res.ok) {
+      if (btn) { btn.disabled = false; btn.textContent = 'Kirim Ulang'; }
+      if (errText) { errText.textContent = data.error || 'Gagal mengirim ulang OTP.'; errText.style.display = 'block'; }
+      return;
+    }
+    if (btn) btn.textContent = '✓ Terkirim!';
+    startOtpCountdown(600);
+    setTimeout(function(){ if (btn) { btn.disabled = false; btn.textContent = 'Kirim Ulang'; } }, 5000);
+  } catch(e) {
+    if (btn) { btn.disabled = false; btn.textContent = 'Kirim Ulang'; }
+    if (errText) { errText.textContent = 'Error: ' + e.message; errText.style.display = 'block'; }
   }
 }
 
 function lockAdminSession() {
   localStorage.removeItem('harudrive_admin_pin');
   deleteCookie('harudrive_admin_pin');
+  // NOTE: harudrive_device_token is preserved in localStorage so unlocking only needs PIN during the 7 days!
   window.location.reload();
+}
+
+async function initAdminConsole() {
+  const gate = document.getElementById('adminLoginGate');
+  const main = document.getElementById('adminMainContent');
+  const savedPin = localStorage.getItem('harudrive_admin_pin') || getCookie('harudrive_admin_pin');
+  const savedDeviceToken = localStorage.getItem('harudrive_device_token') || getCookie('harudrive_device_token') || '';
+
+  if (savedPin) {
+    try {
+      const res = await fetch('/api/admin/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ admin_pin: savedPin, device_token: savedDeviceToken })
+      });
+      const data = await res.json().catch(function(){ return {}; });
+      if (res.ok && data.trusted) {
+        if (gate) gate.style.display = 'none';
+        if (main) main.style.display = 'block';
+        const pathName = window.location.pathname;
+        if (pathName.startsWith('/folder/')) {
+          const fId = pathName.replace('/folder/', '').split('/')[0];
+          loadFolder('', fId);
+        } else {
+          const urlParams = new URLSearchParams(window.location.search);
+          loadFolder(urlParams.get('p') || '', '');
+        }
+        fetchFolderTree(); fetchAndRenderTasks();
+        return;
+      }
+    } catch(e) {}
+  }
+
+  if (gate) gate.style.display = 'flex';
+  if (main) main.style.display = 'none';
 }
 
 // Navigation
@@ -4799,16 +5239,24 @@ function updateTGPosterPreview() {
 }
 
 async function triggerAutoMediaInfo() {
-  const first = tgSelectedFiles && tgSelectedFiles[0];
-  if (!first) {
-    alert('Tidak ada file dipilih. Pilih file terlebih dahulu.');
+  const urlInput = document.getElementById('tgMediaInfoUrl');
+  const inputUrl = (urlInput?.value || '').trim();
+  const isHaru = inputUrl && (inputUrl.includes('/file/') || inputUrl.includes('/d/') || inputUrl.includes('/raw/') || inputUrl.includes(window.location.host));
+  const target = isHaru ? inputUrl : (window._sampleVideoFile || (tgSelectedFiles && tgSelectedFiles[0]));
+  if (!target) {
+    alert('Tidak ada file dipilih. Pilih file atau masukkan link HaruDrive terlebih dahulu.');
     return;
   }
   const btn = event?.currentTarget;
   if (btn) btn.textContent = '⏳ Membaca Specs...';
-  await extractSpecsAndMediaInfo(first);
+  const miResult = await getOrScanMediaInfoForFile(target);
+  if (miResult && miResult.json) {
+    applyMediaInfoDataToForm(miResult.json);
+  } else if (typeof target === 'object') {
+    await extractSpecsAndMediaInfo(target);
+  }
   if (btn) btn.textContent = '✓ MediaInfo Diperbarui';
-  setTimeout(() => { if (btn) btn.textContent = '⚡ Auto Generate MediaInfo'; }, 2000);
+  setTimeout(function(){ if (btn) btn.textContent = '⚡ Auto Generate MediaInfo'; }, 2000);
 }
 
 
@@ -5359,11 +5807,14 @@ function parseFileName(name) {
   else if (upper.includes(' AC3 ')) audio = 'AC3';
   else if (upper.includes(' AAC ')) audio = 'AAC';
 
-  let title = String(name).replace(/\.[^.]+$/, '').replace(/[\.\-_]/g, ' ');
-  if (year) title = title.split(year)[0].trim();
-  if (season) title = title.split(new RegExp('(?:S|Season\\s*)' + season.replace('S', ''), 'i'))[0].trim();
-  title = title.replace(/\s*(NF|WEB[\s\-]?DL|BluRay|2160p|1080p|720p|4K|AV1|x264|x265|AAC.*|DDP?.*|HEVC|H[\.\s]?264|H[\.\s]?265).*$/i, '').trim();
-  title = title.replace(/-/g, ' ').split(' ').filter(Boolean).join(' ').trim();
+  let title = String(name).replace(/\.[^.]+$/, '').replace(/[._-]/g, ' ');
+  if (year) {
+    const yIdx = title.indexOf(year);
+    if (yIdx !== -1) title = title.substring(0, yIdx).trim();
+  }
+  const stopMatch = title.match(/(?:^|[^a-zA-Z0-9])(2160p|1080p|720p|480p|WEB-?DL|WEBRip|BluRay|BDRip|NF|NETFLIX|DSNP|AMZN|HULU|AV1|HEVC|x264|x265|AAC|DDP)(?:[^a-zA-Z0-9]|$)/i);
+  if (stopMatch && stopMatch.index > 0) title = title.substring(0, stopMatch.index).trim();
+  title = title.split(' ').filter(Boolean).join(' ').trim();
   const cleanTitle = title || name.split('.')[0].replace(/[^a-zA-Z0-9]/g, ' ').split(' ').filter(Boolean).slice(0, 4).join(' ');
   return { title, cleanTitle, year, season, quality, codec, source, audio };
 }
@@ -5732,54 +6183,149 @@ function formatCaptionForPreview(text) {
   return formatted;
 }
 
+// Universal MediaInfo Scanner & HaruDrive-to-Telegraph Converter
+async function getOrScanMediaInfoForFile(fileOrUrl) {
+  let fileObj = null;
+  let targetUrl = '';
+  let fId = '';
+
+  if (typeof fileOrUrl === 'string') {
+    targetUrl = fileOrUrl.trim();
+    ['/file/', '/d/', '/raw/'].forEach(function(prefix) {
+      if (!fId && targetUrl.includes(prefix)) {
+        const rest = targetUrl.split(prefix)[1];
+        if (rest) fId = rest.split('/')[0].split('?')[0].split('#')[0].trim();
+      }
+    });
+    if (!fId && targetUrl) {
+      fId = targetUrl.split('/').pop().split('?')[0].split('#')[0].trim();
+    }
+  } else if (fileOrUrl && typeof fileOrUrl === 'object') {
+    fileObj = fileOrUrl;
+    fId = fileObj.id || fileObj.path || '';
+  }
+
+  const _allFiles = (typeof allFiles !== 'undefined' ? allFiles : (window.allFiles || []));
+  if (!fileObj && fId && _allFiles.length) {
+    fileObj = _allFiles.find(function(f){ return f.id === fId || f.path === fId || (f.path && f.path.endsWith(fId)); });
+  }
+  if (!fileObj) {
+    const cleanFn = fId ? decodeURIComponent(fId.split('/').pop()) : 'video.mkv';
+    fileObj = {
+      id: fId || 'video',
+      path: fId || 'video',
+      name: cleanFn,
+      size: 0,
+      mimeType: (cleanFn.endsWith('.mp4')) ? 'video/mp4' : 'video/x-matroska'
+    };
+  }
+
+  // 1. Check RAM Cache
+  if (typeof mediaInfoMemoryCache !== 'undefined' && mediaInfoMemoryCache.has(fileObj.id)) {
+    const cachedData = mediaInfoMemoryCache.get(fileObj.id);
+    if (cachedData && (cachedData.video?.length || cachedData.audio?.length)) {
+      return { json: cachedData, raw: buildMediaInfoRawText(cachedData), file: fileObj };
+    }
+  }
+
+  // 2. Check D1 Cache
+  try {
+    const res = await fetch('/api/mediainfo?path=' + encodeURIComponent(fileObj.path || fileObj.id) + '&id=' + encodeURIComponent(fileObj.id || fileObj.path));
+    if (res.ok) {
+      const d = await res.json();
+      let j = d.mediainfo_json;
+      if (typeof j === 'string') { try { j = JSON.parse(j); } catch(e){} }
+      let raw = d.mediainfo_raw || d.raw || '';
+      if (j && (j.video?.length || j.audio?.length)) {
+        if (!raw) raw = buildMediaInfoRawText(j);
+        if (typeof mediaInfoMemoryCache !== 'undefined') mediaInfoMemoryCache.set(fileObj.id, j);
+        return { json: j, raw: raw, file: fileObj };
+      } else if (raw) {
+        return { json: j || generateSmartInitialMediaInfo(fileObj), raw: raw, file: fileObj };
+      }
+    }
+  } catch(e) {}
+
+  // 3. Scan 256KB Range from Video Stream URL
+  try {
+    let streamUrl = '';
+    if (targetUrl && (targetUrl.startsWith('http://') || targetUrl.startsWith('https://'))) {
+      streamUrl = targetUrl.replace('/file/', '/d/');
+    } else {
+      const _smode = (typeof getStorageMode === 'function') ? getStorageMode() : 'hf';
+      streamUrl = window.location.origin + '/d/' + (fileObj.id || encodeURIComponent(fileObj.path)) + (_smode === 'gdrive' ? '?mode=gdrive' : '');
+    }
+    const rangeRes = await fetch(streamUrl, { headers: { 'Range': 'bytes=0-262143' } });
+    if (rangeRes.ok || rangeRes.status === 206) {
+      const buffer = await rangeRes.arrayBuffer();
+      const bytes = new Uint8Array(buffer);
+      let parsedData = null;
+      if (bytes[0] === 0x1A && bytes[1] === 0x45 && bytes[2] === 0xDF && bytes[3] === 0xA3) {
+        parsedData = parseMatroskaEBML(bytes, fileObj);
+      } else {
+        parsedData = parseMp4Boxes(bytes, fileObj);
+      }
+      if (parsedData && (parsedData.video?.length || parsedData.audio?.length)) {
+        const raw = buildMediaInfoRawText(parsedData);
+        if (typeof mediaInfoMemoryCache !== 'undefined') mediaInfoMemoryCache.set(fileObj.id, parsedData);
+        fetch('/api/mediainfo', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: fileObj.path || fileObj.id, mediainfo_raw: raw, mediainfo_json: parsedData })
+        }).catch(function(){});
+        return { json: parsedData, raw: raw, file: fileObj };
+      }
+    }
+  } catch(errScan) {
+    console.warn('Scan 256KB Range error:', errScan);
+  }
+
+  // 4. Fallback: Smart Initial MediaInfo Profile
+  const fallbackData = generateSmartInitialMediaInfo(fileObj);
+  const rawFallback = buildMediaInfoRawText(fallbackData);
+  if (typeof mediaInfoMemoryCache !== 'undefined') mediaInfoMemoryCache.set(fileObj.id, fallbackData);
+  fetch('/api/mediainfo', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: fileObj.path || fileObj.id, mediainfo_raw: rawFallback, mediainfo_json: fallbackData })
+  }).catch(function(){});
+
+  return { json: fallbackData, raw: rawFallback, file: fileObj };
+}
+
 async function createTelegraphMediaInfo() {
   const btn = event?.currentTarget;
   if (btn) { btn.disabled = true; btn.textContent = '⏳ Mengupload...'; }
-  const first = tgSelectedFiles && tgSelectedFiles[0];
-  const targetFile = window._sampleVideoFile || first;
-  const title = (document.getElementById('tgTitle')?.value || '').trim() || 'MediaInfo';
+
+  const urlInput = document.getElementById('tgMediaInfoUrl');
+  const inputUrl = (urlInput?.value || '').trim();
+  const isHaruDriveUrl = inputUrl && (inputUrl.includes('/file/') || inputUrl.includes('/d/') || inputUrl.includes('/raw/') || inputUrl.includes(window.location.host));
+
+  const targetSource = isHaruDriveUrl ? inputUrl : (window._sampleVideoFile || (tgSelectedFiles && tgSelectedFiles[0]));
+
+  if (!targetSource) {
+    alert('Pilih file terlebih dahulu atau masukkan link file HaruDrive di kolom MediaInfo.');
+    if (btn) { btn.disabled = false; btn.textContent = '⚡ Buat ke Telegra.ph'; }
+    return;
+  }
+
+  // 1. Scan / fetch MediaInfo
+  const miResult = await getOrScanMediaInfoForFile(targetSource);
+
+  // 2. Automatically apply specs to form above (Video format, Durasi, Audio, Subtitle)!
+  if (miResult.json) {
+    applyMediaInfoDataToForm(miResult.json);
+  }
+
+  // 3. Prepare Telegraph Page Title & Content
+  const title = (document.getElementById('tgTitle')?.value || '').trim() || (miResult.file?.name ? parseFileName(miResult.file.name).cleanTitle : '') || 'MediaInfo';
   const year = (document.getElementById('tgYear')?.value || '').trim();
   const cat = document.getElementById('tgCategory')?.value || 'movies';
   const catLabel = cat === 'series' ? 'Series' : cat === 'anime' ? 'Anime' : 'Movies';
   const pageTitle = title + (year ? ' (' + year + ')' : '') + ' [' + catLabel + ']';
-  const fileName = (targetFile ? (targetFile.name || targetFile.path) : title).trim();
-  const pin = document.getElementById('tgAdminPin')?.value || '290722';
+  const pin = document.getElementById('tgAdminPin')?.value || localStorage.getItem('harudrive_admin_pin') || '290722';
 
-  let rawContent = '';
-  if (targetFile) {
-    try {
-      const res = await fetch('/api/mediainfo?path=' + encodeURIComponent(targetFile.path || targetFile.id));
-      if (res.ok) {
-        const d = await res.json();
-        rawContent = d.mediainfo_raw || d.raw || '';
-        if (!rawContent && d.mediainfo_json) {
-          rawContent = JSON.stringify(d.mediainfo_json, null, 2);
-        }
-      }
-    } catch(e) {}
-  }
-
-  if (!rawContent) {
-    const video = document.getElementById('tgSpecVideo')?.value || '1080p';
-    const audio = document.getElementById('tgSpecAudio')?.value || 'Japanese';
-    const subs = document.getElementById('tgSpecSubs')?.value || 'Indonesian, English';
-    const dur = document.getElementById('tgSpecDuration')?.value || '';
-    rawContent = [
-      'General',
-      'Complete name: ' + fileName,
-      'Duration: ' + dur,
-      '',
-      'Video',
-      'Format: ' + video,
-      '',
-      'Audio',
-      'Language: ' + audio,
-      '',
-      'Text (Subtitles)',
-      'Languages: ' + subs
-    ].join(String.fromCharCode(10));
-  }
-
+  // 4. Create Telegraph page
   try {
     const res = await fetch('/api/admin/create-telegraph', {
       method: 'POST',
@@ -5787,15 +6333,15 @@ async function createTelegraphMediaInfo() {
       body: JSON.stringify({
         admin_pin: pin,
         title: pageTitle.slice(0, 60),
-        content: rawContent
+        content: miResult.raw
       })
     });
     const data = await res.json();
     if (res.ok && data.success && data.url) {
-      document.getElementById('tgMediaInfoUrl').value = data.url;
+      if (urlInput) urlInput.value = data.url;
       previewTelegramCaption();
       if (btn) btn.textContent = '✓ Berhasil dibuat!';
-      setTimeout(() => { if (btn) { btn.disabled = false; btn.textContent = '⚡ Buat ke Telegra.ph'; } }, 2000);
+      setTimeout(function(){ if (btn) { btn.disabled = false; btn.textContent = '⚡ Buat ke Telegra.ph'; } }, 2000);
     } else {
       alert('Gagal membuat Telegra.ph: ' + (data.error || 'Unknown error'));
       if (btn) { btn.disabled = false; btn.textContent = '⚡ Buat ke Telegra.ph'; }
@@ -5890,62 +6436,24 @@ async function parseMediaInfoFromUrl() {
   const urlInput = document.getElementById('tgMediaInfoUrl');
   const url = (urlInput?.value || '').trim();
   if (!url) {
-    alert('Masukkan link MediaInfo / Telegra.ph terlebih dahulu.');
+    alert('Masukkan link MediaInfo / HaruDrive / Telegra.ph terlebih dahulu.');
     return;
   }
   const btn = event?.currentTarget;
   if (btn) { btn.disabled = true; btn.textContent = '⏳ Menarik...'; }
 
-  // Check if link is a HaruDrive video file link (e.g. /file/{id} or /d/{id})
-  let fId = '';
-  ['/file/', '/d/', '/raw/'].forEach(prefix => {
-    if (!fId && url.includes(prefix)) {
-      const rest = url.split(prefix)[1];
-      if (rest) fId = rest.split('/')[0].split('?')[0].split('#')[0].trim();
-    }
-  });
-  if (fId) {
+  const isHaru = url.includes('/file/') || url.includes('/d/') || url.includes('/raw/') || url.includes(window.location.host);
+  if (isHaru) {
     try {
-      // 1. Try D1 cached MediaInfo first
-      const miRes = await fetch('/api/mediainfo?path=' + encodeURIComponent(fId));
-      if (miRes.ok) {
-        const miData = await miRes.json();
-        let j = miData.mediainfo_json;
-        if (typeof j === 'string') { try { j = JSON.parse(j); } catch(e){} }
-        if (j && (j.video?.length || j.audio?.length)) {
-          applyMediaInfoDataToForm(j);
-          if (btn) btn.textContent = '✓ Berhasil (D1)!';
-          setTimeout(() => { if (btn) { btn.disabled = false; btn.textContent = '📥 Ekstrak dari Link'; } }, 2000);
-          return;
-        }
+      const miResult = await getOrScanMediaInfoForFile(url);
+      if (miResult && miResult.json) {
+        applyMediaInfoDataToForm(miResult.json);
+        if (btn) btn.textContent = '✓ Berhasil!';
+        setTimeout(function(){ if (btn) { btn.disabled = false; btn.textContent = '📥 Ekstrak dari Link'; } }, 2000);
+        return;
       }
-
-      // 2. Perform safe 256KB range scan in browser without downloading entire file
-      const streamUrl = window.location.origin + '/d/' + fId;
-      const rangeRes = await fetch(streamUrl, { headers: { 'Range': 'bytes=0-262143' } });
-      if (rangeRes.ok || rangeRes.status === 206) {
-        const buffer = await rangeRes.arrayBuffer();
-        const bytes = new Uint8Array(buffer);
-        let parsedData = null;
-        if (bytes[0] === 0x1A && bytes[1] === 0x45 && bytes[2] === 0xDF && bytes[3] === 0xA3) {
-          parsedData = parseMatroskaEBML(bytes, { id: fId, name: 'video.mkv' });
-        } else {
-          parsedData = parseMp4Boxes(bytes, { id: fId, name: 'video.mp4' });
-        }
-        if (parsedData && (parsedData.video?.length || parsedData.audio?.length)) {
-          applyMediaInfoDataToForm(parsedData);
-          fetch('/api/mediainfo', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ path: fId, mediainfo_raw: '', mediainfo_json: parsedData })
-          }).catch(function(){});
-          if (btn) btn.textContent = '✓ Berhasil (Scan)!';
-          setTimeout(() => { if (btn) { btn.disabled = false; btn.textContent = '📥 Ekstrak dari Link'; } }, 2000);
-          return;
-        }
-      }
-    } catch(errScan) {
-      console.warn('Scan from link error:', errScan);
+    } catch(errHaru) {
+      console.warn('Haru link extract error:', errHaru);
     }
   }
 
@@ -5960,13 +6468,13 @@ async function parseMediaInfoFromUrl() {
       }
       if (data.audioLang) document.getElementById('tgSpecAudio').value = data.audioLang;
       if (data.subs) document.getElementById('tgSpecSubs').value = data.subs;
-      if (data.duration && !document.getElementById('tgSpecDuration').value) {
+      if (data.duration && !/^(video|audio|general|text)$/i.test(data.duration)) {
         document.getElementById('tgSpecDuration').value = data.duration;
       }
       generateAutoHashtags();
       previewTelegramCaption();
       if (btn) btn.textContent = '✓ Berhasil!';
-      setTimeout(() => { if (btn) { btn.disabled = false; btn.textContent = '📥 Ekstrak dari Link'; } }, 2000);
+      setTimeout(function(){ if (btn) { btn.disabled = false; btn.textContent = '📥 Ekstrak dari Link'; } }, 2000);
     } else {
       alert('Gagal mengekstrak: ' + (data.error || 'Unknown error'));
       if (btn) { btn.disabled = false; btn.textContent = '📥 Ekstrak dari Link'; }
@@ -7363,20 +7871,56 @@ function adminConsoleUI() {
     </div>
   </header>
 
-  <!-- AUTH BARRIER -->
+  <!-- AUTH BARRIER (PIN + 2FA RESEND OTP) -->
   <div id="adminLoginGate" style="display: none; min-height: 75vh; align-items: center; justify-content: center; padding: 20px;">
-    <div class="glass" style="max-width: 440px; width: 100%; padding: 36px 32px; border-radius: 24px; text-align: center; box-shadow: 0 20px 50px rgba(0,0,0,0.4);">
-      <div class="logo-glow-wrap" style="margin: 0 auto 16px; width: 56px; height: 56px;">
-        <svg class="icon icon-lg" style="color: #ec4899;" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-      </div>
-      <h2 style="font-size: 1.4rem; font-weight: 800; margin-bottom: 6px;">Admin Storage Console</h2>
-      <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 20px;">Masukkan PIN Admin untuk mengelola storage:</p>
+    <div class="glass" style="max-width: 440px; width: 100%; padding: 36px 28px; border-radius: 24px; text-align: center; box-shadow: 0 20px 50px rgba(0,0,0,0.4); border: 1px solid var(--border);">
       
-      <div style="display: flex; flex-direction: column; gap: 14px;">
-        <input type="text" id="gatePinInput" inputmode="numeric" placeholder="••••••" maxlength="10" autocomplete="off" data-lpignore="true" data-1p-ignore="true" class="form-input-pro pin-input-stealth" onkeydown="if(event.key==='Enter')unlockAdminConsole()">
-        <button class="nav-btn" style="width: 100%; justify-content: center; padding: 12px; background: var(--accent-gradient); color: white; border: none; font-size: 0.95rem; font-weight: 700;" onclick="unlockAdminConsole()">Buka Console Admin</button>
-        <div id="loginPinError" style="display: none; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.4); color: #f87171; padding: 9px 12px; border-radius: 10px; font-size: 0.82rem;"></div>
+      <!-- STEP 1: PIN INPUT -->
+      <div id="gatePinStep">
+        <div class="logo-glow-wrap" style="margin: 0 auto 16px; width: 56px; height: 56px;">
+          <svg class="icon icon-lg" style="color: #ec4899;" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        </div>
+        <h2 style="font-size: 1.4rem; font-weight: 800; margin-bottom: 6px;">Admin Storage Console</h2>
+        <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 20px;">Masukkan PIN Admin untuk mengelola storage:</p>
+        
+        <div style="display: flex; flex-direction: column; gap: 14px;">
+          <input type="text" id="gatePinInput" inputmode="numeric" placeholder="••••••" maxlength="10" autocomplete="off" data-lpignore="true" data-1p-ignore="true" class="form-input-pro pin-input-stealth" onkeydown="if(event.key==='Enter')unlockAdminConsole()">
+          <button class="nav-btn" id="btnUnlockAdmin" style="width: 100%; justify-content: center; padding: 12px; background: var(--accent-gradient); color: white; border: none; font-size: 0.95rem; font-weight: 700;" onclick="unlockAdminConsole()">
+            Buka Console Admin
+          </button>
+          <div id="loginPinError" style="display: none; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.4); color: #f87171; padding: 9px 12px; border-radius: 10px; font-size: 0.82rem;"></div>
+        </div>
       </div>
+
+      <!-- STEP 2: 2FA RESEND OTP INPUT -->
+      <div id="gateOtpStep" style="display: none;">
+        <div class="logo-glow-wrap" style="margin: 0 auto 16px; width: 56px; height: 56px; background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.4);">
+          <svg class="icon icon-lg" style="color: #38bdf8;" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        </div>
+        <h2 style="font-size: 1.3rem; font-weight: 800; margin-bottom: 6px; color: #38bdf8;">Verifikasi 2-Langkah</h2>
+        <p style="font-size: 0.82rem; color: var(--text-muted); margin-bottom: 6px;">Kode OTP 6-digit telah dikirim ke:</p>
+        <div id="otpEmailTarget" style="font-size: 0.85rem; font-weight: 700; color: #ec4899; margin-bottom: 16px; font-family: monospace;">harumisatou@gmail.com</div>
+
+        <div style="display: flex; flex-direction: column; gap: 14px;">
+          <input type="text" id="gateOtpInput" inputmode="numeric" placeholder="123456" maxlength="6" autocomplete="one-time-code" class="form-input-pro" style="font-size: 1.6rem; letter-spacing: 8px; text-align: center; font-weight: 800; padding: 10px;" onkeydown="if(event.key==='Enter')submitAdminOtp()">
+          
+          <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.76rem; color: var(--text-dim);">
+            <span id="otpTimerText">Berlaku: <b id="otpCountdown" style="color: #38bdf8;">10:00</b></span>
+            <button type="button" id="btnResendOtp" class="nav-btn" style="font-size: 0.74rem; padding: 3px 8px;" onclick="resendAdminOtp()">Kirim Ulang</button>
+          </div>
+
+          <button class="nav-btn" id="btnVerifyOtp" style="width: 100%; justify-content: center; padding: 12px; background: #38bdf8; color: white; border: none; font-size: 0.95rem; font-weight: 700;" onclick="submitAdminOtp()">
+            Verifikasi & Masuk
+          </button>
+          
+          <div id="loginOtpError" style="display: none; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.4); color: #f87171; padding: 9px 12px; border-radius: 10px; font-size: 0.82rem;"></div>
+
+          <button type="button" class="nav-btn" style="font-size: 0.76rem; padding: 6px; background: transparent; border: none; color: var(--text-dim);" onclick="backToPinStep()">
+            ← Kembali ke Input PIN
+          </button>
+        </div>
+      </div>
+
     </div>
   </div>
 
@@ -7466,6 +8010,10 @@ function adminConsoleUI() {
   <!-- FLOATING BULK TOOLBAR (ADMIN) -->
   <div id="bulkToolbar" class="bulk-toolbar" style="display: none;">
     <span id="bulkCount" class="bulk-count-badge">0 Dipilih</span>
+    <button class="btn-bulk btn-bulk-tg" style="color: #38bdf8; border-color: rgba(56, 189, 248, 0.4); background: rgba(56, 189, 248, 0.1);" onclick="openTelegramWithSelected()" title="Kirim ke Telegram">
+      <svg class="icon icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+      <span>Telegram</span>
+    </button>
     <button class="btn-bulk" style="color: var(--primary-light);" onclick="openBulkMoveModal()">
       <svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/><path d="M3 12h12"/></svg>
       <span>Pindah</span>
