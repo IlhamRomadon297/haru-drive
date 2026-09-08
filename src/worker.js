@@ -692,6 +692,101 @@ export default {
       }
     }
 
+    // API: Parse Telegraph or external MediaInfo URL
+    if (url.pathname === '/api/admin/parse-telegraph') {
+      try {
+        const targetUrl = url.searchParams.get('url') || '';
+        if (!targetUrl) return new Response(JSON.stringify({ error: 'URL is required' }), { status: 400 });
+        
+        const resp = await fetch(targetUrl, {
+          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+        });
+        if (!resp.ok) return new Response(JSON.stringify({ error: 'Gagal mengambil data dari URL (' + resp.status + ')' }), { status: 502 });
+        const html = await resp.text();
+        const text = html.replace(/<[^>]+>/g, ' ');
+
+        let res = '1080p';
+        const hMatch = text.match(/Height\s*:\s*([0-9\s]+)\s*pixels/i) || text.match(/([0-9]{3,4})p/i);
+        if (hMatch) {
+          const h = parseInt(hMatch[1].replace(/\s/g, ''), 10);
+          if (h >= 1800) res = '2160p';
+          else if (h >= 900) res = '1080p';
+          else if (h >= 650) res = '720p';
+          else if (h >= 400) res = '480p';
+        }
+
+        let codec = 'AV1';
+        if (/HEVC|H\.265|x265/i.test(text)) codec = 'HEVC';
+        else if (/AVC|H\.264|x264/i.test(text)) codec = 'H.264';
+        else if (/AV1/i.test(text)) codec = 'AV1';
+
+        let bitDepth = '';
+        if (/10\s*bits/i.test(text) || /10bit|10-bit/i.test(text)) bitDepth = '10-bit';
+
+        let hdr = '';
+        if (/Dolby\s*Vision/i.test(text)) hdr = 'DV HDR';
+        else if (/HDR10\+/i.test(text)) hdr = 'HDR10+';
+        else if (/HDR10/i.test(text)) hdr = 'HDR10';
+        else if (/\bHDR\b/i.test(text) || /BT\.?2020/i.test(text)) hdr = 'HDR';
+
+        let audioCodec = 'AAC';
+        if (/E-AC-3|EAC3|DDP/i.test(text)) audioCodec = 'DDP';
+        else if (/TrueHD/i.test(text)) audioCodec = 'TrueHD';
+        else if (/DTS-HD/i.test(text)) audioCodec = 'DTS-HD';
+        else if (/DTS/i.test(text)) audioCodec = 'DTS';
+        else if (/FLAC/i.test(text)) audioCodec = 'FLAC';
+        else if (/AC-3|AC3/i.test(text)) audioCodec = 'AC3';
+
+        let audioChannels = '2.0';
+        const chMatch = text.match(/Channel\(s\)\s*:\s*(\d+)/i);
+        if (chMatch) {
+          const ch = parseInt(chMatch[1], 10);
+          if (ch >= 8) audioChannels = '7.1';
+          else if (ch >= 6) audioChannels = '5.1';
+          else if (ch === 2) audioChannels = '2.0';
+          else if (ch === 1) audioChannels = '1.0';
+        }
+
+        const atmos = /Atmos/i.test(text);
+
+        const langMatches = text.matchAll(/Language\s*:\s*([A-Za-z]+)/gi);
+        const allLangs = [];
+        for (const lm of langMatches) {
+          const l = lm[1].trim();
+          if (l && !allLangs.includes(l)) allLangs.push(l);
+        }
+
+        let subs = 'Indonesian, English';
+        if (allLangs.length > 0) {
+          const subLangs = allLangs.filter(l => /indonesia|english|malay|japanese|chinese|korean/i.test(l));
+          if (subLangs.length > 0) subs = subLangs.join(', ');
+        }
+
+        let audioLang = 'Japanese';
+        const priorityAudio = allLangs.find(l => /japanese|indonesian|korean|english/i.test(l));
+        if (priorityAudio) audioLang = priorityAudio;
+
+        const videoSpec = [res, hdr, codec, bitDepth].filter(Boolean).join(' ');
+        const audioTech = (audioCodec + ' ' + audioChannels + (atmos ? ' Atmos' : '')).trim();
+
+        let duration = '';
+        const durMatch = text.match(/Duration\s*:\s*([^\n\r]+)/i);
+        if (durMatch) duration = durMatch[1].trim();
+
+        return new Response(JSON.stringify({
+          success: true,
+          video: videoSpec,
+          audioTech: audioTech,
+          audioLang: audioLang,
+          subs: subs,
+          duration: duration,
+          codecTag: codec === 'H.264' ? 'H264' : codec
+        }), { headers: { 'Content-Type': 'application/json' } });
+      } catch (err) {
+        return new Response(JSON.stringify({ error: err.message }), { status: 500 });
+      }
+    }
+
     // API: Telegram Post
     if (url.pathname === '/api/admin/telegram-post' && request.method === 'POST') {
       try {
@@ -822,24 +917,27 @@ export default {
         if (isSeries) {
           const seasonVersions = versions ? versions.filter(v => v.isSeason || (v.seasonName && v.seasonName.startsWith('Season'))) : [];
           if (seasonVersions.length > 1) {
-            // Multi-season: MediaInfo di baris 1 (jika ada), tombol Season di baris 2
+            // Multi-season atau Multi-version: MediaInfo di baris 1 (jika ada), tombol Season di baris-baris berikutnya (max 2 tombol per baris)
             if (topRow.length > 0) keyboard.push(topRow);
-            const seasonRow = [];
+            const seasonButtons = [];
             seasonVersions.forEach(sv => {
               if (sv.link) {
-                seasonRow.push({
-                  text: `\u{1F4C1} ${sv.seasonName || sv.label || 'Season'}`,
+                seasonButtons.push({
+                  text: `\u{1F4C1} ${sv.buttonText || sv.seasonName || sv.label || 'Season'}`,
                   url: sv.link
                 });
               }
             });
-            if (seasonRow.length > 0) keyboard.push(seasonRow);
+            for (let i = 0; i < seasonButtons.length; i += 2) {
+              keyboard.push(seasonButtons.slice(i, i + 2));
+            }
           } else {
-            // Single-season: [ 📄 MediaInfo ] [ 📁 Buka Folder ] (sejajar jika ada dua-duanya)
-            if (body.folder_url) {
+            // Single-season / Single-version: [ 📄 MediaInfo ] [ 📁 Buka Folder ] (sejajar jika ada dua-duanya)
+            const singleLink = (seasonVersions[0] && seasonVersions[0].link) || body.folder_url;
+            if (singleLink) {
               topRow.push({
                 text: '\u{1F4C1} Buka Folder',
-                url: body.folder_url
+                url: singleLink
               });
             }
             if (topRow.length > 0) keyboard.push(topRow);
@@ -5113,18 +5211,50 @@ function openTelegramModal(files) {
     const parsed = parseFileName(first.name || first.path || '');
     document.getElementById('tgTitle').value = parsed.cleanTitle || parsed.title || first.name || '';
     document.getElementById('tgYear').value = parsed.year || '';
-    // Deteksi series dari SELURUH file yang dipilih, bukan hanya file pertama
+    // Deteksi series dari SELURUH file/folder yang dipilih, dukung S01, S1, Season 1, Season 01
     const anyHasSeason = tgSelectedFiles.some(f => {
       const fn = f.name || f.path || '';
       const up = (' ' + fn.replace(/[^a-zA-Z0-9]/g, ' ') + ' ').toUpperCase();
-      return /(?:^|[^a-zA-Z0-9])S(\d{1,2})(?:[^a-zA-Z0-9]|$)/.test(up);
+      return /(?:^|[^a-zA-Z0-9])(?:S|SEASON\s*)(\d{1,2})(?:[^a-zA-Z0-9]|$)/i.test(up);
     });
-    if (anyHasSeason) document.getElementById('tgCategory').value = 'series';
-    else document.getElementById('tgCategory').value = 'movies';
+    if (anyHasSeason) {
+      document.getElementById('tgCategory').value = 'series';
+      const rTv = document.querySelector('input[name="tmdbTypeToggle"][value="tv"]');
+      if (rTv) rTv.checked = true;
+    } else {
+      document.getElementById('tgCategory').value = 'movies';
+      const rMov = document.querySelector('input[name="tmdbTypeToggle"][value="movie"]');
+      if (rMov) rMov.checked = true;
+    }
     if (parsed.cleanTitle) {
       document.getElementById('tgTmdbQuery').value = parsed.cleanTitle;
     }
-    extractSpecsAndMediaInfo(first);
+    
+    // Jika item pertama adalah folder, cari video sample di dalam folder untuk mediainfo & spesifikasi akurat
+    window._sampleVideoFile = null;
+    const isFirstFolder = first.mimeType === 'application/vnd.google-apps.folder' || (!first.name.includes('.') && !first.size);
+    if (isFirstFolder) {
+      (async () => {
+        try {
+          const fetchUrl = '/api/list?' + (first.id ? ('id=' + encodeURIComponent(first.id)) : ('path=' + encodeURIComponent(first.path)));
+          const res = await fetch(fetchUrl);
+          if (res.ok) {
+            const data = await res.json();
+            const sampleVid = (data.files || []).find(f => (f.mimeType && f.mimeType.startsWith('video/')) || /\.(mkv|mp4|webm|avi)$/i.test(f.name));
+            if (sampleVid) {
+              window._sampleVideoFile = sampleVid;
+              await extractSpecsAndMediaInfo(sampleVid);
+              return;
+            }
+          }
+        } catch(e) {
+          console.warn('Gagal ambil sample video folder:', e);
+        }
+        extractSpecsAndMediaInfo(first);
+      })();
+    } else {
+      extractSpecsAndMediaInfo(first);
+    }
   }
   setupTelegramLivePreview();
   updateTGPosterPreview();
@@ -5150,8 +5280,8 @@ function parseFileName(name) {
   const yearMatch = clean.match(/(?:^|[^0-9])(19\d{2}|20\d{2})(?:[^0-9]|$)/);
   const year = yearMatch ? yearMatch[1] : '';
 
-  // Season: S01, S1, etc.
-  const seasonMatch = upper.match(/(?:^|[^a-zA-Z0-9])S(\d{1,2})(?:[^a-zA-Z0-9]|$)/);
+  // Season: S01, S1, Season 1, Season 01, etc.
+  const seasonMatch = upper.match(/(?:^|[^a-zA-Z0-9])(?:S|SEASON\s*)(\d{1,2})(?:[^a-zA-Z0-9]|$)/);
   const season = seasonMatch ? 'S' + seasonMatch[1] : '';
 
   // Quality: use detectQuality directly
@@ -5193,7 +5323,7 @@ function parseFileName(name) {
 
   let title = String(name).replace(/\.[^.]+$/, '').replace(/[\.\-_]/g, ' ');
   if (year) title = title.split(year)[0].trim();
-  if (season) title = title.split(new RegExp('S\\d{1,2}', 'i'))[0].trim();
+  if (season) title = title.split(new RegExp('(?:S|Season\\s*)' + season.replace('S', ''), 'i'))[0].trim();
   title = title.replace(/\s*(NF|WEB[\s\-]?DL|BluRay|2160p|1080p|720p|4K|AV1|x264|x265|AAC.*|DDP?.*|HEVC|H[\.\s]?264|H[\.\s]?265).*$/i, '').trim();
   title = title.replace(/-/g, ' ').split(' ').filter(Boolean).join(' ').trim();
   const cleanTitle = title || name.split('.')[0].replace(/[^a-zA-Z0-9]/g, ' ').split(' ').filter(Boolean).slice(0, 4).join(' ');
@@ -5441,8 +5571,15 @@ function generateTGCaption() {
       });
     }
 
-    // HANYA jika ada 2 atau lebih season (Dual/Multi Season), tampilkan Pilihan Versi season
-    if (seasonMap.size > 1) {
+    // Hitung total kombinasi (season + codec)
+    let totalVersionCount = 0;
+    seasonMap.forEach(sFiles => {
+      const cSet = new Set(sFiles.map(f => formatCodec(parseFileName(f.name || f.path || '').codec || 'AV1')));
+      totalVersionCount += cSet.size;
+    });
+
+    // Jika lebih dari 1 season ATAU lebih dari 1 versi/codec dalam season yang sama, tampilkan Pilihan Versi
+    if (seasonMap.size > 1 || totalVersionCount > 1) {
       const sortedSeasons = Array.from(seasonMap.keys()).sort((a, b) => {
         const na = parseInt(a.replace(/\D/g, '')) || 0;
         const nb = parseInt(b.replace(/\D/g, '')) || 0;
@@ -5475,9 +5612,9 @@ function generateTGCaption() {
               if (aLabel) sAudio = aLabel;
             }
           });
-          const sz = totalBytes > 1073741824 ? (totalBytes / 1073741824).toFixed(2) + ' GB' : totalBytes > 1048576 ? (totalBytes / 1048576).toFixed(1) + ' MB' : (totalBytes / 1024).toFixed(0) + ' KB';
+          const sz = totalBytes > 0 ? (totalBytes > 1073741824 ? (totalBytes / 1073741824).toFixed(2) + ' GB' : totalBytes > 1048576 ? (totalBytes / 1048576).toFixed(1) + ' MB' : (totalBytes / 1024).toFixed(0) + ' KB') : '';
           const sSpec = [sQuality, codec, sAudio].filter(Boolean).join(' • ');
-          cap += '  🎥 ' + sName + (sSpec ? ' • ' + sSpec : '') + ' (' + sz + ')' + nl;
+          cap += '  🎥 ' + sName + (sSpec ? ' • ' + sSpec : '') + (sz ? ' (' + sz + ')' : '') + nl;
         });
       });
     }
@@ -5551,18 +5688,19 @@ async function createTelegraphMediaInfo() {
   const btn = event?.currentTarget;
   if (btn) { btn.disabled = true; btn.textContent = '⏳ Mengupload...'; }
   const first = tgSelectedFiles && tgSelectedFiles[0];
+  const targetFile = window._sampleVideoFile || first;
   const title = (document.getElementById('tgTitle')?.value || '').trim() || 'MediaInfo';
   const year = (document.getElementById('tgYear')?.value || '').trim();
   const cat = document.getElementById('tgCategory')?.value || 'movies';
   const catLabel = cat === 'series' ? 'Series' : cat === 'anime' ? 'Anime' : 'Movies';
   const pageTitle = title + (year ? ' (' + year + ')' : '') + ' [' + catLabel + ']';
-  const fileName = (first ? (first.name || first.path) : title).trim();
+  const fileName = (targetFile ? (targetFile.name || targetFile.path) : title).trim();
   const pin = document.getElementById('tgAdminPin')?.value || '290722';
 
   let rawContent = '';
-  if (first) {
+  if (targetFile) {
     try {
-      const res = await fetch('/api/mediainfo?path=' + encodeURIComponent(first.path || first.id));
+      const res = await fetch('/api/mediainfo?path=' + encodeURIComponent(targetFile.path || targetFile.id));
       if (res.ok) {
         const d = await res.json();
         rawContent = d.mediainfo_raw || d.raw || '';
@@ -5617,6 +5755,42 @@ async function createTelegraphMediaInfo() {
   } catch(err) {
     alert('Error: ' + err.message);
     if (btn) { btn.disabled = false; btn.textContent = '⚡ Buat ke Telegra.ph'; }
+  }
+}
+
+async function parseMediaInfoFromUrl() {
+  const urlInput = document.getElementById('tgMediaInfoUrl');
+  const url = (urlInput?.value || '').trim();
+  if (!url) {
+    alert('Masukkan link MediaInfo / Telegra.ph terlebih dahulu.');
+    return;
+  }
+  const btn = event?.currentTarget;
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Menarik...'; }
+  try {
+    const res = await fetch('/api/admin/parse-telegraph?url=' + encodeURIComponent(url));
+    const data = await res.json();
+    if (res.ok && data.success) {
+      if (data.video) {
+        const fullVideoSpec = data.video + (data.audioTech ? ' • ' + data.audioTech : '');
+        document.getElementById('tgSpecVideo').value = fullVideoSpec;
+      }
+      if (data.audioLang) document.getElementById('tgSpecAudio').value = data.audioLang;
+      if (data.subs) document.getElementById('tgSpecSubs').value = data.subs;
+      if (data.duration && !document.getElementById('tgSpecDuration').value) {
+        document.getElementById('tgSpecDuration').value = data.duration;
+      }
+      generateAutoHashtags();
+      previewTelegramCaption();
+      if (btn) btn.textContent = '✓ Berhasil!';
+      setTimeout(() => { if (btn) { btn.disabled = false; btn.textContent = '📥 Ekstrak dari Link'; } }, 2000);
+    } else {
+      alert('Gagal mengekstrak: ' + (data.error || 'Unknown error'));
+      if (btn) { btn.disabled = false; btn.textContent = '📥 Ekstrak dari Link'; }
+    }
+  } catch(e) {
+    alert('Error: ' + e.message);
+    if (btn) { btn.disabled = false; btn.textContent = '📥 Ekstrak dari Link'; }
   }
 }
 
@@ -5703,7 +5877,13 @@ function openTelegramVisualPreview() {
         seasonMap.get(sKey).push(f);
       });
 
-      if (seasonMap.size > 1) {
+      let totalVersionCount = 0;
+      seasonMap.forEach(sFiles => {
+        const cSet = new Set(sFiles.map(f => formatCodec(parseFileName(f.name || f.path || '').codec || 'AV1')));
+        totalVersionCount += cSet.size;
+      });
+
+      if (seasonMap.size > 1 || totalVersionCount > 1) {
         bh += '<div style="display: flex; flex-direction: column; gap: 8px;">';
         if (mediaInfoUrl) {
           bh += '<div style="background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); padding: 8px 12px; border-radius: 8px; font-size: 0.8rem; color: #ffffff; text-align: center; font-weight: 600;">📄 MediaInfo ↗️</div>';
@@ -5714,7 +5894,19 @@ function openTelegramVisualPreview() {
           const nb = parseInt(b.replace(/\D/g, '')) || 0;
           return na - nb;
         }).forEach(sName => {
-          bh += '<div style="flex: 1; min-width: 120px; background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.4); padding: 8px 12px; border-radius: 8px; font-size: 0.8rem; color: #38bdf8; text-align: center; font-weight: 600;">📁 ' + escapeHtml(sName) + ' ↗️</div>';
+          const sFiles = seasonMap.get(sName);
+          const codecFileMap = new Map();
+          sFiles.forEach(f => {
+            const p = parseFileName(f.name || f.path || '');
+            const c = formatCodec(p.codec || 'AV1');
+            if (!codecFileMap.has(c)) codecFileMap.set(c, []);
+            codecFileMap.get(c).push(f);
+          });
+          const hasMultiCodecInSeason = codecFileMap.size > 1;
+          codecFileMap.forEach((_, codec) => {
+            const btnName = hasMultiCodecInSeason ? (sName + ' (' + codec + ')') : sName;
+            bh += '<div style="flex: 1; min-width: 120px; background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.4); padding: 8px 12px; border-radius: 8px; font-size: 0.8rem; color: #38bdf8; text-align: center; font-weight: 600;">📁 ' + escapeHtml(btnName) + ' ↗️</div>';
+          });
         });
         bh += '</div></div>';
       } else {
@@ -5801,7 +5993,13 @@ async function sendToTelegram() {
       seasonMap.get(sKey).push(f);
     });
 
-    if (seasonMap.size > 1) {
+    let totalVersionCount = 0;
+    seasonMap.forEach(sFiles => {
+      const cSet = new Set(sFiles.map(f => formatCodec(parseFileName(f.name || f.path || '').codec || 'AV1')));
+      totalVersionCount += cSet.size;
+    });
+
+    if (seasonMap.size > 1 || totalVersionCount > 1) {
       const sortedSeasons = Array.from(seasonMap.keys()).sort((a, b) => {
         const na = parseInt(a.replace(/\D/g, '')) || 0;
         const nb = parseInt(b.replace(/\D/g, '')) || 0;
@@ -5817,6 +6015,7 @@ async function sendToTelegram() {
           if (!codecFileMap.has(c)) codecFileMap.set(c, []);
           codecFileMap.get(c).push(f);
         });
+        const hasMultiCodecInSeason = codecFileMap.size > 1;
         codecFileMap.forEach((cFiles, codec) => {
           let totalBytes = 0;
           let sQuality = '';
@@ -5832,21 +6031,27 @@ async function sendToTelegram() {
             }
             if (!f0) f0 = f;
           });
-          const fsz = totalBytes > 1073741824 ? (totalBytes / 1073741824).toFixed(2) + ' GB' : totalBytes > 1048576 ? (totalBytes / 1048576).toFixed(1) + ' MB' : (totalBytes / 1024).toFixed(0) + ' KB';
+          const fsz = totalBytes > 0 ? (totalBytes > 1073741824 ? (totalBytes / 1073741824).toFixed(2) + ' GB' : totalBytes > 1048576 ? (totalBytes / 1048576).toFixed(1) + ' MB' : (totalBytes / 1024).toFixed(0) + ' KB') : '';
           const sSpec = [sQuality, codec, sAudio].filter(Boolean).join(' • ');
-          let sPath = '';
-          if (f0 && f0.path && f0.path.includes('/')) {
-            sPath = f0.path.substring(0, f0.path.lastIndexOf('/'));
-          } else if (typeof currentPath !== 'undefined' && currentPath) {
-            sPath = currentPath;
+          
+          let sUrl = origin;
+          const isFolder = f0 && (f0.mimeType === 'application/vnd.google-apps.folder' || (!f0.name.includes('.') && !f0.size));
+          if (f0) {
+            if (isFolder) {
+              sUrl = f0.id ? (origin + '/folder/' + f0.id) : (f0.path ? (origin + '/?p=' + encodeURIComponent(f0.path)) : origin);
+            } else {
+              const p = f0.path && f0.path.includes('/') ? f0.path.substring(0, f0.path.lastIndexOf('/')) : (currentPath || '');
+              sUrl = p ? (origin + '/?p=' + encodeURIComponent(p)) : origin;
+            }
           }
-          const sUrl = sPath ? (origin + '/?p=' + encodeURIComponent(sPath)) : origin;
+          const btnName = hasMultiCodecInSeason ? (sName + ' (' + codec + ')') : sName;
           versions.push({
             label: sName + (sSpec ? ' • ' + sSpec : ''),
             size: fsz,
             link: sUrl,
             isSeason: true,
-            seasonName: sName
+            seasonName: btnName,
+            buttonText: btnName
           });
         });
       });
@@ -5866,7 +6071,7 @@ async function sendToTelegram() {
       const fullLabel = [vLabel, aLabel].filter(Boolean).join(' • ');
 
       const sz = f.size > 1073741824 ? (f.size / 1073741824).toFixed(2) + ' GB' : f.size > 1048576 ? (f.size / 1048576).toFixed(1) + ' MB' : (f.size / 1024).toFixed(0) + ' KB';
-      const dlLink = f.id ? (origin + '/file/' + f.id) : (f.path ? (origin + '/d/' + encodeURIComponent(f.path)) : '');
+      const dlLink = f.id ? (origin + '/d/' + f.id) : (origin + '/file/' + encodeURIComponent(f.path));
       return {
         quality: q,
         codec: c,
@@ -5883,15 +6088,18 @@ async function sendToTelegram() {
   const useBanner = document.getElementById('tgUseBanner') ? document.getElementById('tgUseBanner').checked : true;
   const first = tgSelectedFiles && tgSelectedFiles[0];
 
-  let folderPath = '';
+  let folderUrl = origin;
   if (first) {
-    if (first.path && first.path.includes('/')) {
-      folderPath = first.path.substring(0, first.path.lastIndexOf('/'));
+    const isFolder = first.mimeType === 'application/vnd.google-apps.folder' || (!first.name.includes('.') && !first.size);
+    if (isFolder) {
+      folderUrl = first.id ? (origin + '/folder/' + first.id) : (first.path ? (origin + '/?p=' + encodeURIComponent(first.path)) : origin);
+    } else if (first.path && first.path.includes('/')) {
+      const folderPath = first.path.substring(0, first.path.lastIndexOf('/'));
+      folderUrl = origin + '/?p=' + encodeURIComponent(folderPath);
     } else if (typeof currentPath !== 'undefined' && currentPath) {
-      folderPath = currentPath;
+      folderUrl = origin + '/?p=' + encodeURIComponent(currentPath);
     }
   }
-  const folderUrl = folderPath ? (origin + '/?p=' + encodeURIComponent(folderPath)) : origin;
 
   const body = {
     admin_pin: pin,
@@ -7312,12 +7520,17 @@ function adminConsoleUI() {
               <label style="font-size: 0.74rem; font-weight: 600; color: #38bdf8; display: flex; align-items: center; gap: 6px;">
                 <span>🌐</span> MediaInfo Link (Telegra.ph)
               </label>
-              <button type="button" class="nav-btn" style="background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.4); color: #38bdf8; font-size: 0.7rem; padding: 2px 8px; font-weight: 600;" onclick="createTelegraphMediaInfo()">
-                ⚡ Buat ke Telegra.ph
-              </button>
+              <div style="display: flex; gap: 6px;">
+                <button type="button" class="nav-btn" style="background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.4); color: #10b981; font-size: 0.7rem; padding: 2px 8px; font-weight: 600;" onclick="parseMediaInfoFromUrl()" title="Tarik resolusi, audio, subtitle dari link ini">
+                  📥 Ekstrak dari Link
+                </button>
+                <button type="button" class="nav-btn" style="background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.4); color: #38bdf8; font-size: 0.7rem; padding: 2px 8px; font-weight: 600;" onclick="createTelegraphMediaInfo()">
+                  ⚡ Buat ke Telegra.ph
+                </button>
+              </div>
             </div>
             <div style="display: flex; gap: 6px;">
-              <input type="text" id="tgMediaInfoUrl" class="form-input-pro" placeholder="https://telegra.ph/... (Bisa auto generate atau isi manual)" style="flex: 1; font-size: 0.78rem;">
+              <input type="text" id="tgMediaInfoUrl" class="form-input-pro" placeholder="https://telegra.ph/... (Bisa auto generate atau isi manual / paste link)" style="flex: 1; font-size: 0.78rem;" onchange="previewTelegramCaption()">
               <button type="button" class="nav-btn" style="font-size: 0.74rem; padding: 0 10px;" onclick="const u = document.getElementById('tgMediaInfoUrl').value; if(u) window.open(u, '_blank'); else alert('Link MediaInfo masih kosong.');" title="Buka Link">
                 🔗
               </button>
