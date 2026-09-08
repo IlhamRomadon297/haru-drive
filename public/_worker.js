@@ -21,9 +21,18 @@ export default {
     const TELEGRAM_TOPIC_ID = env.TELEGRAM_TOPIC_ID || '';
     const TMDB_API_KEY = env.TMDB_API_KEY || '';
     const VERCEL_POSTER_URL = env.VERCEL_POSTER_URL || 'https://haru-drive.vercel.app';
-    const ADMIN_EMAIL = env.ADMIN_EMAIL || 'harumisatou@gmail.com';
+    const ADMIN_EMAIL = (env.ADMIN_EMAIL || '').trim();
     const RESEND_API_KEY = env.RESEND_API_KEY || '';
     const RESEND_FROM_EMAIL = env.RESEND_FROM_EMAIL || 'HaruDrive Security <noreply@mail.harufilm.my.id>';
+
+    function maskEmail(e) {
+      if (!e || !e.includes('@')) return e || '';
+      const parts = e.split('@');
+      const user = parts[0];
+      const domain = parts[1];
+      if (user.length <= 2) return user[0] + '***@' + domain;
+      return user.slice(0, 2) + '***' + user.slice(-1) + '@' + domain;
+    }
 
     async function ensureAdminAuthTables(e) {
       if (!e.harudrive_db) return;
@@ -680,10 +689,16 @@ export default {
             return new Response(JSON.stringify({
               success: true,
               trusted: true,
-              email: ADMIN_EMAIL,
+              email: maskEmail(ADMIN_EMAIL),
               message: 'Perangkat terpercaya. Login berhasil!'
             }), { headers: { 'Content-Type': 'application/json' } });
           }
+        }
+
+        if (!ADMIN_EMAIL) {
+          return new Response(JSON.stringify({
+            error: 'ADMIN_EMAIL belum disetel di Cloudflare Secret / Environment Variable. Harap set secret ADMIN_EMAIL terlebih dahulu.'
+          }), { status: 400, headers: { 'Content-Type': 'application/json' } });
         }
 
         // 2. Device not trusted or token expired -> Generate & Send OTP to ADMIN_EMAIL
@@ -710,7 +725,7 @@ export default {
           email_sent: emailResult.success,
           error_detail: emailResult.success ? undefined : emailResult.error,
           message: emailResult.success
-            ? 'Kode OTP 6-digit telah dikirim ke ' + ADMIN_EMAIL
+            ? 'Kode OTP 6-digit telah dikirim ke ' + maskEmail(ADMIN_EMAIL)
             : 'PIN benar. Namun pengiriman email gagal: ' + (emailResult.error || 'Cek konfigurasi RESEND_API_KEY')
         }), { headers: { 'Content-Type': 'application/json' } });
       } catch (err) {
@@ -728,6 +743,9 @@ export default {
         }
 
         await ensureAdminAuthTables(env);
+        if (!ADMIN_EMAIL) {
+          return new Response(JSON.stringify({ error: 'ADMIN_EMAIL belum disetel di Cloudflare Secret.' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+        }
         const inputOtp = String(body.otp_code || '').trim();
         if (!inputOtp || inputOtp.length !== 6) {
           return new Response(JSON.stringify({ error: 'Masukkan 6 digit kode OTP.' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
@@ -801,6 +819,9 @@ export default {
         }
 
         await ensureAdminAuthTables(env);
+        if (!ADMIN_EMAIL) {
+          return new Response(JSON.stringify({ error: 'ADMIN_EMAIL belum disetel di Cloudflare Secret.' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+        }
 
         // Cooldown check (60s)
         if (env.harudrive_db) {
@@ -7899,7 +7920,7 @@ function adminConsoleUI() {
         </div>
         <h2 style="font-size: 1.3rem; font-weight: 800; margin-bottom: 6px; color: #38bdf8;">Verifikasi 2-Langkah</h2>
         <p style="font-size: 0.82rem; color: var(--text-muted); margin-bottom: 6px;">Kode OTP 6-digit telah dikirim ke:</p>
-        <div id="otpEmailTarget" style="font-size: 0.85rem; font-weight: 700; color: #ec4899; margin-bottom: 16px; font-family: monospace;">harumisatou@gmail.com</div>
+        <div id="otpEmailTarget" style="font-size: 0.85rem; font-weight: 700; color: #ec4899; margin-bottom: 16px; font-family: monospace;">admin@email.com</div>
 
         <div style="display: flex; flex-direction: column; gap: 14px;">
           <input type="text" id="gateOtpInput" inputmode="numeric" placeholder="123456" maxlength="6" autocomplete="one-time-code" class="form-input-pro" style="font-size: 1.6rem; letter-spacing: 8px; text-align: center; font-weight: 800; padding: 10px;" onkeydown="if(event.key==='Enter')submitAdminOtp()">
