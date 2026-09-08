@@ -25,6 +25,8 @@ export default {
     const RESEND_API_KEY = env.RESEND_API_KEY || '';
     const RESEND_FROM_EMAIL = env.RESEND_FROM_EMAIL || 'HaruDrive Security <noreply@mail.harufilm.my.id>';
 
+    const AUTH_SECRET = (env.APP_PASSWORD || '') + ':' + (env.ADMIN_PIN || '290722') + ':' + (env.ADMIN_EMAIL || '') + ':harudrive_stateless_2fa_v1';
+
     function maskEmail(e) {
       if (!e || !e.includes('@')) return e || '';
       const parts = e.split('@');
@@ -34,14 +36,45 @@ export default {
       return user.slice(0, 2) + '***' + user.slice(-1) + '@' + domain;
     }
 
-    async function ensureAdminAuthTables(e) {
-      if (!e.harudrive_db) return;
-      await e.harudrive_db.prepare(
-        'CREATE TABLE IF NOT EXISTS admin_otps (id TEXT PRIMARY KEY, email TEXT, otp_code TEXT, created_at INTEGER, expires_at INTEGER, attempts INTEGER DEFAULT 0)'
-      ).run().catch(function(){});
-      await e.harudrive_db.prepare(
-        'CREATE TABLE IF NOT EXISTS trusted_devices (token TEXT PRIMARY KEY, email TEXT, user_agent TEXT, ip TEXT, created_at INTEGER, expires_at INTEGER)'
-      ).run().catch(function(){});
+    function toBase64Url(str) {
+      return btoa(unescape(encodeURIComponent(str))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    }
+    function fromBase64Url(str) {
+      str = str.replace(/-/g, '+').replace(/_/g, '/');
+      while (str.length % 4) str += '=';
+      return decodeURIComponent(escape(atob(str)));
+    }
+    function bufferToBase64Url(buf) {
+      const bytes = new Uint8Array(buf);
+      let bin = '';
+      for (let i = 0; i < bytes.byteLength; i++) bin += String.fromCharCode(bytes[i]);
+      return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    }
+
+    async function signToken(payloadObj, secret) {
+      const enc = new TextEncoder();
+      const dataStr = toBase64Url(JSON.stringify(payloadObj));
+      const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+      const sigBuf = await crypto.subtle.sign('HMAC', key, enc.encode(dataStr));
+      return dataStr + '.' + bufferToBase64Url(sigBuf);
+    }
+
+    async function verifyToken(tokenStr, secret) {
+      if (!tokenStr || typeof tokenStr !== 'string' || !tokenStr.includes('.')) return null;
+      const [dataStr, sigStr] = tokenStr.split('.');
+      if (!dataStr || !sigStr) return null;
+      try {
+        const enc = new TextEncoder();
+        const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+        const expectedSigBuf = await crypto.subtle.sign('HMAC', key, enc.encode(dataStr));
+        const expectedSigStr = bufferToBase64Url(expectedSigBuf);
+        if (sigStr !== expectedSigStr) return null;
+        const payload = JSON.parse(fromBase64Url(dataStr));
+        if (payload.exp && Date.now() > payload.exp) return null;
+        return payload;
+      } catch (e) {
+        return null;
+      }
     }
 
     async function sendResendOtpEmail(e, toEmail, otpCode, clientInfo) {
@@ -667,7 +700,7 @@ export default {
       } catch(e) { return new Response(JSON.stringify({ stats: [] }), { headers: { 'Content-Type': 'application/json' } }); }
     }
 
-    // API: Verify Admin PIN & 2FA Device Token
+    // API: Verify Admin PIN & 2FA Device Token (Stateless HMAC)
     if (url.pathname === '/api/admin/verify' && request.method === 'POST') {
       try {
         const body = await request.json().catch(() => ({}));
@@ -676,23 +709,34 @@ export default {
           return new Response(JSON.stringify({ error: 'PIN Admin Salah!' }), { status: 403, headers: { 'Content-Type': 'application/json' } });
         }
 
-        await ensureAdminAuthTables(env);
         const deviceToken = (body.device_token || '').trim();
 
-        // 1. Check if device is trusted (< 7 days)
-        if (deviceToken && env.harudrive_db) {
-          const trusted = await env.harudrive_db.prepare(
-            'SELECT token, expires_at FROM trusted_devices WHERE token = ? AND expires_at > ?'
-          ).bind(deviceToken, Date.now()).first().catch(() => null);
-
-          if (trusted) {
+        // 1. Check if device is trusted (< 7 days) via HMAC token verification
+        if (deviceToken) {
+          const trustedPayload = await verifyToken(deviceToken, AUTH_SECRET);
+          if (trustedPayload && trustedPayload.type === 'device' && (!trustedPayload.email || trustedPayload.email === ADMIN_EMAIL)) {
             return new Response(JSON.stringify({
               success: true,
               trusted: true,
               email: maskEmail(ADMIN_EMAIL),
               message: 'Perangkat terpercaya. Login berhasil!'
-            }), { headers: { 'Content-Type': 'application/json' } });
+            }), {
+              headers: {
+                'Content-Type': 'application/json',
+                'Set-Cookie': 'harudrive_auth=true; Path=/; Max-Age=604800; SameSite=Lax'
+              }
+            });
           }
+        }
+
+        // If this is just a background check on page load, DO NOT send OTP email!
+        if (body.check_only === true) {
+          return new Response(JSON.stringify({
+            success: false,
+            trusted: false,
+            requires_pin: true,
+            message: 'Perangkat belum terverifikasi atau token kadaluarsa.'
+          }), { headers: { 'Content-Type': 'application/json' } });
         }
 
         if (!ADMIN_EMAIL) {
@@ -701,17 +745,18 @@ export default {
           }), { status: 400, headers: { 'Content-Type': 'application/json' } });
         }
 
-        // 2. Device not trusted or token expired -> Generate & Send OTP to ADMIN_EMAIL
+        // 2. Device not trusted -> Generate OTP and Stateless OTP Challenge Token
         const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
         const now = Date.now();
         const expiresAt = now + 10 * 60 * 1000; // 10 mins
 
-        if (env.harudrive_db) {
-          await env.harudrive_db.prepare('DELETE FROM admin_otps WHERE email = ?').bind(ADMIN_EMAIL).run().catch(() => {});
-          await env.harudrive_db.prepare(
-            'INSERT INTO admin_otps (id, email, otp_code, created_at, expires_at, attempts) VALUES (?, ?, ?, ?, ?, 0)'
-          ).bind(crypto.randomUUID(), ADMIN_EMAIL, otpCode, now, expiresAt).run().catch(() => {});
-        }
+        const otpChallenge = await signToken({
+          type: 'otp',
+          email: ADMIN_EMAIL,
+          otp: otpCode,
+          exp: expiresAt,
+          sent_at: now
+        }, AUTH_SECRET);
 
         const clientIp = request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || '';
         const clientUa = request.headers.get('User-Agent') || '';
@@ -722,6 +767,7 @@ export default {
           trusted: false,
           requires_otp: true,
           email: ADMIN_EMAIL,
+          otp_challenge: otpChallenge,
           email_sent: emailResult.success,
           error_detail: emailResult.success ? undefined : emailResult.error,
           message: emailResult.success
@@ -742,7 +788,6 @@ export default {
           return new Response(JSON.stringify({ error: 'PIN Admin Salah!' }), { status: 403, headers: { 'Content-Type': 'application/json' } });
         }
 
-        await ensureAdminAuthTables(env);
         if (!ADMIN_EMAIL) {
           return new Response(JSON.stringify({ error: 'ADMIN_EMAIL belum disetel di Cloudflare Secret.' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
         }
@@ -751,51 +796,33 @@ export default {
           return new Response(JSON.stringify({ error: 'Masukkan 6 digit kode OTP.' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
         }
 
-        if (!env.harudrive_db) {
-          return new Response(JSON.stringify({ error: 'Database tidak tersedia.' }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+        const challengeToken = (body.otp_challenge || '').trim();
+        if (!challengeToken) {
+          return new Response(JSON.stringify({ error: 'Sesi verifikasi tidak ditemukan. Silakan minta kode OTP baru.' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
         }
 
-        const record = await env.harudrive_db.prepare(
-          'SELECT id, otp_code, expires_at, attempts FROM admin_otps WHERE email = ?'
-        ).bind(ADMIN_EMAIL).first().catch(() => null);
-
-        if (!record) {
+        const challenge = await verifyToken(challengeToken, AUTH_SECRET);
+        if (!challenge || challenge.type !== 'otp' || challenge.email !== ADMIN_EMAIL) {
           return new Response(JSON.stringify({ error: 'Kode OTP tidak ditemukan atau sudah kadaluarsa. Silakan minta kode baru.' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
         }
 
-        if (Date.now() > record.expires_at) {
-          await env.harudrive_db.prepare('DELETE FROM admin_otps WHERE email = ?').bind(ADMIN_EMAIL).run().catch(() => {});
-          return new Response(JSON.stringify({ error: 'Kode OTP sudah kadaluarsa. Silakan minta kode baru.' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+        if (challenge.otp !== inputOtp) {
+          return new Response(JSON.stringify({ error: 'Kode OTP salah! Periksa kembali kode di email Anda.' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
         }
-
-        if (record.attempts >= 5) {
-          await env.harudrive_db.prepare('DELETE FROM admin_otps WHERE email = ?').bind(ADMIN_EMAIL).run().catch(() => {});
-          return new Response(JSON.stringify({ error: 'Terlalu banyak percobaan salah. Silakan minta kode baru.' }), { status: 429, headers: { 'Content-Type': 'application/json' } });
-        }
-
-        if (record.otp_code !== inputOtp) {
-          await env.harudrive_db.prepare('UPDATE admin_otps SET attempts = attempts + 1 WHERE id = ?').bind(record.id).run().catch(() => {});
-          const remaining = 5 - (record.attempts + 1);
-          return new Response(JSON.stringify({ error: 'Kode OTP salah! Sisa percobaan: ' + remaining }), { status: 400, headers: { 'Content-Type': 'application/json' } });
-        }
-
-        // OTP Valid! Delete OTP record
-        await env.harudrive_db.prepare('DELETE FROM admin_otps WHERE email = ?').bind(ADMIN_EMAIL).run().catch(() => {});
 
         // Issue 7-Day Trusted Device Token
-        const token = crypto.randomUUID() + '-' + crypto.randomUUID();
         const now = Date.now();
         const expiresAt = now + (7 * 24 * 60 * 60 * 1000); // 7 Days
-        const clientIp = request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || '';
-        const clientUa = request.headers.get('User-Agent') || '';
-
-        await env.harudrive_db.prepare(
-          'INSERT OR REPLACE INTO trusted_devices (token, email, user_agent, ip, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)'
-        ).bind(token, ADMIN_EMAIL, clientUa, clientIp, now, expiresAt).run().catch(() => {});
+        const deviceToken = await signToken({
+          type: 'device',
+          email: ADMIN_EMAIL,
+          issued: now,
+          exp: expiresAt
+        }, AUTH_SECRET);
 
         return new Response(JSON.stringify({
           success: true,
-          device_token: token,
+          device_token: deviceToken,
           expires_at: expiresAt,
           message: 'Verifikasi berhasil! Perangkat dipercaya selama 7 hari.'
         }), {
@@ -818,33 +845,21 @@ export default {
           return new Response(JSON.stringify({ error: 'PIN Admin Salah!' }), { status: 403, headers: { 'Content-Type': 'application/json' } });
         }
 
-        await ensureAdminAuthTables(env);
         if (!ADMIN_EMAIL) {
           return new Response(JSON.stringify({ error: 'ADMIN_EMAIL belum disetel di Cloudflare Secret.' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
-        }
-
-        // Cooldown check (60s)
-        if (env.harudrive_db) {
-          const last = await env.harudrive_db.prepare(
-            'SELECT created_at FROM admin_otps WHERE email = ?'
-          ).bind(ADMIN_EMAIL).first().catch(() => null);
-
-          if (last && (Date.now() - last.created_at) < 60000) {
-            const waitSec = Math.ceil((60000 - (Date.now() - last.created_at)) / 1000);
-            return new Response(JSON.stringify({ error: 'Mohon tunggu ' + waitSec + ' detik sebelum meminta kode baru.' }), { status: 429, headers: { 'Content-Type': 'application/json' } });
-          }
         }
 
         const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
         const now = Date.now();
         const expiresAt = now + 10 * 60 * 1000;
 
-        if (env.harudrive_db) {
-          await env.harudrive_db.prepare('DELETE FROM admin_otps WHERE email = ?').bind(ADMIN_EMAIL).run().catch(() => {});
-          await env.harudrive_db.prepare(
-            'INSERT INTO admin_otps (id, email, otp_code, created_at, expires_at, attempts) VALUES (?, ?, ?, ?, ?, 0)'
-          ).bind(crypto.randomUUID(), ADMIN_EMAIL, otpCode, now, expiresAt).run().catch(() => {});
-        }
+        const otpChallenge = await signToken({
+          type: 'otp',
+          email: ADMIN_EMAIL,
+          otp: otpCode,
+          exp: expiresAt,
+          sent_at: now
+        }, AUTH_SECRET);
 
         const clientIp = request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || '';
         const clientUa = request.headers.get('User-Agent') || '';
@@ -852,9 +867,10 @@ export default {
 
         return new Response(JSON.stringify({
           success: true,
+          otp_challenge: otpChallenge,
           email_sent: emailResult.success,
           message: emailResult.success
-            ? 'Kode OTP baru telah dikirim ke ' + ADMIN_EMAIL
+            ? 'Kode OTP baru telah dikirim ke ' + maskEmail(ADMIN_EMAIL)
             : 'Pengiriman email gagal: ' + (emailResult.error || 'Cek RESEND_API_KEY')
         }), { headers: { 'Content-Type': 'application/json' } });
       } catch (err) {
@@ -3901,6 +3917,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // Admin Session, 2FA Resend OTP, and 7-Day Trusted Device Gate
 let currentPendingPin = '';
+let currentOtpChallenge = '';
+let isVerifyingAdmin = false;
 let otpTimerInterval = null;
 
 function startOtpCountdown(seconds) {
@@ -3929,9 +3947,14 @@ function backToPinStep() {
   if (oStep) oStep.style.display = 'none';
   const errOtp = document.getElementById('loginOtpError');
   if (errOtp) errOtp.style.display = 'none';
+  try {
+    sessionStorage.removeItem('harudrive_pending_pin');
+    sessionStorage.removeItem('harudrive_otp_challenge');
+  } catch(e) {}
 }
 
 async function unlockAdminConsole() {
+  if (isVerifyingAdmin) return;
   const pinInput = document.getElementById('gatePinInput');
   const errText = document.getElementById('loginPinError');
   const btn = document.getElementById('btnUnlockAdmin');
@@ -3942,7 +3965,8 @@ async function unlockAdminConsole() {
     return;
   }
 
-  if (btn) { btn.disabled = true; btn.textContent = '⏳ Memeriksa PIN...'; }
+  isVerifyingAdmin = true;
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Memeriksa...'; }
   if (errText) errText.style.display = 'none';
 
   const deviceToken = localStorage.getItem('harudrive_device_token') || getCookie('harudrive_device_token') || '';
@@ -3951,9 +3975,10 @@ async function unlockAdminConsole() {
     const res = await fetch('/api/admin/verify', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ admin_pin: pin, device_token: deviceToken })
+      body: JSON.stringify({ admin_pin: pin, device_token: deviceToken, check_only: false })
     });
     const data = await res.json().catch(function(){ return {}; });
+    isVerifyingAdmin = false;
     if (btn) { btn.disabled = false; btn.textContent = 'Buka Console Admin'; }
 
     if (!res.ok) {
@@ -3972,6 +3997,12 @@ async function unlockAdminConsole() {
     // Case 2: Requires 2FA OTP verification
     if (data.requires_otp) {
       currentPendingPin = pin;
+      currentOtpChallenge = data.otp_challenge || '';
+      try {
+        sessionStorage.setItem('harudrive_pending_pin', pin);
+        if (data.otp_challenge) sessionStorage.setItem('harudrive_otp_challenge', data.otp_challenge);
+      } catch(e) {}
+
       const emailEl = document.getElementById('otpEmailTarget');
       if (emailEl && data.email) emailEl.textContent = data.email;
       const pStep = document.getElementById('gatePinStep');
@@ -3987,6 +4018,7 @@ async function unlockAdminConsole() {
       }
     }
   } catch(e) {
+    isVerifyingAdmin = false;
     if (btn) { btn.disabled = false; btn.textContent = 'Buka Console Admin'; }
     if (errText) { errText.textContent = 'Error: ' + e.message; errText.style.display = 'block'; }
   }
@@ -4003,6 +4035,9 @@ async function submitAdminOtp() {
     return;
   }
 
+  const pin = currentPendingPin || (function(){ try { return sessionStorage.getItem('harudrive_pending_pin'); }catch(e){ return ''; } })() || (document.getElementById('gatePinInput')?.value || '').trim() || localStorage.getItem('harudrive_admin_pin') || '';
+  const challenge = currentOtpChallenge || (function(){ try { return sessionStorage.getItem('harudrive_otp_challenge'); }catch(e){ return ''; } })() || '';
+
   if (btn) { btn.disabled = true; btn.textContent = '⏳ Memverifikasi...'; }
   if (errText) errText.style.display = 'none';
 
@@ -4010,7 +4045,7 @@ async function submitAdminOtp() {
     const res = await fetch('/api/admin/auth/verify-otp', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ admin_pin: currentPendingPin, otp_code: otp })
+      body: JSON.stringify({ admin_pin: pin, otp_code: otp, otp_challenge: challenge })
     });
     const data = await res.json().catch(function(){ return {}; });
     if (btn) { btn.disabled = false; btn.textContent = 'Verifikasi & Masuk'; }
@@ -4025,8 +4060,14 @@ async function submitAdminOtp() {
       localStorage.setItem('harudrive_device_token', data.device_token);
       setCookie('harudrive_device_token', data.device_token, 7);
     }
-    localStorage.setItem('harudrive_admin_pin', currentPendingPin);
-    setCookie('harudrive_admin_pin', currentPendingPin, 30);
+    if (pin) {
+      localStorage.setItem('harudrive_admin_pin', pin);
+      setCookie('harudrive_admin_pin', pin, 30);
+    }
+    try {
+      sessionStorage.removeItem('harudrive_pending_pin');
+      sessionStorage.removeItem('harudrive_otp_challenge');
+    } catch(e) {}
 
     if (otpTimerInterval) clearInterval(otpTimerInterval);
     const pStep = document.getElementById('gatePinStep');
@@ -4046,11 +4087,13 @@ async function resendAdminOtp() {
   if (btn) { btn.disabled = true; btn.textContent = 'Mengirim...'; }
   if (errText) errText.style.display = 'none';
 
+  const pin = currentPendingPin || (function(){ try { return sessionStorage.getItem('harudrive_pending_pin'); }catch(e){ return ''; } })() || (document.getElementById('gatePinInput')?.value || '').trim() || localStorage.getItem('harudrive_admin_pin') || '';
+
   try {
     const res = await fetch('/api/admin/auth/resend-otp', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ admin_pin: currentPendingPin })
+      body: JSON.stringify({ admin_pin: pin })
     });
     const data = await res.json().catch(function(){ return {}; });
     if (!res.ok) {
@@ -4058,9 +4101,13 @@ async function resendAdminOtp() {
       if (errText) { errText.textContent = data.error || 'Gagal mengirim ulang OTP.'; errText.style.display = 'block'; }
       return;
     }
+    if (data.otp_challenge) {
+      currentOtpChallenge = data.otp_challenge;
+      try { sessionStorage.setItem('harudrive_otp_challenge', data.otp_challenge); }catch(e){}
+    }
     if (btn) btn.textContent = '✓ Terkirim!';
     startOtpCountdown(600);
-    setTimeout(function(){ if (btn) { btn.disabled = false; btn.textContent = 'Kirim Ulang'; } }, 5000);
+    setTimeout(function(){ if (btn) { btn.disabled = false; btn.textContent = 'Kirim Ulang'; } }, 30000); // 30s cooldown
   } catch(e) {
     if (btn) { btn.disabled = false; btn.textContent = 'Kirim Ulang'; }
     if (errText) { errText.textContent = 'Error: ' + e.message; errText.style.display = 'block'; }
@@ -4080,12 +4127,13 @@ async function initAdminConsole() {
   const savedPin = localStorage.getItem('harudrive_admin_pin') || getCookie('harudrive_admin_pin');
   const savedDeviceToken = localStorage.getItem('harudrive_device_token') || getCookie('harudrive_device_token') || '';
 
-  if (savedPin) {
+  // ONLY attempt silent auto-login if BOTH savedPin AND savedDeviceToken exist!
+  if (savedPin && savedDeviceToken) {
     try {
       const res = await fetch('/api/admin/verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ admin_pin: savedPin, device_token: savedDeviceToken })
+        body: JSON.stringify({ admin_pin: savedPin, device_token: savedDeviceToken, check_only: true })
       });
       const data = await res.json().catch(function(){ return {}; });
       if (res.ok && data.trusted) {
@@ -4105,8 +4153,14 @@ async function initAdminConsole() {
     } catch(e) {}
   }
 
+  // If not trusted or no saved credentials, display the gate with PIN step.
+  // CRITICAL: ZERO OTP emails sent on page load!
   if (gate) gate.style.display = 'flex';
   if (main) main.style.display = 'none';
+  const pStep = document.getElementById('gatePinStep');
+  const oStep = document.getElementById('gateOtpStep');
+  if (pStep) pStep.style.display = 'block';
+  if (oStep) oStep.style.display = 'none';
 }
 
 // Navigation
