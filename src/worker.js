@@ -5346,10 +5346,8 @@ function generateTGCaption() {
   }
   cap = cap.trim() + '</blockquote>' + nl;
 
-  // 4. Pilihan Versi jika lebih dari 1 file terpilih (Bahasa Indonesia) HANYA untuk Movies
-  const cat = (document.getElementById('tgCategory')?.value || 'movies').toLowerCase();
-  const isSeries = cat === 'series' || cat === 'anime';
-  if (tgSelectedFiles && tgSelectedFiles.length > 1 && !isSeries) {
+  // 4. Pilihan Versi jika lebih dari 1 file terpilih (Bahasa Indonesia)
+  if (tgSelectedFiles && tgSelectedFiles.length > 1) {
     const qOrder = ['360p', '480p', '576p', '720p', '1080p', '2160p'];
     const sortedFiles = [...tgSelectedFiles].sort((a, b) => {
       const qa = detectQuality(a.name || a.path || '');
