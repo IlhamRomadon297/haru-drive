@@ -2188,12 +2188,20 @@ function htmlPage(content, env, pageMode = 'public') {
     #tgVisualPreviewModal {
       z-index: 10005 !important;
     }
+    #tgVisualPreviewModal .modal-card {
+      max-height: 88vh !important;
+      display: flex !important;
+      flex-direction: column !important;
+      overflow: hidden !important;
+    }
     #tgVisualPreviewBody {
-      max-height: 70vh !important;
-      overflow-y: scroll !important;
+      min-height: 0 !important;
+      flex: 1 1 auto !important;
+      max-height: calc(88vh - 120px) !important;
+      overflow-y: auto !important;
       -webkit-overflow-scrolling: touch;
       scrollbar-width: thin;
-      scrollbar-color: #38bdf8 rgba(255, 255, 255, 0.1);
+      scrollbar-color: #38bdf8 rgba(255, 255, 255, 0.2);
       touch-action: pan-y;
     }
     #tgVisualPreviewBody::-webkit-scrollbar {
@@ -5263,7 +5271,7 @@ function generateTGCaption() {
     tgSelectedFiles.forEach(f => {
       const fn = f.name || f.path || '';
       const parsed = parseFileName(fn);
-      const q = formatQuality(parsed.quality);
+      const q = detectQuality(fn);
       const hdr = detectHDR(fn);
       const c = formatCodec(parsed.codec);
       const aTech = detectAudioTech(fn);
@@ -5412,7 +5420,6 @@ function openTelegramVisualPreview() {
   const vb = document.getElementById('tgVisualPreviewBody');
   if (vb) {
     vb.scrollTop = 0;
-    vb.onwheel = function(e) { e.stopPropagation(); };
   }
 
   const cap = generateTGCaption();
@@ -7096,7 +7103,7 @@ function adminConsoleUI() {
         </button>
       </div>
 
-      <div id="tgVisualPreviewBody" class="modal-body" style="flex: 1 1 auto; overflow-y: auto !important; max-height: calc(90vh - 120px); overscroll-behavior: contain; padding: 16px 20px; -webkit-overflow-scrolling: touch;">
+      <div id="tgVisualPreviewBody" class="modal-body" style="flex: 1 1 auto; min-height: 0 !important; overflow-y: auto !important; max-height: calc(88vh - 120px); overscroll-behavior: contain; padding: 16px 20px; -webkit-overflow-scrolling: touch;">
         <!-- Telegram Dark Bubble Card Mockup -->
         <div style="background: #182533; border-radius: 14px; overflow: hidden; border: 1px solid rgba(255,255,255,0.08); box-shadow: 0 10px 30px rgba(0,0,0,0.5); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
           <!-- Bubble Banner Image (Limited max height for easy scrolling) -->
