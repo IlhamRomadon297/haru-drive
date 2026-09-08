@@ -5897,9 +5897,14 @@ async function parseMediaInfoFromUrl() {
   if (btn) { btn.disabled = true; btn.textContent = '⏳ Menarik...'; }
 
   // Check if link is a HaruDrive video file link (e.g. /file/{id} or /d/{id})
-  const fileLinkMatch = url.match(/\/(?:file|d|raw)\/(?<sid>[a-zA-Z0-9_-]+)/);
-  if (fileLinkMatch && fileLinkMatch.groups && fileLinkMatch.groups.sid) {
-    const fId = fileLinkMatch.groups.sid;
+  let fId = '';
+  ['/file/', '/d/', '/raw/'].forEach(prefix => {
+    if (!fId && url.includes(prefix)) {
+      const rest = url.split(prefix)[1];
+      if (rest) fId = rest.split('/')[0].split('?')[0].split('#')[0].trim();
+    }
+  });
+  if (fId) {
     try {
       // 1. Try D1 cached MediaInfo first
       const miRes = await fetch('/api/mediainfo?path=' + encodeURIComponent(fId));
