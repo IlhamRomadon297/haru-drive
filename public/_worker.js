@@ -5431,27 +5431,33 @@ function generateTGCaption() {
       cap += nl + '📁 <b>Pilihan Versi:</b>' + nl;
       sortedSeasons.forEach(sName => {
         const sFiles = seasonMap.get(sName);
-        let totalBytes = 0;
-        let sQuality = '';
-        const sCodecs = [];
-        let sAudio = '';
+
+        // Group per codec dalam season ini — kalau multi-codec, pisah jadi baris berbeda
+        const codecFileMap = new Map();
         sFiles.forEach(f => {
-          totalBytes += (f.size || 0);
-          if (!sQuality) sQuality = detectQuality(f.name || f.path || '');
           const p = parseFileName(f.name || f.path || '');
           const c = formatCodec(p.codec || 'AV1');
-          if (c && !sCodecs.includes(c)) sCodecs.push(c);
-          if (!sAudio) {
-            const aTech = detectAudioTech(f.name || f.path || '');
-            const aLabel = (aTech.codec + ' ' + aTech.channel + (aTech.atmos ? ' Atmos' : '')).trim();
-            if (aLabel) sAudio = aLabel;
-          }
+          if (!codecFileMap.has(c)) codecFileMap.set(c, []);
+          codecFileMap.get(c).push(f);
         });
-        const sz = totalBytes > 1073741824 ? (totalBytes / 1073741824).toFixed(2) + ' GB' : totalBytes > 1048576 ? (totalBytes / 1048576).toFixed(1) + ' MB' : (totalBytes / 1024).toFixed(0) + ' KB';
-        // Jika multi-codec dalam 1 season, gabung dengan '/'
-        const codecStr = sCodecs.join(' / ');
-        const sSpec = [sQuality, codecStr, sAudio].filter(Boolean).join(' • ');
-        cap += '  🎥 ' + sName + (sSpec ? ' • ' + sSpec : '') + ' (' + sz + ')' + nl;
+
+        codecFileMap.forEach((cFiles, codec) => {
+          let totalBytes = 0;
+          let sQuality = '';
+          let sAudio = '';
+          cFiles.forEach(f => {
+            totalBytes += (f.size || 0);
+            if (!sQuality) sQuality = detectQuality(f.name || f.path || '');
+            if (!sAudio) {
+              const aTech = detectAudioTech(f.name || f.path || '');
+              const aLabel = (aTech.codec + ' ' + aTech.channel + (aTech.atmos ? ' Atmos' : '')).trim();
+              if (aLabel) sAudio = aLabel;
+            }
+          });
+          const sz = totalBytes > 1073741824 ? (totalBytes / 1073741824).toFixed(2) + ' GB' : totalBytes > 1048576 ? (totalBytes / 1048576).toFixed(1) + ' MB' : (totalBytes / 1024).toFixed(0) + ' KB';
+          const sSpec = [sQuality, codec, sAudio].filter(Boolean).join(' • ');
+          cap += '  🎥 ' + sName + (sSpec ? ' • ' + sSpec : '') + ' (' + sz + ')' + nl;
+        });
       });
     }
   } else if (tgSelectedFiles && tgSelectedFiles.length > 1) {
@@ -5780,42 +5786,48 @@ async function sendToTelegram() {
         const nb = parseInt(b.replace(/\D/g, '')) || 0;
         return na - nb;
       });
-      versions = sortedSeasons.map(sName => {
+      // Expand per (season + codec) jika multi-codec dalam 1 season
+      sortedSeasons.forEach(sName => {
         const sFiles = seasonMap.get(sName);
-        let totalBytes = 0;
-        let sQuality = '';
-        const sCodecs = [];
-        let sAudio = '';
+        const codecFileMap = new Map();
         sFiles.forEach(f => {
-          totalBytes += (f.size || 0);
-          if (!sQuality) sQuality = detectQuality(f.name || f.path || '');
           const p = parseFileName(f.name || f.path || '');
           const c = formatCodec(p.codec || 'AV1');
-          if (c && !sCodecs.includes(c)) sCodecs.push(c);
-          if (!sAudio) {
-            const aTech = detectAudioTech(f.name || f.path || '');
-            const aLabel = (aTech.codec + ' ' + aTech.channel + (aTech.atmos ? ' Atmos' : '')).trim();
-            if (aLabel) sAudio = aLabel;
-          }
+          if (!codecFileMap.has(c)) codecFileMap.set(c, []);
+          codecFileMap.get(c).push(f);
         });
-        const fsz = totalBytes > 1073741824 ? (totalBytes / 1073741824).toFixed(2) + ' GB' : totalBytes > 1048576 ? (totalBytes / 1048576).toFixed(1) + ' MB' : (totalBytes / 1024).toFixed(0) + ' KB';
-        const codecStr = sCodecs.join(' / ');
-        const sSpec = [sQuality, codecStr, sAudio].filter(Boolean).join(' • ');
-        const f0 = sFiles[0];
-        let sPath = '';
-        if (f0 && f0.path && f0.path.includes('/')) {
-          sPath = f0.path.substring(0, f0.path.lastIndexOf('/'));
-        } else if (typeof currentPath !== 'undefined' && currentPath) {
-          sPath = currentPath;
-        }
-        const sUrl = sPath ? (origin + '/?p=' + encodeURIComponent(sPath)) : origin;
-        return {
-          label: sName + (sSpec ? ' • ' + sSpec : ''),
-          size: fsz,
-          link: sUrl,
-          isSeason: true,
-          seasonName: sName
-        };
+        codecFileMap.forEach((cFiles, codec) => {
+          let totalBytes = 0;
+          let sQuality = '';
+          let sAudio = '';
+          let f0 = null;
+          cFiles.forEach(f => {
+            totalBytes += (f.size || 0);
+            if (!sQuality) sQuality = detectQuality(f.name || f.path || '');
+            if (!sAudio) {
+              const aTech = detectAudioTech(f.name || f.path || '');
+              const aLabel = (aTech.codec + ' ' + aTech.channel + (aTech.atmos ? ' Atmos' : '')).trim();
+              if (aLabel) sAudio = aLabel;
+            }
+            if (!f0) f0 = f;
+          });
+          const fsz = totalBytes > 1073741824 ? (totalBytes / 1073741824).toFixed(2) + ' GB' : totalBytes > 1048576 ? (totalBytes / 1048576).toFixed(1) + ' MB' : (totalBytes / 1024).toFixed(0) + ' KB';
+          const sSpec = [sQuality, codec, sAudio].filter(Boolean).join(' • ');
+          let sPath = '';
+          if (f0 && f0.path && f0.path.includes('/')) {
+            sPath = f0.path.substring(0, f0.path.lastIndexOf('/'));
+          } else if (typeof currentPath !== 'undefined' && currentPath) {
+            sPath = currentPath;
+          }
+          const sUrl = sPath ? (origin + '/?p=' + encodeURIComponent(sPath)) : origin;
+          versions.push({
+            label: sName + (sSpec ? ' • ' + sSpec : ''),
+            size: fsz,
+            link: sUrl,
+            isSeason: true,
+            seasonName: sName
+          });
+        });
       });
     }
   } else {
