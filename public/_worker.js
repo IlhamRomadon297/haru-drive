@@ -5113,7 +5113,13 @@ function openTelegramModal(files) {
     const parsed = parseFileName(first.name || first.path || '');
     document.getElementById('tgTitle').value = parsed.cleanTitle || parsed.title || first.name || '';
     document.getElementById('tgYear').value = parsed.year || '';
-    if (parsed.season) document.getElementById('tgCategory').value = 'series';
+    // Deteksi series dari SELURUH file yang dipilih, bukan hanya file pertama
+    const anyHasSeason = tgSelectedFiles.some(f => {
+      const fn = f.name || f.path || '';
+      const up = (' ' + fn.replace(/[^a-zA-Z0-9]/g, ' ') + ' ').toUpperCase();
+      return /(?:^|[^a-zA-Z0-9])S(\d{1,2})(?:[^a-zA-Z0-9]|$)/.test(up);
+    });
+    if (anyHasSeason) document.getElementById('tgCategory').value = 'series';
     else document.getElementById('tgCategory').value = 'movies';
     if (parsed.cleanTitle) {
       document.getElementById('tgTmdbQuery').value = parsed.cleanTitle;
@@ -5154,8 +5160,8 @@ function parseFileName(name) {
   // Codec
   let codec = 'AV1';
   if (upper.includes(' AV1 ')) codec = 'AV1';
-  else if (upper.includes(' HEVC ') || upper.includes(' X265 ') || upper.includes(' H265 ')) codec = 'HEVC';
-  else if (upper.includes(' AVC ') || upper.includes(' X264 ') || upper.includes(' H264 ')) codec = 'H.264';
+  else if (upper.includes(' HEVC ') || upper.includes(' X265 ') || upper.includes(' H265 ') || upper.includes(' H 265 ')) codec = 'HEVC';
+  else if (upper.includes(' AVC ') || upper.includes(' X264 ') || upper.includes(' H264 ') || upper.includes(' H 264 ')) codec = 'H.264';
   else if (upper.includes(' VP9 ')) codec = 'VP9';
   else if (upper.includes(' XVID ')) codec = 'XviD';
 
@@ -5207,8 +5213,15 @@ async function searchTMDB(autoApplyIfSingle = false) {
   if (!q) return;
   container.innerHTML = '<span style="color: var(--accent);">Mencari...</span>';
   try {
-    const cat = document.getElementById('tgCategory').value;
-    const type = cat === 'movies' ? 'movie' : 'tv';
+    // Baca toggle jika ada, fallback ke Category dropdown
+    const toggleEl = document.querySelector('input[name="tmdbTypeToggle"]:checked');
+    let type;
+    if (toggleEl) {
+      type = toggleEl.value; // 'movie' atau 'tv'
+    } else {
+      const cat = document.getElementById('tgCategory').value;
+      type = cat === 'movies' ? 'movie' : 'tv';
+    }
     let userKey = localStorage.getItem('harudrive_tmdb_api_key') || '';
     let apiUrl = '/api/admin/tmdb-search?q=' + encodeURIComponent(q) + '&type=' + type;
     if (userKey) apiUrl += '&api_key=' + encodeURIComponent(userKey);
@@ -5293,6 +5306,14 @@ async function triggerManualTranslate() {
 function applyTMDBResultByIndex(idx) {
   const r = (window._tmdbResults || [])[idx];
   if (!r) return;
+  // Auto-set Category berdasarkan media_type dari TMDB
+  if (r.media_type === 'tv') {
+    const catEl = document.getElementById('tgCategory');
+    if (catEl && catEl.value === 'movies') catEl.value = 'series';
+  } else if (r.media_type === 'movie') {
+    const catEl = document.getElementById('tgCategory');
+    if (catEl && (catEl.value === 'series' || catEl.value === 'anime')) catEl.value = 'movies';
+  }
   applyTMDBResult(r.id, r.title, r.year, r.poster, r.rating, r.overview, r.genres, r.duration, r.release_date, r.country);
 }
 
@@ -7335,8 +7356,14 @@ function adminConsoleUI() {
         <!-- TMDB Search Box -->
         <div style="margin-bottom: 14px;">
           <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">TMDB Search (Cari judul atau ketik ID TMDB langsung)</label>
-          <div style="display: flex; gap: 6px; margin-top: 4px;">
-            <input type="text" id="tgTmdbQuery" class="form-input-pro" placeholder="e.g. A Whisker Away atau 667520" style="flex: 1;">
+          <div style="display: flex; gap: 6px; margin-top: 4px; align-items: center;">
+            <input type="text" id="tgTmdbQuery" class="form-input-pro" placeholder="e.g. The Last of Us atau 100088" style="flex: 1;">
+            <label style="display: flex; align-items: center; gap: 3px; font-size: 0.74rem; color: var(--text-dim); white-space: nowrap; cursor: pointer;">
+              <input type="radio" name="tmdbTypeToggle" value="movie" style="margin: 0;"> Film
+            </label>
+            <label style="display: flex; align-items: center; gap: 3px; font-size: 0.74rem; color: var(--text-dim); white-space: nowrap; cursor: pointer;">
+              <input type="radio" name="tmdbTypeToggle" value="tv" style="margin: 0;"> Series
+            </label>
             <button type="button" class="nav-btn" onclick="searchTMDB()" style="padding: 0 14px; font-size: 0.8rem;">Cari</button>
           </div>
           <div id="tgTmdbResults" style="margin-top: 6px; font-size: 0.76rem;"></div>
