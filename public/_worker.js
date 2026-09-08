@@ -3828,7 +3828,15 @@ function clearBulkSelection() {
 function openTelegramWithSelected() {
   const checked = Array.from(selectedFiles);
   const fileObjects = checked.map(path => {
-    const f = allFiles.find(af => af.path === path);
+    let f = allFiles.find(af => af.path === path || af.id === path);
+    if (!f) {
+      const cb = document.querySelector('.file-row input[type="checkbox"][onchange*="' + path + '"]');
+      const row = cb ? cb.closest('.file-row') : null;
+      const dataName = row ? row.getAttribute('data-name') : '';
+      if (dataName) {
+        return { path: path, name: dataName, size: parseInt(row.getAttribute('data-bytes') || '0'), id: path, shareUrl: '' };
+      }
+    }
     return f || { path: path, name: path.split('/').pop(), size: 0, id: '', shareUrl: '' };
   });
   if (fileObjects.length === 0) {
@@ -4754,25 +4762,46 @@ async function extractSpecsAndMediaInfo(file) {
 
 function extractPlatformFromEverything() {
   const sources = [];
+  
+  // 1. From tgSelectedFiles
   const files = (typeof tgSelectedFiles !== 'undefined' && Array.isArray(tgSelectedFiles)) ? tgSelectedFiles : (window._tgSelectedFiles || []);
   files.forEach(f => {
     if (f.name) sources.push(f.name);
     if (f.path) sources.push(f.path);
   });
+
+  // 2. From all checked DOM checkboxes / file-rows directly
+  try {
+    document.querySelectorAll('.file-row input[type="checkbox"]:checked').forEach(cb => {
+      const row = cb.closest('.file-row');
+      if (row) {
+        const dn = row.getAttribute('data-name');
+        if (dn) sources.push(dn);
+        const titleSpan = row.querySelector('.file-title');
+        if (titleSpan && titleSpan.textContent) sources.push(titleSpan.textContent);
+      }
+    });
+  } catch(e) {}
+
+  // 3. Current folder / breadcrumbs
   if (typeof currentPath !== 'undefined' && currentPath) sources.push(currentPath);
   const crumb = document.querySelector('.crumb-group') || document.querySelector('.folder-header');
   if (crumb && crumb.textContent) sources.push(crumb.textContent);
 
+  // 4. Form inputs
   const titleEl = document.getElementById('tgTitle');
   if (titleEl && titleEl.value) sources.push(titleEl.value);
   const qEl = document.getElementById('tgTmdbQuery');
   if (qEl && qEl.value) sources.push(qEl.value);
 
+  // 5. MediaInfo
   if (window._currentMediaInfo) {
     const g = window._currentMediaInfo.general || {};
+    if (g.file_name) sources.push(g.file_name);
+    if (g.complete_name) sources.push(g.complete_name);
     if (g.title) sources.push(g.title);
     if (g.comment) sources.push(g.comment);
-    if (g.encoded_library_name) sources.push(g.encoded_library_name);
+    if (g.movie_name) sources.push(g.movie_name);
   }
 
   for (const s of sources) {
@@ -4975,6 +5004,44 @@ async function searchTMDB(autoApplyIfSingle = false) {
   }
 }
 
+
+async function translateToIndonesian(text) {
+  if (!text) return text;
+  if (!/\b(the|and|after|with|his|her|who|this|from|about|when|their|they|have|has|for|is|was)\b/i.test(text)) {
+    return text;
+  }
+  try {
+    const url = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=id&dt=t&q=' + encodeURIComponent(text);
+    const res = await fetch(url);
+    if (res.ok) {
+      const j = await res.json();
+      return j[0].map(s => s[0]).join('');
+    }
+  } catch(e) {
+    console.warn('Google translate error:', e);
+  }
+  try {
+    const res2 = await fetch('https://api.mymemory.translated.net/get?q=' + encodeURIComponent(text) + '&langpair=en|id');
+    if (res2.ok) {
+      const j2 = await res2.json();
+      if (j2.responseData && j2.responseData.translatedText) {
+        return j2.responseData.translatedText;
+      }
+    }
+  } catch(e) {}
+  return text;
+}
+
+async function triggerManualTranslate() {
+  const el = document.getElementById('tgSynopsis');
+  if (!el || !el.value.trim()) return alert('Sinopsis masih kosong.');
+  const orig = el.value.trim();
+  el.value = 'Menerjemahkan ke Bahasa Indonesia...';
+  const trans = await translateToIndonesian(orig);
+  el.value = trans || orig;
+  previewTelegramCaption();
+}
+
 function applyTMDBResultByIndex(idx) {
   const r = (window._tmdbResults || [])[idx];
   if (!r) return;
@@ -4988,7 +5055,16 @@ async function applyTMDBResult(id, title, year, poster, rating, overview, genres
     document.getElementById('tgPosterUrl').value = poster;
   }
   if (rating) document.getElementById('tgRating').value = rating;
-  document.getElementById('tgSynopsis').value = overview ? (overview.length > 350 ? overview.slice(0, 347) + '...' : overview) : '';
+  let syn = overview ? (overview.length > 350 ? overview.slice(0, 347) + '...' : overview) : '';
+  document.getElementById('tgSynopsis').value = syn;
+  if (syn) {
+    translateToIndonesian(syn).then(translated => {
+      if (translated && translated !== syn) {
+        document.getElementById('tgSynopsis').value = translated.length > 350 ? translated.slice(0, 347) + '...' : translated;
+        previewTelegramCaption();
+      }
+    });
+  }
   if (genres && document.getElementById('tgGenres')) {
     document.getElementById('tgGenres').value = genres;
   }
@@ -5207,46 +5283,14 @@ function previewTelegramCaption() {
 }
 
 // INTERACTIVE VISUAL PREVIEW MODAL
-let _modalScrollPos = 0;
 function openTelegramVisualPreview() {
   const modal = document.getElementById('tgVisualPreviewModal');
   if (!modal) return;
 
-  _modalScrollPos = window.scrollY || window.pageYOffset || 0;
-  document.body.classList.add('modal-open');
-  document.body.style.top = '-' + _modalScrollPos + 'px';
+  document.body.style.overflow = 'hidden';
 
   const vb = document.getElementById('tgVisualPreviewBody');
   if (vb) vb.scrollTop = 0;
-
-  // Bind wheel & touch scroll interception once to completely prevent background scrolling
-  if (!modal._scrollBound) {
-    modal._scrollBound = true;
-    modal.addEventListener('wheel', function(e) {
-      const body = document.getElementById('tgVisualPreviewBody');
-      if (body) {
-        body.scrollTop += e.deltaY;
-      }
-      e.preventDefault();
-      e.stopPropagation();
-    }, { passive: false });
-
-    let touchStartY = 0;
-    modal.addEventListener('touchstart', function(e) {
-      if (e.touches && e.touches.length) touchStartY = e.touches[0].clientY;
-    }, { passive: true });
-    modal.addEventListener('touchmove', function(e) {
-      const body = document.getElementById('tgVisualPreviewBody');
-      if (body && e.touches && e.touches.length) {
-        const touchY = e.touches[0].clientY;
-        const delta = touchStartY - touchY;
-        touchStartY = touchY;
-        body.scrollTop += delta;
-      }
-      e.preventDefault();
-      e.stopPropagation();
-    }, { passive: false });
-  }
 
   const cap = generateTGCaption();
   const captionEl = document.getElementById('tgVisualCaptionText');
@@ -5317,9 +5361,7 @@ function openTelegramVisualPreview() {
 function closeTelegramVisualPreview() {
   const modal = document.getElementById('tgVisualPreviewModal');
   if (modal) modal.style.display = 'none';
-  document.body.classList.remove('modal-open');
-  document.body.style.top = '';
-  window.scrollTo(0, _modalScrollPos || 0);
+  document.body.style.overflow = '';
 }
 
 async function sendToTelegram() {
@@ -6865,7 +6907,10 @@ function adminConsoleUI() {
 
         <!-- Synopsis -->
         <div style="margin-bottom: 12px;">
-          <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Sinopsis</label>
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Sinopsis</label>
+            <button type="button" class="nav-btn" style="font-size: 0.7rem; padding: 2px 8px;" onclick="triggerManualTranslate()">🇮🇩 Terjemahkan</button>
+          </div>
           <textarea id="tgSynopsis" class="form-input-pro" rows="3" placeholder="Sinopsis singkat..." style="margin-top: 4px; resize: vertical;"></textarea>
         </div>
 
@@ -6893,7 +6938,7 @@ function adminConsoleUI() {
         <!-- PIN -->
         <div style="margin-bottom: 14px;">
           <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">PIN Admin</label>
-          <input type="password" id="tgAdminPin" class="form-input-pro" placeholder="••••••" autocomplete="off" style="margin-top: 4px;">
+          <input type="text" id="tgAdminPin" class="form-input-pro" placeholder="••••••" autocomplete="new-password" style="margin-top: 4px; -webkit-text-security: disc; text-security: disc;">
         </div>
 
         <!-- Caption Preview Box (Live Rendered) -->
@@ -6928,7 +6973,7 @@ function adminConsoleUI() {
         </button>
       </div>
 
-      <div id="tgVisualPreviewBody" class="modal-body" style="max-height: 70vh; overflow-y: scroll; padding: 14px 18px; -webkit-overflow-scrolling: touch;">
+      <div id="tgVisualPreviewBody" class="modal-body" style="max-height: 72vh; overflow-y: auto; padding: 16px 20px; -webkit-overflow-scrolling: touch;">
         <!-- Telegram Dark Bubble Card Mockup -->
         <div style="background: #182533; border-radius: 14px; overflow: hidden; border: 1px solid rgba(255,255,255,0.08); box-shadow: 0 10px 30px rgba(0,0,0,0.5); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
           <!-- Bubble Banner Image (Limited max height for easy scrolling) -->
