@@ -21,3 +21,6 @@ account_id = "11b88ee6fb0a7509cabc91b5b5cd64de"
 binding = "harudrive_db"
 database_name = "harudrive-db"
 database_id = "59fa02c9-3066-4cd4-bb16-094520f771ce"
+
+[ai]
+binding = "AI"

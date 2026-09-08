@@ -883,6 +883,119 @@ export default {
     }
 
         // API: TMDB Search (Supports Title Search & Direct Numeric TMDB ID)
+    
+    // Helper: Decode HTML Entities for translation
+    function decodeHtmlEntities(str) {
+      if (!str) return '';
+      return str
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/<br\s*\/?>/gi, '\n');
+    }
+
+    // HaruFilm Multi-Tier Translation Engine
+    async function performTranslate(text, to = 'id', from = 'auto', env = null) {
+      if (!text || typeof text !== 'string') return '';
+      const trimmed = text.trim();
+      if (!trimmed) return '';
+
+      // Tier 1: Cloudflare Workers AI (if bound)
+      if (env && env.AI) {
+        try {
+          const systemPrompt = "Kamu adalah penerjemah sinopsis film profesional ke Bahasa Indonesia yang alami, menarik, dan sesuai konteks perfilman Indonesia (bukan terjemahan kaku mesin). Terjemahkan sinopsis berikut ke Bahasa Indonesia. HANYA kembalikan teks hasil terjemahan tanpa tanda kutip, pengantar, atau komentar apapun.";
+          let aiRes;
+          try {
+            aiRes = await env.AI.run('@cf/qwen/qwen1.5-14b-chat-awq', {
+              messages: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: trimmed }
+              ],
+              max_tokens: 1000,
+              temperature: 0.3
+            });
+          } catch (e1) {
+            aiRes = await env.AI.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast', {
+              messages: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: trimmed }
+              ],
+              max_tokens: 1000,
+              temperature: 0.3
+            });
+          }
+          if (aiRes && aiRes.response) {
+            let cleaned = aiRes.response.trim();
+            cleaned = cleaned.replace(/^\`\`\`[a-z]*\n?/i, '').replace(/\n?\`\`\`$/i, '').trim();
+            if (cleaned && cleaned.length > 10) return cleaned;
+          }
+        } catch (e) {
+          console.warn('Workers AI translate error, falling back:', e);
+        }
+      }
+
+      // Tier 2: High-speed Google Mobile Gateway (HaruFilm implementation)
+      try {
+        const mUrl = 'https://translate.google.com/m?sl=' + encodeURIComponent(from) + '&tl=' + encodeURIComponent(to) + '&q=' + encodeURIComponent(trimmed);
+        const res = await fetch(mUrl, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Mobile/15E148 Safari/604.1'
+          }
+        });
+        if (res.ok) {
+          const html = await res.text();
+          const match = html.match(/class="result-container">([\s\S]*?)<\/div>/i);
+          if (match && match[1]) {
+            const decoded = decodeHtmlEntities(match[1]).trim();
+            if (decoded && decoded.length > 5) return decoded;
+          }
+        }
+      } catch (e) {
+        console.warn('Google Mobile Translate error:', e);
+      }
+
+      // Tier 3: Fallback Google GTX Single API with desktop UA
+      try {
+        const gUrl = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=' + encodeURIComponent(from) + '&tl=' + encodeURIComponent(to) + '&dt=t&q=' + encodeURIComponent(trimmed);
+        const res = await fetch(gUrl, {
+          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data[0] && Array.isArray(data[0])) {
+            const translatedFull = data[0].map(item => (item && item[0]) ? item[0] : '').join('');
+            if (translatedFull && translatedFull.trim()) return translatedFull.trim();
+          }
+        }
+      } catch (e) {
+        console.warn('GTX translation error:', e);
+      }
+
+      return trimmed;
+    }
+
+    // API: Admin Translate Endpoint
+    if (url.pathname === '/api/admin/translate') {
+      try {
+        let text = '';
+        if (request.method === 'POST') {
+          const body = await request.json().catch(() => ({}));
+          text = body.text || '';
+        } else {
+          text = url.searchParams.get('text') || url.searchParams.get('q') || '';
+        }
+        if (!text) {
+          return new Response(JSON.stringify({ translated: '', error: 'Text kosong' }), { headers: { 'Content-Type': 'application/json' } });
+        }
+        const translated = await performTranslate(text, 'id', 'auto', env);
+        return new Response(JSON.stringify({ translated }), { headers: { 'Content-Type': 'application/json' } });
+      } catch (e) {
+        return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+      }
+    }
+
     if (url.pathname === '/api/admin/tmdb-search') {
       try {
         const tmdbKey = String(TMDB_API_KEY || '').trim() || url.searchParams.get('api_key') || request.headers.get('X-TMDB-Key') || '';
@@ -897,17 +1010,7 @@ export default {
 
         async function autoTranslateToIndonesian(text) {
           if (!text) return '';
-          try {
-            const transUrl = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=id&dt=t&q=' + encodeURIComponent(text);
-            const transRes = await fetch(transUrl);
-            if (transRes.ok) {
-              const transJson = await transRes.json();
-              return transJson[0].map(s => s[0]).join('');
-            }
-          } catch(e) {
-            console.warn('Translate error:', e);
-          }
-          return text;
+          return await performTranslate(text, 'id', 'auto', env);
         }
 
         // 1. Direct ID lookup if query is numeric (e.g. 667520)
@@ -919,6 +1022,9 @@ export default {
               const r = await detailRes.json();
               let overview = r.overview;
               let title = r.title || r.name;
+              if (overview && /\b(the|and|after|with|his|her|who|this|from|about|when|their|they|have|has|for|is|was)\b/i.test(overview)) {
+                overview = await autoTranslateToIndonesian(overview);
+              }
               if (!overview) {
                 const enRes = await fetch(`https://api.themoviedb.org/3/${ep}/${query}?api_key=${tmdbKey}&language=en-US`);
                 if (enRes.ok) {
@@ -973,6 +1079,9 @@ export default {
           let ov = r.overview || '';
           let dur = '';
           let ctry = (r.origin_country || []).join(', ');
+          if (ov && /\b(the|and|after|with|his|her|who|this|from|about|when|their|they|have|has|for|is|was)\b/i.test(ov)) {
+            ov = await autoTranslateToIndonesian(ov);
+          }
 
           // If overview or country is missing, fetch English movie details
           try {
@@ -4584,7 +4693,7 @@ function detectAudioTech(fn) {
 
 function detectPlatformTag(str) {
   if (!str) return '';
-  const s = ' ' + String(str).replace(/[\.\-_\+]/g, ' ') + ' ';
+  const s = ' ' + String(str).replace(/[\.\-_\+\/\\]/g, ' ') + ' ';
   if (/\b(NF|NETFLIX)\b/i.test(s)) return 'Netflix';
   if (/\b(BILI|BILIBILI|BSTATION)\b/i.test(s)) return 'BiliBili';
   if (/\b(CR|CRUNCHYROLL)\b/i.test(s)) return 'Crunchyroll';
@@ -4610,9 +4719,10 @@ function detectSubCategoryTag(category, genres, country, title) {
 
   if (g.includes('reality') || /variety/i.test(g) || /variety/i.test(t)) return 'VarietyShow';
   if (g.includes('anim') || /anime/i.test(t) || /anime/i.test(category)) return 'Anime';
-  if (c === 'KR' || c === 'KOREA' || /kdrama|drakor/i.test(t) || /korean/i.test(g)) return 'KDrama';
-  if (c === 'JP' && category === 'series') return 'JDrama';
-  if (c === 'ID' && category === 'movies') return 'IndonesianMovie';
+  if (c === 'KR' || c.includes('KOREA') || /kdrama|drakor/i.test(t) || /korean/i.test(g)) return 'KDrama';
+  if ((c === 'JP' || c.includes('JAPAN')) && category === 'series') return 'JDrama';
+  if ((c === 'ID' || c.includes('INDONESIA')) && category === 'movies') return 'IndonesianMovie';
+  if ((c === 'ID' || c.includes('INDONESIA')) && category === 'series') return 'IndonesianSeries';
   return '';
 }
 
@@ -4763,14 +4873,25 @@ async function extractSpecsAndMediaInfo(file) {
 function extractPlatformFromEverything() {
   const sources = [];
   
-  // 1. From tgSelectedFiles
+  // 1. From tgSelectedFiles and window._tgSelectedFiles
   const files = (typeof tgSelectedFiles !== 'undefined' && Array.isArray(tgSelectedFiles)) ? tgSelectedFiles : (window._tgSelectedFiles || []);
   files.forEach(f => {
     if (f.name) sources.push(f.name);
-    if (f.path) sources.push(f.path);
+    if (f.path) {
+      sources.push(f.path);
+      f.path.split('/').forEach(p => sources.push(p));
+    }
   });
 
-  // 2. From all checked DOM checkboxes / file-rows directly
+  // 2. From selectedFiles Set
+  if (typeof selectedFiles !== 'undefined' && selectedFiles && selectedFiles.size) {
+    selectedFiles.forEach(path => {
+      sources.push(path);
+      path.split('/').forEach(p => sources.push(p));
+    });
+  }
+
+  // 3. From all checked DOM checkboxes / file-rows directly
   try {
     document.querySelectorAll('.file-row input[type="checkbox"]:checked').forEach(cb => {
       const row = cb.closest('.file-row');
@@ -4783,16 +4904,16 @@ function extractPlatformFromEverything() {
     });
   } catch(e) {}
 
-  // 3. Current folder / breadcrumbs
-  if (typeof currentPath !== 'undefined' && currentPath) sources.push(currentPath);
+  // 4. Current folder / breadcrumbs
+  if (typeof currentPath !== 'undefined' && currentPath) {
+    sources.push(currentPath);
+    currentPath.split('/').forEach(p => sources.push(p));
+  }
   const crumb = document.querySelector('.crumb-group') || document.querySelector('.folder-header');
   if (crumb && crumb.textContent) sources.push(crumb.textContent);
-
-  // 4. Form inputs
-  const titleEl = document.getElementById('tgTitle');
-  if (titleEl && titleEl.value) sources.push(titleEl.value);
-  const qEl = document.getElementById('tgTmdbQuery');
-  if (qEl && qEl.value) sources.push(qEl.value);
+  document.querySelectorAll('.crumb-item, .breadcrumb a').forEach(el => {
+    if (el.textContent) sources.push(el.textContent);
+  });
 
   // 5. MediaInfo
   if (window._currentMediaInfo) {
@@ -4802,6 +4923,7 @@ function extractPlatformFromEverything() {
     if (g.title) sources.push(g.title);
     if (g.comment) sources.push(g.comment);
     if (g.movie_name) sources.push(g.movie_name);
+    if (g.folder_name) sources.push(g.folder_name);
   }
 
   for (const s of sources) {
@@ -5006,10 +5128,22 @@ async function searchTMDB(autoApplyIfSingle = false) {
 
 
 async function translateToIndonesian(text) {
-  if (!text) return text;
-  if (!/\b(the|and|after|with|his|her|who|this|from|about|when|their|they|have|has|for|is|was)\b/i.test(text)) {
-    return text;
+  if (!text || !text.trim()) return text;
+  try {
+    const res = await fetch('/api/admin/translate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: text.trim() })
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.translated) return data.translated;
+    }
+  } catch(e) {
+    console.warn('Translate endpoint error:', e);
   }
+  return text;
+}
   try {
     const url = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=id&dt=t&q=' + encodeURIComponent(text);
     const res = await fetch(url);
@@ -5036,10 +5170,17 @@ async function triggerManualTranslate() {
   const el = document.getElementById('tgSynopsis');
   if (!el || !el.value.trim()) return alert('Sinopsis masih kosong.');
   const orig = el.value.trim();
-  el.value = 'Menerjemahkan ke Bahasa Indonesia...';
-  const trans = await translateToIndonesian(orig);
-  el.value = trans || orig;
-  previewTelegramCaption();
+  const btn = document.getElementById('btnTranslateSyn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Menerjemahkan...'; }
+  try {
+    const trans = await translateToIndonesian(orig);
+    if (trans && trans !== orig) {
+      el.value = trans.length > 350 ? trans.slice(0, 347) + '...' : trans;
+      previewTelegramCaption();
+    }
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🇮🇩 Terjemahkan'; }
+  }
 }
 
 function applyTMDBResultByIndex(idx) {
@@ -5290,7 +5431,10 @@ function openTelegramVisualPreview() {
   document.body.style.overflow = 'hidden';
 
   const vb = document.getElementById('tgVisualPreviewBody');
-  if (vb) vb.scrollTop = 0;
+  if (vb) {
+    vb.scrollTop = 0;
+    vb.onwheel = function(e) { e.stopPropagation(); };
+  }
 
   const cap = generateTGCaption();
   const captionEl = document.getElementById('tgVisualCaptionText');
@@ -6909,7 +7053,7 @@ function adminConsoleUI() {
         <div style="margin-bottom: 12px;">
           <div style="display: flex; justify-content: space-between; align-items: center;">
             <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Sinopsis</label>
-            <button type="button" class="nav-btn" style="font-size: 0.7rem; padding: 2px 8px;" onclick="triggerManualTranslate()">🇮🇩 Terjemahkan</button>
+            <button type="button" class="nav-btn" style="font-size: 0.7rem; padding: 2px 8px;" id="btnTranslateSyn" onclick="triggerManualTranslate()">🇮🇩 Terjemahkan</button>
           </div>
           <textarea id="tgSynopsis" class="form-input-pro" rows="3" placeholder="Sinopsis singkat..." style="margin-top: 4px; resize: vertical;"></textarea>
         </div>
@@ -6961,8 +7105,8 @@ function adminConsoleUI() {
   </div>
 
   <!-- TELEGRAM VISUAL PREVIEW MODAL -->
-  <div id="tgVisualPreviewModal" class="modal-backdrop" style="display: none; z-index: 10005;">
-    <div class="modal-card glass" style="max-width: 640px; width: 100%; border: 1px solid rgba(56, 189, 248, 0.4); box-shadow: 0 25px 60px rgba(0, 0, 0, 0.7);">
+  <div id="tgVisualPreviewModal" class="modal-backdrop" style="display: none; z-index: 10005; overflow-y: auto;">
+    <div class="modal-card glass" style="max-width: 640px; width: 100%; border: 1px solid rgba(56, 189, 248, 0.4); box-shadow: 0 25px 60px rgba(0, 0, 0, 0.7); display: flex; flex-direction: column; max-height: 90vh; margin: auto;">
       <div class="modal-header" style="border-bottom: 1px solid var(--border); padding: 12px 18px; display: flex; justify-content: space-between; align-items: center;">
         <div style="display: flex; align-items: center; gap: 8px;">
           <span style="font-size: 1.1rem;">👁️</span>
@@ -6973,7 +7117,7 @@ function adminConsoleUI() {
         </button>
       </div>
 
-      <div id="tgVisualPreviewBody" class="modal-body" style="max-height: 72vh; overflow-y: auto; padding: 16px 20px; -webkit-overflow-scrolling: touch;">
+      <div id="tgVisualPreviewBody" class="modal-body" style="flex: 1 1 auto; overflow-y: auto !important; max-height: calc(90vh - 120px); overscroll-behavior: contain; padding: 16px 20px; -webkit-overflow-scrolling: touch;">
         <!-- Telegram Dark Bubble Card Mockup -->
         <div style="background: #182533; border-radius: 14px; overflow: hidden; border: 1px solid rgba(255,255,255,0.08); box-shadow: 0 10px 30px rgba(0,0,0,0.5); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
           <!-- Bubble Banner Image (Limited max height for easy scrolling) -->
