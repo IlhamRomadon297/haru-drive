@@ -816,7 +816,16 @@ export default {
             url: mediainfo_url.trim()
           });
         }
-        if (versions && versions.length === 1 && versions[0].link) {
+        const cat = (body.category || '').toLowerCase();
+        const isSeries = cat === 'series' || cat === 'anime';
+
+        if (isSeries && body.folder_url) {
+          topRow.push({
+            text: '\u{1F4C1} Buka Folder',
+            url: body.folder_url
+          });
+          keyboard.push(topRow);
+        } else if (versions && versions.length === 1 && versions[0].link) {
           topRow.push({
             text: '\u{1F4E5} Download',
             url: versions[0].link
@@ -5337,8 +5346,10 @@ function generateTGCaption() {
   }
   cap = cap.trim() + '</blockquote>' + nl;
 
-  // 4. Pilihan Versi jika lebih dari 1 file terpilih (Bahasa Indonesia)
-  if (tgSelectedFiles && tgSelectedFiles.length > 1) {
+  // 4. Pilihan Versi jika lebih dari 1 file terpilih (Bahasa Indonesia) HANYA untuk Movies
+  const cat = (document.getElementById('tgCategory')?.value || 'movies').toLowerCase();
+  const isSeries = cat === 'series' || cat === 'anime';
+  if (tgSelectedFiles && tgSelectedFiles.length > 1 && !isSeries) {
     const qOrder = ['360p', '480p', '576p', '720p', '1080p', '2160p'];
     const sortedFiles = [...tgSelectedFiles].sort((a, b) => {
       const qa = detectQuality(a.name || a.path || '');
@@ -5548,7 +5559,11 @@ function openTelegramVisualPreview() {
       bh += '<div style="flex: 1; min-width: 120px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); padding: 8px 12px; border-radius: 8px; font-size: 0.8rem; color: #ffffff; text-align: center; font-weight: 600;">📄 MediaInfo ↗️</div>';
     }
     const selFiles = (typeof tgSelectedFiles !== 'undefined' && tgSelectedFiles.length > 0) ? tgSelectedFiles : (window._tgSelectedFiles || []);
-    if (selFiles && selFiles.length > 0) {
+    const cat = (document.getElementById('tgCategory')?.value || 'movies').toLowerCase();
+    const isSeries = cat === 'series' || cat === 'anime';
+    if (isSeries) {
+      bh += '<div style="flex: 1; min-width: 120px; background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.4); padding: 8px 12px; border-radius: 8px; font-size: 0.8rem; color: #38bdf8; text-align: center; font-weight: 600;">📁 Buka Folder ↗️</div>';
+    } else if (selFiles && selFiles.length > 0) {
       selFiles.forEach(f => {
         const fn = f.name || f.path || '';
         const parsed = parseFileName(fn);
@@ -5630,6 +5645,16 @@ async function sendToTelegram() {
   const useBanner = document.getElementById('tgUseBanner') ? document.getElementById('tgUseBanner').checked : true;
   const first = tgSelectedFiles && tgSelectedFiles[0];
 
+  let folderPath = '';
+  if (first) {
+    if (first.path && first.path.includes('/')) {
+      folderPath = first.path.substring(0, first.path.lastIndexOf('/'));
+    } else if (typeof currentPath !== 'undefined' && currentPath) {
+      folderPath = currentPath;
+    }
+  }
+  const folderUrl = folderPath ? (origin + '/?p=' + encodeURIComponent(folderPath)) : origin;
+
   const body = {
     admin_pin: pin,
     use_banner: useBanner,
@@ -5644,6 +5669,7 @@ async function sendToTelegram() {
     release_date: document.getElementById('tgReleaseDate') ? document.getElementById('tgReleaseDate').value : '',
     country: document.getElementById('tgCountry') ? document.getElementById('tgCountry').value : '',
     mediainfo_url: (document.getElementById('tgMediaInfoUrl')?.value || '').trim(),
+    folder_url: folderUrl,
     versions: versions,
     specs: {
       video: document.getElementById('tgSpecVideo').value,
