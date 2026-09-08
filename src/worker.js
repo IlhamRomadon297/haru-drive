@@ -932,11 +932,12 @@ export default {
               keyboard.push(seasonButtons.slice(i, i + 2));
             }
           } else {
-            // Single-season / Single-version: [ 📄 MediaInfo ] [ 📁 Buka Folder ] (sejajar jika ada dua-duanya)
+            // Single-season / Single-version: [ 📄 MediaInfo ] [ 📁 Buka Folder / Season ] (sejajar jika ada dua-duanya)
             const singleLink = (seasonVersions[0] && seasonVersions[0].link) || body.folder_url;
+            const singleBtnText = (seasonVersions[0] && (seasonVersions[0].buttonText || seasonVersions[0].seasonName)) || '\u{1F4C1} Buka Folder';
             if (singleLink) {
               topRow.push({
-                text: '\u{1F4C1} Buka Folder',
+                text: singleBtnText.startsWith('\u{1F4C1}') ? singleBtnText : `\u{1F4C1} ${singleBtnText}`,
                 url: singleLink
               });
             }
@@ -3971,7 +3972,7 @@ function renderFileList() {
       ? ('copyFolderLink(' + JSON.stringify(file.id) + ', ' + JSON.stringify(file.path) + ')')
       : ('copyShortLink(' + JSON.stringify(file.id) + ', ' + JSON.stringify(file.path) + ')');
 
-    html += '<div class="file-row ' + (isDir ? 'is-folder' : '') + '" data-name="' + escapeHtml(file.name) + '" data-bytes="' + (file.size || 0) + '" data-date="' + escapeHtml(file.modifiedTime || '') + '">';
+    html += '<div class="file-row ' + (isDir ? 'is-folder' : '') + '" data-name="' + escapeHtml(file.name) + '" data-bytes="' + (file.size || 0) + '" data-id="' + escapeHtml(file.id || '') + '" data-is-dir="' + (isDir ? '1' : '0') + '" data-date="' + escapeHtml(file.modifiedTime || '') + '">';
     html += '  <div class="col-cb"><input type="checkbox" ' + (isChecked ? 'checked' : '') + ' onchange="toggleItemSelect(' + JSON.stringify(file.path).replace(/"/g, '&quot;') + ', this.checked)"></div>';
     html += '  <div class="file-name-cell" onclick="' + clickAction.replace(/"/g, '&quot;') + '" title="' + (isDir ? 'Buka Folder' : (isVideo ? 'Klik untuk Putar Video' : 'Download File')) + '">';
     html += '    <div class="file-icon-box ' + iconType + '">' + getModernSvgIcon(iconType) + '</div>';
@@ -4072,18 +4073,23 @@ function openTelegramWithSelected() {
   const checked = Array.from(selectedFiles);
   const fileObjects = checked.map(path => {
     let f = allFiles.find(af => af.path === path || af.id === path);
-    if (!f) {
-      const cb = document.querySelector('.file-row input[type="checkbox"][onchange*="' + path + '"]');
-      const row = cb ? cb.closest('.file-row') : null;
-      const dataName = row ? row.getAttribute('data-name') : '';
-      if (dataName) {
-        return { path: path, name: dataName, size: parseInt(row.getAttribute('data-bytes') || '0'), id: path, shareUrl: '' };
-      }
-    }
-    return f || { path: path, name: path.split('/').pop(), size: 0, id: '', shareUrl: '' };
+    const cb = document.querySelector('.file-row input[type="checkbox"][onchange*="' + path + '"]');
+    const row = cb ? cb.closest('.file-row') : null;
+    const isDir = (f && f.mimeType === 'application/vnd.google-apps.folder') || (row && (row.classList.contains('is-folder') || row.getAttribute('data-is-dir') === '1'));
+    const dataName = (row && row.getAttribute('data-name')) || (f && f.name) || path.split('/').pop();
+    const dataBytes = (row && parseInt(row.getAttribute('data-bytes') || '0')) || (f && f.size) || 0;
+    const dataId = (f && f.id) || (row && row.getAttribute('data-id')) || path;
+    return {
+      path: path,
+      name: dataName,
+      size: dataBytes,
+      id: dataId,
+      mimeType: isDir ? 'application/vnd.google-apps.folder' : (f ? f.mimeType : ''),
+      shareUrl: (f && f.shareUrl) || ''
+    };
   });
   if (fileObjects.length === 0) {
-    fileObjects.push({ path: currentPath, name: currentPath.split('/').pop() || 'Root', size: 0, id: '', shareUrl: '' });
+    fileObjects.push({ path: currentPath, name: currentPath.split('/').pop() || 'Root', size: 0, id: currentFolderId || '', mimeType: 'application/vnd.google-apps.folder', shareUrl: '' });
   }
   openTelegramModal(fileObjects);
 }
@@ -4655,17 +4661,17 @@ function cleanAudioLanguage(rawAudio) {
 }
 
 function formatCodec(raw) {
-  if (!raw) return 'AV1';
+  if (!raw) return '';
   const c = raw.toUpperCase();
   if (c.includes('AV1')) return 'AV1';
-  if (c.includes('HEVC') || c.includes('X265') || c.includes('H265') || c.includes('H.265')) return 'HEVC';
-  if (c.includes('AVC') || c.includes('X264') || c.includes('H264') || c.includes('H.264')) return 'H.264';
+  if (c.includes('HEVC') || c.includes('X265') || c.includes('H265') || c.includes('H.265') || c.includes('H 265')) return 'HEVC';
+  if (c.includes('AVC') || c.includes('X264') || c.includes('H264') || c.includes('H.264') || c.includes('H 264')) return 'H.264';
   if (c.includes('VP9')) return 'VP9';
   return raw;
 }
 
 function detectQuality(name) {
-  if (!name) return '1080p';
+  if (!name) return '';
   const s = ' ' + String(name).replace(/[^a-zA-Z0-9]/g, ' ').toUpperCase() + ' ';
   if (s.includes(' 2160P ') || s.includes(' 2160 ') || s.includes(' 4K ') || s.includes(' UHD ') || s.includes(' 3840X2160 ')) return '2160p';
   if (s.includes(' 1080P ') || s.includes(' 1080I ') || s.includes(' 1080 ') || s.includes(' FHD ') || s.includes(' 1920X1080 ')) return '1080p';
@@ -4673,7 +4679,7 @@ function detectQuality(name) {
   if (s.includes(' 576P ') || s.includes(' 576 ')) return '576p';
   if (s.includes(' 480P ') || s.includes(' 480 ') || s.includes(' SD ')) return '480p';
   if (s.includes(' 360P ') || s.includes(' 360 ')) return '360p';
-  return '1080p';
+  return '';
 }
 
 function formatQuality(raw) {
@@ -4878,12 +4884,13 @@ function detectSubCategoryTag(category, genres, country, title) {
 }
 
 function formatCodecTag(raw) {
-  if (!raw) return 'AV1';
+  if (!raw) return '';
   const c = raw.toUpperCase();
   if (c.includes('AV1')) return 'AV1';
-  if (c.includes('HEVC') || c.includes('X265') || c.includes('H265') || c.includes('H.265')) return 'HEVC';
-  if (c.includes('AVC') || c.includes('X264') || c.includes('H264') || c.includes('H.264')) return 'H264';
-  return 'AV1';
+  if (c.includes('HEVC') || c.includes('X265') || c.includes('H265') || c.includes('H.265') || c.includes('H 265')) return 'HEVC';
+  if (c.includes('AVC') || c.includes('X264') || c.includes('H264') || c.includes('H.264') || c.includes('H 264')) return 'H264';
+  if (c.includes('VP9')) return 'VP9';
+  return '';
 }
 
 async function extractSpecsAndMediaInfo(file) {
@@ -5007,9 +5014,29 @@ async function extractSpecsAndMediaInfo(file) {
       seasonMap.get(sKey).push(f);
     });
 
+    const qList = [];
+    tgSelectedFiles.forEach(f => {
+      const fq = detectQuality(f.name || f.path || '');
+      if (fq && !qList.includes(fq)) qList.push(fq);
+    });
+    const qOrder = ['360p', '480p', '576p', '720p', '1080p', '2160p'];
+    qList.sort((a, b) => qOrder.indexOf(a) - qOrder.indexOf(b));
+    const combinedQ = qList.length > 2 ? qList.join(', ') : qList.join(' & ');
+
+    const cList = [];
+    tgSelectedFiles.forEach(f => {
+      const p = parseFileName(f.name || f.path || '');
+      const c = formatCodec(p.codec || f.name || '');
+      if (c && !cList.includes(c)) cList.push(c);
+    });
+    const combinedC = cList.join(' & ');
+
     if (seasonMap.size > 1) {
       const tag = seasonMap.size === 2 ? 'Dual-Season' : 'Multi-Season';
-      topTechSpec = videoSpec ? (videoSpec + ' • ' + tag) : tag;
+      topTechSpec = [combinedQ || videoSpec, combinedC, tag].filter(Boolean).join(' • ');
+    } else if (tgSelectedFiles.length > 1 && (qList.length > 1 || cList.length > 1)) {
+      const tag = (qList.length > 1 && cList.length > 1) ? 'Multi-Version' : (qList.length > 1 ? (qList.length === 2 ? 'Dual-Resolution' : 'Multi-Resolution') : (cList.length === 2 ? 'Dual-Codec' : 'Multi-Codec'));
+      topTechSpec = [combinedQ || videoSpec, combinedC, tag].filter(Boolean).join(' • ');
     } else if (audioTechLabel) {
       topTechSpec = videoSpec + ' • ' + audioTechLabel;
     }
@@ -5273,7 +5300,7 @@ function closeTelegramModal() {
 
 function parseFileName(name) {
   if (!name) return {};
-  const clean = ' ' + String(name).replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9]/g, ' ') + ' ';
+  const clean = ' ' + String(name).replace(/\.(mkv|mp4|avi|webm|mov|m4v|wmv|ts)$/i, '').replace(/[^a-zA-Z0-9]/g, ' ') + ' ';
   const upper = clean.toUpperCase();
 
   // Year: 1900-2099
@@ -5288,12 +5315,17 @@ function parseFileName(name) {
   const quality = detectQuality(name);
 
   // Codec
-  let codec = 'AV1';
+  let codec = '';
   if (upper.includes(' AV1 ')) codec = 'AV1';
   else if (upper.includes(' HEVC ') || upper.includes(' X265 ') || upper.includes(' H265 ') || upper.includes(' H 265 ')) codec = 'HEVC';
   else if (upper.includes(' AVC ') || upper.includes(' X264 ') || upper.includes(' H264 ') || upper.includes(' H 264 ')) codec = 'H.264';
   else if (upper.includes(' VP9 ')) codec = 'VP9';
   else if (upper.includes(' XVID ')) codec = 'XviD';
+  if (!codec) {
+    if (/H\.?265|x265|HEVC/i.test(name)) codec = 'HEVC';
+    else if (/H\.?264|x264|AVC/i.test(name)) codec = 'H.264';
+    else if (/AV1/i.test(name)) codec = 'AV1';
+  }
 
   // Source
   let source = '';
@@ -5558,7 +5590,6 @@ function generateTGCaption() {
 
   // 4. Pilihan Versi jika lebih dari 1 file/season terpilih (Bahasa Indonesia)
   if (isSeries) {
-    // Skenario 3: Series / Anime - Kelompokkan HANYA berdasarkan Season!
     const seasonMap = new Map();
     if (tgSelectedFiles && tgSelectedFiles.length > 0) {
       tgSelectedFiles.forEach(f => {
@@ -5571,49 +5602,58 @@ function generateTGCaption() {
       });
     }
 
-    // Hitung total kombinasi (season + codec)
-    let totalVersionCount = 0;
-    seasonMap.forEach(sFiles => {
-      const cSet = new Set(sFiles.map(f => formatCodec(parseFileName(f.name || f.path || '').codec || 'AV1')));
-      totalVersionCount += cSet.size;
+    const sortedSeasons = Array.from(seasonMap.keys()).sort((a, b) => {
+      const na = parseInt(a.replace(/\D/g, '')) || 0;
+      const nb = parseInt(b.replace(/\D/g, '')) || 0;
+      return na - nb;
     });
 
-    // Jika lebih dari 1 season ATAU lebih dari 1 versi/codec dalam season yang sama, tampilkan Pilihan Versi
-    if (seasonMap.size > 1 || totalVersionCount > 1) {
-      const sortedSeasons = Array.from(seasonMap.keys()).sort((a, b) => {
-        const na = parseInt(a.replace(/\D/g, '')) || 0;
-        const nb = parseInt(b.replace(/\D/g, '')) || 0;
-        return na - nb;
+    let totalVersionCount = 0;
+    sortedSeasons.forEach(sName => {
+      const sFiles = seasonMap.get(sName);
+      const vKeys = new Set();
+      sFiles.forEach(f => {
+        const isFolder = f.mimeType === 'application/vnd.google-apps.folder' || (!f.name.endsWith('.mkv') && !f.name.endsWith('.mp4') && !f.name.endsWith('.avi') && !f.name.endsWith('.webm'));
+        const q = detectQuality(f.name || f.path || '');
+        const hdr = detectHDR(f.name || f.path || '');
+        const p = parseFileName(f.name || f.path || '');
+        const c = formatCodec(p.codec || 'HEVC');
+        const vKey = isFolder ? (f.id || f.path || f.name) : ([q, hdr, c].filter(Boolean).join('_') || f.name);
+        vKeys.add(vKey);
       });
+      totalVersionCount += vKeys.size;
+    });
 
+    if (seasonMap.size > 1 || totalVersionCount > 1) {
       cap += nl + '📁 <b>Pilihan Versi:</b>' + nl;
       sortedSeasons.forEach(sName => {
         const sFiles = seasonMap.get(sName);
-
-        // Group per codec dalam season ini — kalau multi-codec, pisah jadi baris berbeda
-        const codecFileMap = new Map();
+        const versionGroups = new Map();
         sFiles.forEach(f => {
+          const isFolder = f.mimeType === 'application/vnd.google-apps.folder' || (!f.name.endsWith('.mkv') && !f.name.endsWith('.mp4') && !f.name.endsWith('.avi') && !f.name.endsWith('.webm'));
+          const q = detectQuality(f.name || f.path || '');
+          const hdr = detectHDR(f.name || f.path || '');
           const p = parseFileName(f.name || f.path || '');
-          const c = formatCodec(p.codec || 'AV1');
-          if (!codecFileMap.has(c)) codecFileMap.set(c, []);
-          codecFileMap.get(c).push(f);
+          const c = formatCodec(p.codec || 'HEVC');
+          const vKey = isFolder ? (f.id || f.path || f.name) : ([q, hdr, c].filter(Boolean).join('_') || f.name);
+          if (!versionGroups.has(vKey)) versionGroups.set(vKey, []);
+          versionGroups.get(vKey).push(f);
         });
 
-        codecFileMap.forEach((cFiles, codec) => {
+        versionGroups.forEach(vFiles => {
+          const f0 = vFiles[0];
+          const q = detectQuality(f0.name || f0.path || '');
+          const hdr = detectHDR(f0.name || f0.path || '');
+          const p = parseFileName(f0.name || f0.path || '');
+          const c = formatCodec(p.codec || 'HEVC');
+          const aTech = detectAudioTech(f0.name || f0.path || '');
+          const aLabel = (aTech.codec + ' ' + aTech.channel + (aTech.atmos ? ' Atmos' : '')).trim();
+
           let totalBytes = 0;
-          let sQuality = '';
-          let sAudio = '';
-          cFiles.forEach(f => {
-            totalBytes += (f.size || 0);
-            if (!sQuality) sQuality = detectQuality(f.name || f.path || '');
-            if (!sAudio) {
-              const aTech = detectAudioTech(f.name || f.path || '');
-              const aLabel = (aTech.codec + ' ' + aTech.channel + (aTech.atmos ? ' Atmos' : '')).trim();
-              if (aLabel) sAudio = aLabel;
-            }
-          });
+          vFiles.forEach(f => { totalBytes += (f.size || 0); });
           const sz = totalBytes > 0 ? (totalBytes > 1073741824 ? (totalBytes / 1073741824).toFixed(2) + ' GB' : totalBytes > 1048576 ? (totalBytes / 1048576).toFixed(1) + ' MB' : (totalBytes / 1024).toFixed(0) + ' KB') : '';
-          const sSpec = [sQuality, codec, sAudio].filter(Boolean).join(' • ');
+
+          const sSpec = [q, hdr, c, aLabel].filter(Boolean).join(' • ');
           cap += '  🎥 ' + sName + (sSpec ? ' • ' + sSpec : '') + (sz ? ' (' + sz + ')' : '') + nl;
         });
       });
@@ -5877,36 +5917,52 @@ function openTelegramVisualPreview() {
         seasonMap.get(sKey).push(f);
       });
 
-      let totalVersionCount = 0;
-      seasonMap.forEach(sFiles => {
-        const cSet = new Set(sFiles.map(f => formatCodec(parseFileName(f.name || f.path || '').codec || 'AV1')));
-        totalVersionCount += cSet.size;
+      const sortedSeasons = Array.from(seasonMap.keys()).sort((a, b) => {
+        const na = parseInt(a.replace(/\D/g, '')) || 0;
+        const nb = parseInt(b.replace(/\D/g, '')) || 0;
+        return na - nb;
       });
 
-      if (seasonMap.size > 1 || totalVersionCount > 1) {
+      const allButtons = [];
+      sortedSeasons.forEach(sName => {
+        const sFiles = seasonMap.get(sName);
+        const versionGroups = new Map();
+        sFiles.forEach(f => {
+          const isFolder = f.mimeType === 'application/vnd.google-apps.folder' || (!f.name.endsWith('.mkv') && !f.name.endsWith('.mp4') && !f.name.endsWith('.avi') && !f.name.endsWith('.webm'));
+          const q = detectQuality(f.name || f.path || '');
+          const hdr = detectHDR(f.name || f.path || '');
+          const p = parseFileName(f.name || f.path || '');
+          const c = formatCodec(p.codec || 'HEVC');
+          const vKey = isFolder ? (f.id || f.path || f.name) : ([q, hdr, c].filter(Boolean).join('_') || f.name);
+          if (!versionGroups.has(vKey)) versionGroups.set(vKey, []);
+          versionGroups.get(vKey).push(f);
+        });
+
+        const isMultiInSeason = versionGroups.size > 1;
+
+        versionGroups.forEach(vFiles => {
+          const f0 = vFiles[0];
+          const q = detectQuality(f0.name || f0.path || '');
+          const hdr = detectHDR(f0.name || f0.path || '');
+          const p = parseFileName(f0.name || f0.path || '');
+          const c = formatCodec(p.codec || 'HEVC');
+          let btnLabel = sName;
+          if (isMultiInSeason) {
+            const diffTag = [q, hdr].filter(Boolean).join(' ') || c;
+            btnLabel = sName + ' (' + diffTag + ')';
+          }
+          allButtons.push(btnLabel);
+        });
+      });
+
+      if (allButtons.length > 1) {
         bh += '<div style="display: flex; flex-direction: column; gap: 8px;">';
         if (mediaInfoUrl) {
           bh += '<div style="background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); padding: 8px 12px; border-radius: 8px; font-size: 0.8rem; color: #ffffff; text-align: center; font-weight: 600;">📄 MediaInfo ↗️</div>';
         }
-        bh += '<div style="display: flex; gap: 8px; flex-wrap: wrap;">';
-        Array.from(seasonMap.keys()).sort((a, b) => {
-          const na = parseInt(a.replace(/\D/g, '')) || 0;
-          const nb = parseInt(b.replace(/\D/g, '')) || 0;
-          return na - nb;
-        }).forEach(sName => {
-          const sFiles = seasonMap.get(sName);
-          const codecFileMap = new Map();
-          sFiles.forEach(f => {
-            const p = parseFileName(f.name || f.path || '');
-            const c = formatCodec(p.codec || 'AV1');
-            if (!codecFileMap.has(c)) codecFileMap.set(c, []);
-            codecFileMap.get(c).push(f);
-          });
-          const hasMultiCodecInSeason = codecFileMap.size > 1;
-          codecFileMap.forEach((_, codec) => {
-            const btnName = hasMultiCodecInSeason ? (sName + ' (' + codec + ')') : sName;
-            bh += '<div style="flex: 1; min-width: 120px; background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.4); padding: 8px 12px; border-radius: 8px; font-size: 0.8rem; color: #38bdf8; text-align: center; font-weight: 600;">📁 ' + escapeHtml(btnName) + ' ↗️</div>';
-          });
+        bh += '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px;">';
+        allButtons.forEach(btnName => {
+          bh += '<div style="background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.4); padding: 8px 12px; border-radius: 8px; font-size: 0.8rem; color: #38bdf8; text-align: center; font-weight: 600;">📁 ' + escapeHtml(btnName) + ' ↗️</div>';
         });
         bh += '</div></div>';
       } else {
@@ -5914,7 +5970,8 @@ function openTelegramVisualPreview() {
         if (mediaInfoUrl) {
           bh += '<div style="flex: 1; min-width: 120px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); padding: 8px 12px; border-radius: 8px; font-size: 0.8rem; color: #ffffff; text-align: center; font-weight: 600;">📄 MediaInfo ↗️</div>';
         }
-        bh += '<div style="flex: 1; min-width: 120px; background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.4); padding: 8px 12px; border-radius: 8px; font-size: 0.8rem; color: #38bdf8; text-align: center; font-weight: 600;">📁 Buka Folder ↗️</div>';
+        const bText = allButtons[0] ? ('📁 ' + escapeHtml(allButtons[0]) + ' ↗️') : '📁 Buka Folder ↗️';
+        bh += '<div style="flex: 1; min-width: 120px; background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.4); padding: 8px 12px; border-radius: 8px; font-size: 0.8rem; color: #38bdf8; text-align: center; font-weight: 600;">' + bText + '</div>';
         bh += '</div>';
       }
     } else if (selFiles && selFiles.length > 1) {
@@ -5993,69 +6050,68 @@ async function sendToTelegram() {
       seasonMap.get(sKey).push(f);
     });
 
-    let totalVersionCount = 0;
-    seasonMap.forEach(sFiles => {
-      const cSet = new Set(sFiles.map(f => formatCodec(parseFileName(f.name || f.path || '').codec || 'AV1')));
-      totalVersionCount += cSet.size;
+    const sortedSeasons = Array.from(seasonMap.keys()).sort((a, b) => {
+      const na = parseInt(a.replace(/\D/g, '')) || 0;
+      const nb = parseInt(b.replace(/\D/g, '')) || 0;
+      return na - nb;
     });
 
-    if (seasonMap.size > 1 || totalVersionCount > 1) {
-      const sortedSeasons = Array.from(seasonMap.keys()).sort((a, b) => {
-        const na = parseInt(a.replace(/\D/g, '')) || 0;
-        const nb = parseInt(b.replace(/\D/g, '')) || 0;
-        return na - nb;
+    sortedSeasons.forEach(sName => {
+      const sFiles = seasonMap.get(sName);
+      const versionGroups = new Map();
+      sFiles.forEach(f => {
+        const isFolder = f.mimeType === 'application/vnd.google-apps.folder' || (!f.name.endsWith('.mkv') && !f.name.endsWith('.mp4') && !f.name.endsWith('.avi') && !f.name.endsWith('.webm'));
+        const q = detectQuality(f.name || f.path || '');
+        const hdr = detectHDR(f.name || f.path || '');
+        const p = parseFileName(f.name || f.path || '');
+        const c = formatCodec(p.codec || 'HEVC');
+        const vKey = isFolder ? (f.id || f.path || f.name) : ([q, hdr, c].filter(Boolean).join('_') || f.name);
+        if (!versionGroups.has(vKey)) versionGroups.set(vKey, []);
+        versionGroups.get(vKey).push(f);
       });
-      // Expand per (season + codec) jika multi-codec dalam 1 season
-      sortedSeasons.forEach(sName => {
-        const sFiles = seasonMap.get(sName);
-        const codecFileMap = new Map();
-        sFiles.forEach(f => {
-          const p = parseFileName(f.name || f.path || '');
-          const c = formatCodec(p.codec || 'AV1');
-          if (!codecFileMap.has(c)) codecFileMap.set(c, []);
-          codecFileMap.get(c).push(f);
-        });
-        const hasMultiCodecInSeason = codecFileMap.size > 1;
-        codecFileMap.forEach((cFiles, codec) => {
-          let totalBytes = 0;
-          let sQuality = '';
-          let sAudio = '';
-          let f0 = null;
-          cFiles.forEach(f => {
-            totalBytes += (f.size || 0);
-            if (!sQuality) sQuality = detectQuality(f.name || f.path || '');
-            if (!sAudio) {
-              const aTech = detectAudioTech(f.name || f.path || '');
-              const aLabel = (aTech.codec + ' ' + aTech.channel + (aTech.atmos ? ' Atmos' : '')).trim();
-              if (aLabel) sAudio = aLabel;
-            }
-            if (!f0) f0 = f;
-          });
-          const fsz = totalBytes > 0 ? (totalBytes > 1073741824 ? (totalBytes / 1073741824).toFixed(2) + ' GB' : totalBytes > 1048576 ? (totalBytes / 1048576).toFixed(1) + ' MB' : (totalBytes / 1024).toFixed(0) + ' KB') : '';
-          const sSpec = [sQuality, codec, sAudio].filter(Boolean).join(' • ');
-          
-          let sUrl = origin;
-          const isFolder = f0 && (f0.mimeType === 'application/vnd.google-apps.folder' || (!f0.name.includes('.') && !f0.size));
-          if (f0) {
-            if (isFolder) {
-              sUrl = f0.id ? (origin + '/folder/' + f0.id) : (f0.path ? (origin + '/?p=' + encodeURIComponent(f0.path)) : origin);
-            } else {
-              const p = f0.path && f0.path.includes('/') ? f0.path.substring(0, f0.path.lastIndexOf('/')) : (currentPath || '');
-              sUrl = p ? (origin + '/?p=' + encodeURIComponent(p)) : origin;
-            }
-          }
-          const btnName = hasMultiCodecInSeason ? (sName + ' (' + codec + ')') : sName;
-          versions.push({
-            label: sName + (sSpec ? ' • ' + sSpec : ''),
-            size: fsz,
-            link: sUrl,
-            isSeason: true,
-            seasonName: btnName,
-            buttonText: btnName
-          });
+
+      const isMultiInSeason = versionGroups.size > 1;
+
+      versionGroups.forEach(vFiles => {
+        const f0 = vFiles[0];
+        const isFolder = f0.mimeType === 'application/vnd.google-apps.folder' || (!f0.name.endsWith('.mkv') && !f0.name.endsWith('.mp4') && !f0.name.endsWith('.avi') && !f0.name.endsWith('.webm'));
+        const q = detectQuality(f0.name || f0.path || '');
+        const hdr = detectHDR(f0.name || f0.path || '');
+        const p = parseFileName(f0.name || f0.path || '');
+        const c = formatCodec(p.codec || 'HEVC');
+        const aTech = detectAudioTech(f0.name || f0.path || '');
+        const aLabel = (aTech.codec + ' ' + aTech.channel + (aTech.atmos ? ' Atmos' : '')).trim();
+
+        let totalBytes = 0;
+        vFiles.forEach(f => { totalBytes += (f.size || 0); });
+        const fsz = totalBytes > 0 ? (totalBytes > 1073741824 ? (totalBytes / 1073741824).toFixed(2) + ' GB' : totalBytes > 1048576 ? (totalBytes / 1048576).toFixed(1) + ' MB' : (totalBytes / 1024).toFixed(0) + ' KB') : '';
+        const sSpec = [q, hdr, c, aLabel].filter(Boolean).join(' • ');
+
+        let directLink = origin;
+        if (isFolder) {
+          directLink = f0.id ? (origin + '/folder/' + f0.id) : (f0.path ? (origin + '/?p=' + encodeURIComponent(f0.path)) : origin);
+        } else {
+          directLink = f0.id ? (origin + '/d/' + f0.id) : (origin + '/file/' + encodeURIComponent(f0.path));
+        }
+
+        let btnLabel = sName;
+        if (isMultiInSeason) {
+          const diffTag = [q, hdr].filter(Boolean).join(' ') || c;
+          btnLabel = sName + ' (' + diffTag + ')';
+        }
+
+        versions.push({
+          label: sName + (sSpec ? ' • ' + sSpec : ''),
+          size: fsz,
+          link: directLink,
+          isSeason: true,
+          seasonName: btnLabel,
+          buttonText: btnLabel,
+          quality: q,
+          codec: c
         });
       });
-    }
+    });
   } else {
     versions = sortedFiles.map(f => {
       const fn = f.name || f.path || '';
@@ -6090,7 +6146,7 @@ async function sendToTelegram() {
 
   let folderUrl = origin;
   if (first) {
-    const isFolder = first.mimeType === 'application/vnd.google-apps.folder' || (!first.name.includes('.') && !first.size);
+    const isFolder = first.mimeType === 'application/vnd.google-apps.folder' || (!first.name.endsWith('.mkv') && !first.name.endsWith('.mp4') && !first.name.endsWith('.avi') && !first.name.endsWith('.webm'));
     if (isFolder) {
       folderUrl = first.id ? (origin + '/folder/' + first.id) : (first.path ? (origin + '/?p=' + encodeURIComponent(first.path)) : origin);
     } else if (first.path && first.path.includes('/')) {
