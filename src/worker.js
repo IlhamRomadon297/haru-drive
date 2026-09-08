@@ -637,7 +637,9 @@ export default {
     // API: MediaInfo (4-layer cache)
     if (url.pathname === '/api/mediainfo') {
       try {
-        await env.harudrive_db.prepare('CREATE TABLE IF NOT EXISTS mediainfo_cache (path TEXT PRIMARY KEY, raw TEXT, json TEXT, updated INTEGER)').run();
+        if (env.harudrive_db) {
+          await env.harudrive_db.prepare('CREATE TABLE IF NOT EXISTS mediainfo_cache (path TEXT PRIMARY KEY, raw TEXT, json TEXT, updated INTEGER)').run().catch(() => {});
+        }
         if (request.method === 'GET') {
           const qPath = (url.searchParams.get('path') || '').replace(/^\/+|\/+$/g, '');
           const qId = (url.searchParams.get('id') || '').replace(/^\/+|\/+$/g, '');
@@ -674,7 +676,9 @@ export default {
           const raw = body.mediainfo_raw || body.raw || null;
           const j = body.mediainfo_json || body.json || null;
           const jStr = j ? (typeof j === 'string' ? j : JSON.stringify(j)) : null;
-          await env.harudrive_db.prepare('INSERT OR REPLACE INTO mediainfo_cache (path, raw, json, updated) VALUES (?, ?, ?, ?)').bind(p, raw, jStr, Date.now()).run();
+          if (env.harudrive_db) {
+            await env.harudrive_db.prepare('INSERT OR REPLACE INTO mediainfo_cache (path, raw, json, updated) VALUES (?, ?, ?, ?)').bind(p, raw, jStr, Date.now()).run().catch(() => {});
+          }
           return new Response(JSON.stringify({ success: true }), { headers: { 'Content-Type': 'application/json' } });
         }
       } catch (err) {
