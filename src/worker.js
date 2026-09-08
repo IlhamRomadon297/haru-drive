@@ -895,6 +895,21 @@ export default {
           return new Response(JSON.stringify({ error: 'Query wajib diisi.' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
         }
 
+        async function autoTranslateToIndonesian(text) {
+          if (!text) return '';
+          try {
+            const transUrl = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=id&dt=t&q=' + encodeURIComponent(text);
+            const transRes = await fetch(transUrl);
+            if (transRes.ok) {
+              const transJson = await transRes.json();
+              return transJson[0].map(s => s[0]).join('');
+            }
+          } catch(e) {
+            console.warn('Translate error:', e);
+          }
+          return text;
+        }
+
         // 1. Direct ID lookup if query is numeric (e.g. 667520)
         if (/^\d+$/.test(query)) {
           const endpointsToTry = (type === 'series' || type === 'tv') ? ['tv', 'movie'] : ['movie', 'tv'];
@@ -908,7 +923,9 @@ export default {
                 const enRes = await fetch(`https://api.themoviedb.org/3/${ep}/${query}?api_key=${tmdbKey}&language=en-US`);
                 if (enRes.ok) {
                   const enData = await enRes.json();
-                  overview = enData.overview || '';
+                  if (enData.overview) {
+                    overview = await autoTranslateToIndonesian(enData.overview);
+                  }
                   if (!title) title = enData.title || enData.name;
                 }
               }
@@ -934,7 +951,7 @@ export default {
           }
         }
 
-        // 2. Text title search (tries id-ID, falls back to en-US if empty)
+        // 2. Text title search (tries id-ID, falls back to en-US + auto translate)
         const searchType = (type === 'movies' || type === 'movie') ? 'movie' : (type === 'series' || type === 'tv') ? 'tv' : 'multi';
         let tmdbRes = await fetch(`https://api.themoviedb.org/3/search/${searchType}?query=${encodeURIComponent(query)}&api_key=${tmdbKey}&language=id-ID`);
         let tmdbData = tmdbRes.ok ? await tmdbRes.json() : null;
@@ -951,17 +968,43 @@ export default {
           10763: 'Berita', 10764: 'Reality', 10765: 'Sci-Fi & Fantasi', 10766: 'Soap', 10767: 'Talk', 10768: 'Perang & Politik'
         };
 
-        const results = (tmdbData.results || []).slice(0, 5).map(r => ({
-          id: r.id,
-          title: r.title || r.name || '',
-          year: (r.release_date || r.first_air_date || '').slice(0, 4),
-          poster: r.poster_path ? `https://image.tmdb.org/t/p/w500${r.poster_path}` : null,
-          rating: r.vote_average ? r.vote_average.toFixed(1) : null,
-          overview: r.overview || '',
-          media_type: r.media_type || searchType,
-          genres: (r.genre_ids || []).map(gid => genreMap[gid]).filter(Boolean).join(', '),
-          release_date: r.release_date || r.first_air_date || '',
-          country: (r.origin_country || []).join(', ')
+        const rawList = (tmdbData.results || []).slice(0, 5);
+        const results = await Promise.all(rawList.map(async (r) => {
+          let ov = r.overview || '';
+          let dur = '';
+          let ctry = (r.origin_country || []).join(', ');
+
+          // If overview or country is missing, fetch English movie details
+          try {
+            const ep = (r.media_type === 'tv' || searchType === 'tv') ? 'tv' : 'movie';
+            const dRes = await fetch(`https://api.themoviedb.org/3/${ep}/${r.id}?api_key=${tmdbKey}&language=en-US`);
+            if (dRes.ok) {
+              const dData = await dRes.json();
+              if (!ov && dData.overview) {
+                ov = await autoTranslateToIndonesian(dData.overview);
+              }
+              if (dData.production_countries && dData.production_countries.length > 0) {
+                ctry = dData.production_countries.map(c => c.name).join(', ');
+              }
+              if (dData.runtime) dur = dData.runtime + ' menit';
+            }
+          } catch(e) {
+            console.warn('Detail fetch error:', e);
+          }
+
+          return {
+            id: r.id,
+            title: r.title || r.name || '',
+            year: (r.release_date || r.first_air_date || '').slice(0, 4),
+            poster: r.poster_path ? `https://image.tmdb.org/t/p/w500${r.poster_path}` : null,
+            rating: r.vote_average ? r.vote_average.toFixed(1) : null,
+            overview: ov,
+            media_type: r.media_type || searchType,
+            genres: (r.genre_ids || []).map(gid => genreMap[gid]).filter(Boolean).join(', '),
+            duration: dur,
+            release_date: r.release_date || r.first_air_date || '',
+            country: ctry
+          };
         }));
 
         return new Response(JSON.stringify({ results }), { headers: { 'Content-Type': 'application/json' } });
@@ -1408,7 +1451,12 @@ export default {
     // Page Routes
     if (url.pathname === '/admin') {
       return new Response(htmlPage(adminConsoleUI(), env, 'admin'), {
-        headers: { 'Content-Type': 'text/html;charset=UTF-8' }
+        headers: {
+          'Content-Type': 'text/html;charset=UTF-8',
+          'Cache-Control': 'no-cache, no-store, must-revalidate, max-age=0',
+          'Pragma': 'no-cache',
+          'Expires': '0'
+        }
       });
     }
 
@@ -1659,7 +1707,13 @@ function htmlPage(content, env, pageMode = 'public') {
       transition: background 0.25s, color 0.25s;
     }
 
-    body.modal-open { overflow: hidden !important; }
+    body.modal-open {
+      overflow: hidden !important;
+      position: fixed !important;
+      width: 100% !important;
+      height: 100vh !important;
+      touch-action: none !important;
+    }
     .glass {
       background: var(--bg-surface);
       backdrop-filter: blur(16px);
@@ -4227,24 +4281,17 @@ let _tgLivePreviewSetup = false;
 
 function cleanSubtitleLanguages(subs) {
   if (!subs) return 'Indonesian & English';
-  let arr = [];
-  if (Array.isArray(subs)) arr = subs;
-  else if (typeof subs === 'string') {
-    try {
-      const parsed = JSON.parse(subs);
-      if (Array.isArray(parsed)) arr = parsed;
-      else arr = subs.split(',');
-    } catch(e) {
-      arr = subs.split(',');
-    }
-  }
+  let str = typeof subs === 'string' ? subs : Array.isArray(subs) ? subs.join(', ') : JSON.stringify(subs);
+  
+  // Normalize capital letters immediately
+  str = str.replace(/\benglish\b/gi, 'English').replace(/\bindonesian\b/gi, 'Indonesian').replace(/\bjapanese\b/gi, 'Japanese').replace(/\bmalay\b/gi, 'Malay').replace(/\bkorean\b/gi, 'Korean');
 
   const langMap = {
     'id': 'Indonesian', 'ind': 'Indonesian', 'indonesia': 'Indonesian', 'indonesian': 'Indonesian',
-    'en': 'English', 'eng': 'English',
-    'ja': 'Japanese', 'jpn': 'Japanese', 'jepang': 'Japanese',
+    'en': 'English', 'eng': 'English', 'english': 'English',
+    'ja': 'Japanese', 'jpn': 'Japanese', 'jepang': 'Japanese', 'japanese': 'Japanese',
     'ms': 'Malay', 'zlm': 'Malay', 'may': 'Malay', 'malay': 'Malay', 'melayu': 'Malay',
-    'ko': 'Korean', 'kor': 'Korean',
+    'ko': 'Korean', 'kor': 'Korean', 'korean': 'Korean',
     'zh': 'Chinese', 'zho': 'Chinese', 'chi': 'Chinese',
     'ar': 'Arabic', 'ara': 'Arabic',
     'de': 'German', 'ger': 'German', 'deu': 'German',
@@ -4255,16 +4302,16 @@ function cleanSubtitleLanguages(subs) {
     'vi': 'Vietnamese', 'vie': 'Vietnamese'
   };
 
+  const tokens = str.split(/[,&/+|]+/).map(s => s.trim()).filter(Boolean);
   const cleanList = [];
-  arr.forEach(s => {
-    const raw = String(s).trim().toLowerCase();
-    const clean = langMap[raw] || (raw ? raw.charAt(0).toUpperCase() + raw.slice(1) : '');
-    if (clean && !cleanList.includes(clean)) cleanList.push(clean);
+  tokens.forEach(t => {
+    const lower = t.toLowerCase();
+    const mapped = langMap[lower] || (t ? t.charAt(0).toUpperCase() + t.slice(1) : '');
+    if (mapped && !cleanList.includes(mapped)) cleanList.push(mapped);
   });
 
   if (cleanList.length === 0) return 'Indonesian & English';
 
-  // Priority order: Indonesian, English, Japanese, Malay, Korean
   const priority = ['Indonesian', 'English', 'Japanese', 'Malay', 'Korean'];
   const matchedPrio = priority.filter(p => cleanList.includes(p));
   const otherLangs = cleanList.filter(l => !priority.includes(l));
@@ -4279,7 +4326,6 @@ function cleanSubtitleLanguages(subs) {
     }
     return display.join(', ');
   }
-
   return cleanList.slice(0, 3).join(', ') + (cleanList.length > 3 ? ', etc.' : '');
 }
 
@@ -5161,15 +5207,19 @@ function previewTelegramCaption() {
 }
 
 // INTERACTIVE VISUAL PREVIEW MODAL
+let _modalScrollPos = 0;
 function openTelegramVisualPreview() {
   const modal = document.getElementById('tgVisualPreviewModal');
   if (!modal) return;
 
+  _modalScrollPos = window.scrollY || window.pageYOffset || 0;
   document.body.classList.add('modal-open');
+  document.body.style.top = '-' + _modalScrollPos + 'px';
+
   const vb = document.getElementById('tgVisualPreviewBody');
   if (vb) vb.scrollTop = 0;
 
-  // Bind wheel & touch scroll interception once to prevent background scrolling
+  // Bind wheel & touch scroll interception once to completely prevent background scrolling
   if (!modal._scrollBound) {
     modal._scrollBound = true;
     modal.addEventListener('wheel', function(e) {
@@ -5178,6 +5228,7 @@ function openTelegramVisualPreview() {
         body.scrollTop += e.deltaY;
       }
       e.preventDefault();
+      e.stopPropagation();
     }, { passive: false });
 
     let touchStartY = 0;
@@ -5193,6 +5244,7 @@ function openTelegramVisualPreview() {
         body.scrollTop += delta;
       }
       e.preventDefault();
+      e.stopPropagation();
     }, { passive: false });
   }
 
@@ -5242,11 +5294,15 @@ function openTelegramVisualPreview() {
     if (mediaInfoUrl) {
       bh += '<div style="flex: 1; min-width: 120px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); padding: 8px 12px; border-radius: 8px; font-size: 0.8rem; color: #ffffff; text-align: center; font-weight: 600;">📄 MediaInfo ↗️</div>';
     }
-    if (tgSelectedFiles && tgSelectedFiles.length > 0) {
-      tgSelectedFiles.forEach(f => {
-        const parsed = parseFileName(f.name || f.path);
-        const q = formatQuality(parsed.quality);
-        bh += '<div style="flex: 1; min-width: 120px; background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.4); padding: 8px 12px; border-radius: 8px; font-size: 0.8rem; color: #38bdf8; text-align: center; font-weight: 600;">📥 Download ' + escapeHtml(q) + ' ↗️</div>';
+    const selFiles = (typeof tgSelectedFiles !== 'undefined' && tgSelectedFiles.length > 0) ? tgSelectedFiles : (window._tgSelectedFiles || []);
+    if (selFiles && selFiles.length > 0) {
+      selFiles.forEach(f => {
+        const fn = f.name || f.path || '';
+        const parsed = parseFileName(fn);
+        const q = detectQuality(fn);
+        const c = formatCodec(parsed.codec || 'AV1');
+        const btnLabel = (selFiles.length > 1) ? (q + ' ' + c) : q;
+        bh += '<div style="flex: 1; min-width: 120px; background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.4); padding: 8px 12px; border-radius: 8px; font-size: 0.8rem; color: #38bdf8; text-align: center; font-weight: 600;">📥 Download ' + escapeHtml(btnLabel) + ' ↗️</div>';
       });
     } else {
       bh += '<div style="flex: 1; min-width: 120px; background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.4); padding: 8px 12px; border-radius: 8px; font-size: 0.8rem; color: #38bdf8; text-align: center; font-weight: 600;">📥 Download ↗️</div>';
@@ -5262,6 +5318,8 @@ function closeTelegramVisualPreview() {
   const modal = document.getElementById('tgVisualPreviewModal');
   if (modal) modal.style.display = 'none';
   document.body.classList.remove('modal-open');
+  document.body.style.top = '';
+  window.scrollTo(0, _modalScrollPos || 0);
 }
 
 async function sendToTelegram() {
