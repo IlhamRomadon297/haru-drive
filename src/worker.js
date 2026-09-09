@@ -1113,58 +1113,61 @@ export default {
         const cat = (body.category || '').toLowerCase();
         const isSeries = cat === 'series' || cat === 'anime';
 
-        // HaruDrive clean caption ala Screenshot 4
-        let caption = `\u{1F3AC} <b>${title}${yearText}</b>\n`;
-        // Quote untuk filename HANYA jika rilisan tunggal (1 file) film
-        if (!isSeries && versions && versions.length === 1 && mainFile) {
-          caption += `<blockquote>${mainFile}</blockquote>\n`;
-        }
+        // HaruDrive caption: Gunakan custom_caption dari input manual jika ada
+        let caption = (body.custom_caption && body.custom_caption.trim()) || (body.caption && body.caption.trim()) || '';
+        if (!caption) {
+          caption = `\u{1F3AC} <b>${title}${yearText}</b>\n`;
+          // Quote untuk filename HANYA jika rilisan tunggal (1 file) film
+          if (!isSeries && versions && versions.length === 1 && mainFile) {
+            caption += `<blockquote>${mainFile}</blockquote>\n`;
+          }
 
-        if (synopsis) {
-          const synTrunc = synopsis.length > 350 ? synopsis.slice(0, 347) + '...' : synopsis;
-          caption += `\n\u{1F4DD} ${synTrunc}\n`;
-        }
+          if (synopsis) {
+            const synTrunc = synopsis.length > 350 ? synopsis.slice(0, 347) + '...' : synopsis;
+            caption += `\n\u{1F4DD} ${synTrunc}\n`;
+          }
 
-        // Quote box for Specs ala SS 4
-        const videoSpec = (specs && specs.video && specs.video.trim()) || '';
-        const durSpec = (specs && specs.duration && specs.duration.trim()) || '';
-        const subsSpec = (specs && specs.subs && specs.subs.trim()) || '';
-        const audioSpec = (specs && specs.audio && specs.audio.trim()) || '';
-        const sz = (specs && specs.size && specs.size.trim()) || body.folder_size || (versions && versions.length === 1 && versions[0] && versions[0].size) || '';
+          // Quote box for Specs ala SS 4
+          const videoSpec = (specs && specs.video && specs.video.trim()) || '';
+          const durSpec = (specs && specs.duration && specs.duration.trim()) || '';
+          const subsSpec = (specs && specs.subs && specs.subs.trim()) || '';
+          const audioSpec = (specs && specs.audio && specs.audio.trim()) || '';
+          const sz = (specs && specs.size && specs.size.trim()) || body.folder_size || (versions && versions.length === 1 && versions[0] && versions[0].size) || '';
 
-        const specHeader = [videoSpec, durSpec, sz].filter(Boolean).join(' \u2022 ');
-        
-        caption += `\n<blockquote>`;
-        if (specHeader) {
-          caption += `\u{1F39E}\uFE0F ${specHeader}\n`;
-        }
-        if (audioSpec) {
-          caption += `\u{1F50A} Audio: ${audioSpec}\n`;
-        }
-        if (subsSpec) {
-          caption += `\u{1F4AC} Subtitle: ${subsSpec}\n`;
-        }
-        caption = caption.trim() + `</blockquote>\n`;
+          const specHeader = [videoSpec, durSpec, sz].filter(Boolean).join(' \u2022 ');
+          
+          caption += `\n<blockquote>`;
+          if (specHeader) {
+            caption += `\u{1F39E}\uFE0F ${specHeader}\n`;
+          }
+          if (audioSpec) {
+            caption += `\u{1F50A} Audio: ${audioSpec}\n`;
+          }
+          if (subsSpec) {
+            caption += `\u{1F4AC} Subtitle: ${subsSpec}\n`;
+          }
+          caption = caption.trim() + `</blockquote>\n`;
 
-        // Available versions if multiple files (film multi-resolusi / series multi-season)
-        if (versions && versions.length > 1) {
-          caption += `\n\u{1F4C1} <b>Pilihan Versi:</b>\n`;
-          versions.forEach(v => {
-            const vLabel = v.label || [v.quality || '', v.codec || ''].filter(Boolean).join(' ') || 'HD';
-            caption += `  \u{1F4F9} ${vLabel} (${v.size || '?'})\n`.trim() + '\n';
-          });
-        }
+          // Available versions if multiple files (film multi-resolusi / series multi-season)
+          if (versions && versions.length > 1) {
+            caption += `\n\u{1F4C1} <b>Pilihan Versi:</b>\n`;
+            versions.forEach(v => {
+              const vLabel = v.label || [v.quality || '', v.codec || ''].filter(Boolean).join(' ') || 'HD';
+              caption += `  \u{1F4F9} ${vLabel} (${v.size || '?'})\n`.trim() + '\n';
+            });
+          }
 
-        caption += `\n\n\u{1F4E2} <b>Join:</b> https://t.me/harureleases`;
+          caption += `\n\n\u{1F4E2} <b>Join:</b> https://t.me/harureleases`;
 
-        // Hashtags
-        if (hashtags && hashtags.length > 0) {
-          const validTags = hashtags
-            .map(h => String(h).trim())
-            .filter(h => h && h !== '#')
-            .map(h => h.startsWith('#') ? h : '#' + h);
-          if (validTags.length > 0) {
-            caption += `\n${validTags.join(' ')}`;
+          // Hashtags
+          if (hashtags && hashtags.length > 0) {
+            const validTags = hashtags
+              .map(h => String(h).trim())
+              .filter(h => h && h !== '#')
+              .map(h => h.startsWith('#') ? h : '#' + h);
+            if (validTags.length > 0) {
+              caption += `\n${validTags.join(' ')}`;
+            }
           }
         }
 
@@ -5371,7 +5374,7 @@ function setupTelegramLivePreview() {
   const inputIds = [
     'tgTitle', 'tgYear', 'tgRating', 'tgCategory', 'tgPosterUrl',
     'tgGenres', 'tgReleaseDate', 'tgCountry',
-    'tgSpecVideo', 'tgSpecDuration', 'tgSpecAudio', 'tgSpecSubs',
+    'tgSpecVideo', 'tgSpecDuration', 'tgSpecSize', 'tgSpecAudio', 'tgSpecSubs',
     'tgSynopsis', 'tgHashtags', 'tgUseBanner', 'tgMediaInfoUrl'
   ];
   inputIds.forEach(id => {
@@ -5909,6 +5912,12 @@ function openTelegramModal(files) {
   document.getElementById('tgSpecSubs').value = '';
   document.getElementById('tgHashtags').value = '';
   document.getElementById('tgMediaInfoUrl').value = '';
+  window._tgCaptionManuallyEdited = false;
+  const initCustomCap = document.getElementById('tgCustomCaption');
+  if (initCustomCap) initCustomCap.value = '';
+  const capBadge = document.getElementById('tgCaptionEditBadge');
+  if (capBadge) capBadge.style.display = 'none';
+  if (typeof switchTGCaptionTab === 'function') switchTGCaptionTab('edit');
   const resBox = document.getElementById('tgTmdbResults');
   if (resBox) resBox.innerHTML = '';
   const fileContainer = document.getElementById('tgSelectedFilesList') || document.getElementById('tgSelectedFiles');
@@ -6744,16 +6753,114 @@ async function parseMediaInfoFromUrl() {
   }
 }
 
-function previewTelegramCaption() {
-  const cap = generateTGCaption();
-  const box = document.getElementById('tgCaptionPreview');
-  if (box) {
-    box.innerHTML = formatCaptionForPreview(cap);
+window._tgCaptionManuallyEdited = false;
+
+function getTGCaptionValue() {
+  const customEl = document.getElementById('tgCustomCaption');
+  if (customEl && customEl.value && customEl.value.trim()) {
+    return customEl.value.trim();
   }
+  return generateTGCaption();
+}
+
+function previewTelegramCaption(forceRegenerate = false) {
+  const customEl = document.getElementById('tgCustomCaption');
+  const previewBox = document.getElementById('tgCaptionPreview');
   const countEl = document.getElementById('tgCharCount');
+  const badgeEl = document.getElementById('tgCaptionEditBadge');
+
+  let cap = '';
+  if (forceRegenerate || !window._tgCaptionManuallyEdited) {
+    cap = generateTGCaption();
+    if (customEl) {
+      customEl.value = cap;
+    }
+    if (badgeEl) badgeEl.style.display = 'none';
+  } else {
+    cap = customEl ? customEl.value : generateTGCaption();
+    if (badgeEl) badgeEl.style.display = 'inline-block';
+  }
+
+  if (previewBox) {
+    previewBox.innerHTML = formatCaptionForPreview(cap);
+  }
   if (countEl) {
     countEl.textContent = cap.length + ' / 1024 chars';
     countEl.style.color = cap.length > 1024 ? '#f87171' : cap.length > 900 ? '#fbbf24' : 'var(--text-dim)';
+  }
+}
+
+function onTGCaptionManualInput() {
+  window._tgCaptionManuallyEdited = true;
+  const customEl = document.getElementById('tgCustomCaption');
+  const cap = customEl ? customEl.value : '';
+  const previewBox = document.getElementById('tgCaptionPreview');
+  const countEl = document.getElementById('tgCharCount');
+  const badgeEl = document.getElementById('tgCaptionEditBadge');
+
+  if (badgeEl) badgeEl.style.display = 'inline-block';
+  if (previewBox) {
+    previewBox.innerHTML = formatCaptionForPreview(cap);
+  }
+  if (countEl) {
+    countEl.textContent = cap.length + ' / 1024 chars';
+    countEl.style.color = cap.length > 1024 ? '#f87171' : cap.length > 900 ? '#fbbf24' : 'var(--text-dim)';
+  }
+}
+
+function resetTGCaptionToAuto() {
+  window._tgCaptionManuallyEdited = false;
+  previewTelegramCaption(true);
+}
+
+function switchTGCaptionTab(tab) {
+  const editContainer = document.getElementById('tgCaptionEditContainer');
+  const renderContainer = document.getElementById('tgCaptionRenderContainer');
+  const tabEdit = document.getElementById('tgTabEditCaption');
+  const tabPreview = document.getElementById('tgTabPreviewCaption');
+  const customEl = document.getElementById('tgCustomCaption');
+  const previewBox = document.getElementById('tgCaptionPreview');
+
+  if (tab === 'preview') {
+    if (customEl && previewBox) {
+      previewBox.innerHTML = formatCaptionForPreview(customEl.value);
+    }
+    if (editContainer) editContainer.style.display = 'none';
+    if (renderContainer) renderContainer.style.display = 'block';
+    if (tabEdit) {
+      tabEdit.style.background = 'transparent';
+      tabEdit.style.color = 'var(--text-muted)';
+      tabEdit.style.fontWeight = '500';
+    }
+    if (tabPreview) {
+      tabPreview.style.background = '#38bdf8';
+      tabPreview.style.color = '#fff';
+      tabPreview.style.fontWeight = '600';
+    }
+  } else {
+    if (renderContainer) renderContainer.style.display = 'none';
+    if (editContainer) editContainer.style.display = 'block';
+    if (tabEdit) {
+      tabEdit.style.background = '#38bdf8';
+      tabEdit.style.color = '#fff';
+      tabEdit.style.fontWeight = '600';
+    }
+    if (tabPreview) {
+      tabPreview.style.background = 'transparent';
+      tabPreview.style.color = 'var(--text-muted)';
+      tabPreview.style.fontWeight = '500';
+    }
+    if (customEl) customEl.focus();
+  }
+}
+
+function editCaptionFromVisualPreview() {
+  closeTelegramVisualPreview();
+  switchTGCaptionTab('edit');
+  const el = document.getElementById('tgCustomCaption');
+  if (el) {
+    el.focus();
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
 }
 
@@ -6769,7 +6876,7 @@ function openTelegramVisualPreview() {
     vb.scrollTop = 0;
   }
 
-  const cap = generateTGCaption();
+  const cap = getTGCaptionValue();
   const captionEl = document.getElementById('tgVisualCaptionText');
   if (captionEl) {
     captionEl.innerHTML = formatCaptionForPreview(cap);
@@ -7091,6 +7198,7 @@ async function sendToTelegram() {
       size: (document.getElementById('tgSpecSize')?.value || '').trim() || (versions && versions[0] && versions[0].size) || ''
     },
     folder_size: (document.getElementById('tgSpecSize')?.value || '').trim() || (versions && versions[0] && versions[0].size) || '',
+    custom_caption: getTGCaptionValue(),
     hashtags: hashtags,
     channel_id: channelId,
     topic_id: topicId
@@ -8656,11 +8764,38 @@ function adminConsoleUI() {
           <input type="text" id="tgAdminPin" class="form-input-pro" placeholder="••••••" autocomplete="new-password" style="margin-top: 4px; -webkit-text-security: disc; text-security: disc;">
         </div>
 
-        <!-- Caption Preview Box (Live Rendered) -->
-        <div style="margin-bottom: 10px;">
-          <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Caption Preview</label>
-          <div id="tgCaptionPreview" class="folder-tree-box" style="margin-top: 4px; font-size: 0.76rem; color: var(--text); padding: 12px; white-space: pre-wrap; min-height: 80px; line-height: 1.5; background: rgba(0,0,0,0.25);">Klik "Preview" untuk melihat simulasi visual lengkap</div>
-          <div id="tgCharCount" style="font-size: 0.7rem; color: var(--text-dim); margin-top: 3px;">0 / 1024 chars</div>
+        <!-- Caption Preview & Manual Edit Box -->
+        <div style="margin-bottom: 12px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; flex-wrap: wrap; gap: 6px;">
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Caption Post Telegram</label>
+              <span id="tgCaptionEditBadge" style="display: none; font-size: 0.65rem; padding: 1px 6px; border-radius: 4px; background: rgba(56, 189, 248, 0.2); color: #38bdf8; font-weight: 600;">Manual Edit</span>
+            </div>
+            <div style="display: flex; gap: 6px; align-items: center;">
+              <div style="display: flex; background: rgba(255,255,255,0.06); border-radius: 6px; padding: 2px; border: 1px solid var(--border);">
+                <button type="button" id="tgTabEditCaption" onclick="switchTGCaptionTab('edit')" style="padding: 3px 10px; font-size: 0.72rem; border-radius: 4px; border: none; background: #38bdf8; color: #fff; cursor: pointer; font-weight: 600;">✏️ Edit Teks</button>
+                <button type="button" id="tgTabPreviewCaption" onclick="switchTGCaptionTab('preview')" style="padding: 3px 10px; font-size: 0.72rem; border-radius: 4px; border: none; background: transparent; color: var(--text-muted); cursor: pointer; font-weight: 500;">👁️ Tampilan</button>
+              </div>
+              <button type="button" onclick="resetTGCaptionToAuto()" title="Reset dan buat ulang caption otomatis dari input form" class="nav-btn" style="padding: 3px 8px; font-size: 0.72rem; height: auto;">
+                🔄 Reset Form
+              </button>
+            </div>
+          </div>
+
+          <!-- Tab 1: Editable Textarea -->
+          <div id="tgCaptionEditContainer">
+            <textarea id="tgCustomCaption" class="form-input-pro" style="margin-top: 2px; font-size: 0.78rem; font-family: 'JetBrains Mono', Consolas, Monaco, monospace; line-height: 1.55; min-height: 140px; width: 100%; box-sizing: border-box; resize: vertical;" placeholder="Caption otomatis akan muncul di sini dan dapat Anda koreksi langsung..." oninput="onTGCaptionManualInput()"></textarea>
+          </div>
+
+          <!-- Tab 2: Formatted Rendered Preview -->
+          <div id="tgCaptionRenderContainer" style="display: none;">
+            <div id="tgCaptionPreview" class="folder-tree-box" style="margin-top: 2px; font-size: 0.78rem; color: var(--text); padding: 12px; white-space: pre-wrap; min-height: 140px; line-height: 1.55; background: rgba(0,0,0,0.25);"></div>
+          </div>
+
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 4px; flex-wrap: wrap; gap: 4px;">
+            <div id="tgCharCount" style="font-size: 0.7rem; color: var(--text-dim);">0 / 1024 chars</div>
+            <div style="font-size: 0.68rem; color: var(--text-muted);">Mendukung tag HTML: &lt;b&gt;, &lt;i&gt;, &lt;blockquote&gt;, &lt;code&gt;</div>
+          </div>
         </div>
       </div>
       <div class="modal-footer" style="justify-content: space-between;">
@@ -8709,9 +8844,10 @@ function adminConsoleUI() {
         </div>
       </div>
 
-      <div class="modal-footer" style="flex-shrink: 0; padding: 12px 18px; border-top: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center;">
+      <div class="modal-footer" style="flex-shrink: 0; padding: 12px 18px; border-top: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
         <div id="tgVisualCharCounter" style="font-size: 0.74rem; color: var(--text-muted);">0 / 1024 karakter</div>
-        <div style="display: flex; gap: 8px;">
+        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+          <button class="nav-btn" onclick="editCaptionFromVisualPreview()" style="font-size: 0.8rem; padding: 6px 12px; background: rgba(56, 189, 248, 0.12); border-color: rgba(56, 189, 248, 0.35); color: #38bdf8;">✏️ Koreksi Caption</button>
           <button class="nav-btn" onclick="closeTelegramVisualPreview()" style="font-size: 0.8rem; padding: 6px 14px;">Tutup</button>
           <button class="nav-btn" style="background: #38bdf8; color: white; border: none; font-size: 0.8rem; padding: 6px 16px; font-weight: 600;" onclick="closeTelegramVisualPreview(); sendToTelegram();">
             🚀 Send to Channel
