@@ -7127,12 +7127,12 @@ function renderTGButtonsEditor(forceReset = false) {
   window._tgCustomButtons.forEach((btn, idx) => {
     html += '<div class="tg-btn-editor-row" style="display: flex; gap: 6px; align-items: center; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 6px 8px;">';
     html += '  <div style="flex: 2; min-width: 140px;">';
-    html += '    <input type="text" class="form-input-pro" value="' + escapeHtml(btn.text) + '" placeholder="Nama Tombol" style="font-size: 0.76rem; padding: 4px 8px;" oninput="updateCustomTGButton(' + idx + ', \'text\', this.value)">';
+    html += '    <input type="text" class="form-input-pro" value="' + escapeHtml(btn.text) + '" placeholder="Nama Tombol" style="font-size: 0.76rem; padding: 4px 8px;" data-idx="' + idx + '" data-field="text" oninput="updateCustomTGButton(this)">';
     html += '  </div>';
     html += '  <div style="flex: 3; min-width: 180px;">';
-    html += '    <input type="text" class="form-input-pro" value="' + escapeHtml(btn.url) + '" placeholder="URL Link (https://...)" style="font-size: 0.76rem; padding: 4px 8px;" oninput="updateCustomTGButton(' + idx + ', \'url\', this.value)">';
+    html += '    <input type="text" class="form-input-pro" value="' + escapeHtml(btn.url) + '" placeholder="URL Link (https://...)" style="font-size: 0.76rem; padding: 4px 8px;" data-idx="' + idx + '" data-field="url" oninput="updateCustomTGButton(this)">';
     html += '  </div>';
-    html += '  <button type="button" class="btn-act" onclick="deleteCustomTGButton(' + idx + ')" title="Hapus tombol ini" style="color: #ef4444; padding: 4px 6px; background: transparent; border: none; cursor: pointer;">';
+    html += '  <button type="button" class="btn-act" data-idx="' + idx + '" onclick="deleteCustomTGButton(this)" title="Hapus tombol ini" style="color: #ef4444; padding: 4px 6px; background: transparent; border: none; cursor: pointer;">';
     html += '    <svg class="icon icon-sm" viewBox="0 0 24 24" style="width: 15px; height: 15px; stroke: #ef4444;"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>';
     html += '  </button>';
     html += '</div>';
@@ -7141,9 +7141,12 @@ function renderTGButtonsEditor(forceReset = false) {
   container.innerHTML = html;
 }
 
-function updateCustomTGButton(idx, field, val) {
-  if (window._tgCustomButtons && window._tgCustomButtons[idx]) {
-    window._tgCustomButtons[idx][field] = val;
+function updateCustomTGButton(el) {
+  if (!el) return;
+  const idx = parseInt(el.getAttribute('data-idx'), 10);
+  const field = el.getAttribute('data-field');
+  if (window._tgCustomButtons && !isNaN(idx) && window._tgCustomButtons[idx] && field) {
+    window._tgCustomButtons[idx][field] = el.value;
   }
 }
 
@@ -7155,8 +7158,9 @@ function addCustomTGButton() {
   renderTGButtonsEditor();
 }
 
-function deleteCustomTGButton(idx) {
-  if (window._tgCustomButtons && window._tgCustomButtons[idx]) {
+function deleteCustomTGButton(elOrIdx) {
+  const idx = typeof elOrIdx === 'number' ? elOrIdx : parseInt(elOrIdx.getAttribute('data-idx'), 10);
+  if (window._tgCustomButtons && !isNaN(idx) && window._tgCustomButtons[idx]) {
     window._tgCustomButtons.splice(idx, 1);
     renderTGButtonsEditor();
   }
