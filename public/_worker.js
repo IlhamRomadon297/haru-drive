@@ -2672,46 +2672,133 @@ function htmlPage(content, env, pageMode = 'public') {
       grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
       gap: 10px;
     }
+    .tg-tmdb-search-wrap {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .tg-tmdb-search-wrap input {
+      flex: 1;
+    }
+    .tg-tmdb-search-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .tg-tmdb-radios {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
 
     @media (max-width: 640px) {
       .tg-form-grid-4 {
-        grid-template-columns: 1fr 1fr;
-        gap: 8px;
+        display: grid !important;
+        grid-template-columns: 1fr 1fr 1.2fr !important;
+        gap: 8px !important;
+        margin-bottom: 12px !important;
       }
       .tg-form-grid-4 > div:first-child {
-        grid-column: span 2;
+        grid-column: span 3 !important;
       }
       .tg-form-grid-3 {
-        grid-template-columns: 1fr;
-        gap: 8px;
+        display: grid !important;
+        grid-template-columns: 1fr 1fr !important;
+        gap: 8px !important;
+        margin-bottom: 12px !important;
+      }
+      .tg-form-grid-3 > div:first-child {
+        grid-column: span 2 !important;
       }
       .tg-form-grid-2 {
-        grid-template-columns: 1fr;
-        gap: 8px;
+        display: grid !important;
+        grid-template-columns: 1fr !important;
+        gap: 8px !important;
+        margin-bottom: 12px !important;
       }
       .tg-form-specs-grid {
-        grid-template-columns: 1fr;
-        gap: 8px;
+        display: grid !important;
+        grid-template-columns: 1fr 1fr !important;
+        gap: 8px !important;
       }
-      #telegramModal .modal-card {
-        max-width: 98% !important;
-        width: 98% !important;
-        max-height: 94vh !important;
-        margin: 4px auto !important;
+      .tg-form-specs-grid > div:first-child {
+        grid-column: span 2 !important;
+      }
+
+      .tg-tmdb-search-wrap {
+        flex-direction: column !important;
+        align-items: stretch !important;
+        gap: 8px !important;
+      }
+      .tg-tmdb-search-wrap input {
+        width: 100% !important;
+      }
+      .tg-tmdb-search-actions {
+        display: flex !important;
+        justify-content: space-between !important;
+        align-items: center !important;
+        width: 100% !important;
+      }
+      .tg-tmdb-search-actions button {
+        flex: 1 !important;
+        max-width: 120px !important;
+        padding: 6px 14px !important;
+      }
+      .tg-telegraph-btns {
+        width: 100% !important;
+        display: flex !important;
+        gap: 6px !important;
+      }
+      .tg-telegraph-btns > button {
+        flex: 1 !important;
+        text-align: center !important;
+        justify-content: center !important;
+        padding: 6px 8px !important;
+        font-size: 0.72rem !important;
+      }
+
+      .modal-backdrop {
+        padding: 6px !important;
+      }
+      #telegramModal .modal-card,
+      #tgVisualPreviewModal .modal-card {
+        max-width: 100% !important;
+        width: 100% !important;
+        max-height: 96vh !important;
+        height: 96vh !important;
+        margin: 0 auto !important;
         border-radius: 16px !important;
+        display: flex !important;
+        flex-direction: column !important;
+        overflow: hidden !important;
+        box-sizing: border-box !important;
+      }
+      #telegramModal .modal-header,
+      #tgVisualPreviewModal .modal-header {
+        padding: 10px 14px !important;
+        flex-shrink: 0 !important;
       }
       #telegramModal .modal-body {
         padding: 12px 10px !important;
-        max-height: calc(94vh - 125px) !important;
+        flex: 1 1 auto !important;
+        max-height: none !important;
         overflow-y: auto !important;
+        overflow-x: hidden !important;
+        -webkit-overflow-scrolling: touch !important;
+        box-sizing: border-box !important;
       }
       #telegramModal .modal-footer {
         padding: 10px 12px !important;
-        flex-wrap: wrap !important;
+        display: flex !important;
+        flex-direction: column-reverse !important;
         gap: 8px !important;
+        flex-shrink: 0 !important;
+        border-top: 1px solid var(--border) !important;
       }
       #telegramModal .modal-footer > button {
         width: 100% !important;
+        padding: 8px 12px !important;
+        font-size: 0.85rem !important;
       }
       #telegramModal .modal-footer > div {
         width: 100% !important;
@@ -2720,18 +2807,19 @@ function htmlPage(content, env, pageMode = 'public') {
       }
       #telegramModal .modal-footer > div > button {
         flex: 1 !important;
+        padding: 10px 12px !important;
+        font-size: 0.88rem !important;
       }
+
       #tgVisualPreviewModal .modal-card {
-        margin: 4px auto !important;
-        max-width: 98% !important;
-        width: 98% !important;
-        height: 92vh !important;
-        max-height: 92vh !important;
-        border-radius: 16px !important;
+        margin: 0 auto !important;
       }
       #tgVisualPreviewBody {
         padding: 10px 10px !important;
-        max-height: calc(92vh - 110px) !important;
+        flex: 1 1 auto !important;
+        max-height: none !important;
+        overflow-y: auto !important;
+        overflow-x: hidden !important;
       }
       #tgVisualPreviewModal .modal-footer {
         padding: 10px 12px !important;
@@ -2741,6 +2829,7 @@ function htmlPage(content, env, pageMode = 'public') {
       .form-input-pro {
         font-size: 14px !important;
         padding: 8px 10px !important;
+        border-radius: 10px !important;
       }
     }
 
@@ -3346,10 +3435,56 @@ function htmlPage(content, env, pageMode = 'public') {
 
       .col-date, .file-date-cell { display: none; }
       .col-size, .file-size-cell { display: none; }
-      .guest-table-box { overflow-x: auto; }
-      .guest-file-list { max-height: none; overflow: visible; }
-      .guest-table-header, .guest-file-list .file-row { min-width: 600px; grid-template-columns: 40px 1fr 90px 110px; }
-      .guest-table-box .col-size, .guest-table-box .file-size-cell { display: block; width: 90px; }
+      .guest-card-wrapper {
+        padding: 0 8px !important;
+        margin: 12px auto 28px !important;
+        width: 100% !important;
+        box-sizing: border-box !important;
+      }
+      .guest-main-card {
+        padding: 18px 10px 16px !important;
+        border-radius: 16px !important;
+        box-sizing: border-box !important;
+      }
+      .guest-folder-header, .guest-header-box {
+        margin-bottom: 16px !important;
+      }
+      .guest-folder-icon-large {
+        width: 52px !important;
+        height: 52px !important;
+        margin-bottom: 10px !important;
+      }
+      .guest-folder-icon-large svg {
+        width: 28px !important;
+        height: 28px !important;
+      }
+      .guest-card-title {
+        font-size: 1.1rem !important;
+      }
+      .guest-table-box {
+        overflow-x: auto !important;
+        overflow-y: hidden !important;
+        -webkit-overflow-scrolling: touch !important;
+        border-radius: 12px !important;
+      }
+      .guest-table-header,
+      .guest-file-list .file-row {
+        min-width: 520px !important;
+        grid-template-columns: 40px minmax(220px, 1fr) 90px 115px !important;
+      }
+      .guest-table-box .col-size,
+      .guest-table-box .file-size-cell {
+        display: flex !important;
+        justify-content: flex-end !important;
+        align-items: center !important;
+        width: auto !important;
+      }
+      .guest-file-list {
+        max-height: 60vh !important;
+        overflow-y: auto !important;
+        overflow-x: visible !important;
+        -webkit-overflow-scrolling: touch !important;
+      }
       
       .table-header { padding: 10px 12px; }
       .file-row { padding: 10px 12px; }
@@ -3610,14 +3745,29 @@ function htmlPage(content, env, pageMode = 'public') {
 
 .guest-table-box {
   border: 1px solid var(--border);
-  border-radius: 12px;
-  overflow: hidden;
+  border-radius: 14px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
   background: rgba(0, 0, 0, 0.18);
+  position: relative;
+}
+.guest-table-box::-webkit-scrollbar {
+  height: 5px;
+}
+.guest-table-box::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+}
+.guest-table-box::-webkit-scrollbar-thumb {
+  background: rgba(245, 158, 11, 0.35);
+  border-radius: 4px;
 }
 
 .guest-table-header {
   display: grid;
-  grid-template-columns: 40px 1fr 90px 110px;
+  grid-template-columns: 40px minmax(220px, 1fr) 90px 115px;
+  min-width: 500px;
   align-items: center;
   padding: 11px 14px;
   background: rgba(255, 255, 255, 0.04);
@@ -3629,14 +3779,16 @@ function htmlPage(content, env, pageMode = 'public') {
 }
 
 .guest-file-list {
-  max-height: 56vh;
+  max-height: 58vh;
   overflow-y: auto;
-  overflow-x: hidden;
+  overflow-x: visible;
   scrollbar-gutter: stable;
+  -webkit-overflow-scrolling: touch;
 }
 .guest-file-list .file-row {
   display: grid;
-  grid-template-columns: 40px 1fr 90px 110px;
+  grid-template-columns: 40px minmax(220px, 1fr) 90px 115px;
+  min-width: 500px;
   align-items: center;
   padding: 12px 14px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
@@ -8291,7 +8443,7 @@ function adminConsoleUI() {
 
         <!-- LIVE BANNER PREVIEW ALA HARUDRIVE -->
         <div class="glass" style="padding: 12px; border-radius: 12px; margin-bottom: 16px; border: 1px solid rgba(56, 189, 248, 0.3);">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; flex-wrap: wrap; gap: 8px;">
             <div style="display: flex; align-items: center; gap: 8px;">
               <span id="tgBannerBadge" style="font-size: 0.72rem; font-weight: 700; color: #38bdf8; background: rgba(56, 189, 248, 0.12); padding: 2px 8px; border-radius: 4px;">HaruDrive Banner (1200x630)</span>
               <span style="font-size: 0.7rem; color: var(--text-dim);">Live Banner Preview</span>
@@ -8311,12 +8463,12 @@ function adminConsoleUI() {
 
         <!-- AUTO GENERATE MEDIAINFO SECTION (PROMINENT) -->
         <div class="glass" style="padding: 12px 14px; border-radius: 12px; margin-bottom: 14px; border: 1px solid rgba(56, 189, 248, 0.25); background: rgba(56, 189, 248, 0.04);">
-          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;">
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; flex-wrap: wrap; gap: 8px;">
             <div style="display: flex; align-items: center; gap: 8px;">
               <span style="font-size: 1rem;">⚡</span>
               <span style="font-size: 0.82rem; font-weight: 700; color: #38bdf8;">MediaInfo & Technical Specs</span>
             </div>
-            <button type="button" class="nav-btn" style="background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.4); color: #38bdf8; font-size: 0.72rem; padding: 4px 10px; font-weight: 600;" onclick="triggerAutoMediaInfo()">
+            <button type="button" class="nav-btn" style="background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.4); color: #38bdf8; font-size: 0.74rem; padding: 5px 12px; font-weight: 600;" onclick="triggerAutoMediaInfo()">
               ⚡ Auto Generate MediaInfo
             </button>
           </div>
@@ -8342,15 +8494,15 @@ function adminConsoleUI() {
 
           <!-- TELEGRA.PH MEDIAINFO LINK -->
           <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(56, 189, 248, 0.15);">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; flex-wrap: wrap; gap: 8px;">
               <label style="font-size: 0.74rem; font-weight: 600; color: #38bdf8; display: flex; align-items: center; gap: 6px;">
                 <span>🌐</span> MediaInfo Link (Telegra.ph)
               </label>
-              <div style="display: flex; gap: 6px;">
-                <button type="button" class="nav-btn" style="background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.4); color: #10b981; font-size: 0.7rem; padding: 2px 8px; font-weight: 600;" onclick="parseMediaInfoFromUrl()" title="Tarik resolusi, audio, subtitle dari link ini">
+              <div class="tg-telegraph-btns">
+                <button type="button" class="nav-btn" style="background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.4); color: #10b981; font-size: 0.72rem; padding: 4px 10px; font-weight: 600;" onclick="parseMediaInfoFromUrl()" title="Tarik resolusi, audio, subtitle dari link ini">
                   📥 Ekstrak dari Link
                 </button>
-                <button type="button" class="nav-btn" style="background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.4); color: #38bdf8; font-size: 0.7rem; padding: 2px 8px; font-weight: 600;" onclick="createTelegraphMediaInfo()">
+                <button type="button" class="nav-btn" style="background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.4); color: #38bdf8; font-size: 0.72rem; padding: 4px 10px; font-weight: 600;" onclick="createTelegraphMediaInfo()">
                   ⚡ Buat ke Telegra.ph
                 </button>
               </div>
@@ -8395,15 +8547,19 @@ function adminConsoleUI() {
         <!-- TMDB Search Box -->
         <div style="margin-bottom: 14px;">
           <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">TMDB Search (Cari judul atau ketik ID TMDB langsung)</label>
-          <div style="display: flex; gap: 6px; margin-top: 4px; align-items: center;">
-            <input type="text" id="tgTmdbQuery" class="form-input-pro" placeholder="e.g. The Last of Us atau 100088" style="flex: 1;">
-            <label style="display: flex; align-items: center; gap: 3px; font-size: 0.74rem; color: var(--text-dim); white-space: nowrap; cursor: pointer;">
-              <input type="radio" name="tmdbTypeToggle" value="movie" style="margin: 0;"> Film
-            </label>
-            <label style="display: flex; align-items: center; gap: 3px; font-size: 0.74rem; color: var(--text-dim); white-space: nowrap; cursor: pointer;">
-              <input type="radio" name="tmdbTypeToggle" value="tv" style="margin: 0;"> Series
-            </label>
-            <button type="button" class="nav-btn" onclick="searchTMDB()" style="padding: 0 14px; font-size: 0.8rem;">Cari</button>
+          <div class="tg-tmdb-search-wrap" style="margin-top: 4px;">
+            <input type="text" id="tgTmdbQuery" class="form-input-pro" placeholder="e.g. The Last of Us atau 100088">
+            <div class="tg-tmdb-search-actions">
+              <div class="tg-tmdb-radios">
+                <label style="display: flex; align-items: center; gap: 4px; font-size: 0.76rem; color: var(--text-dim); white-space: nowrap; cursor: pointer;">
+                  <input type="radio" name="tmdbTypeToggle" value="movie" style="margin: 0; accent-color: #38bdf8;"> Film
+                </label>
+                <label style="display: flex; align-items: center; gap: 4px; font-size: 0.76rem; color: var(--text-dim); white-space: nowrap; cursor: pointer;">
+                  <input type="radio" name="tmdbTypeToggle" value="tv" style="margin: 0; accent-color: #38bdf8;"> Series
+                </label>
+              </div>
+              <button type="button" class="nav-btn" onclick="searchTMDB()" style="padding: 6px 16px; font-size: 0.8rem; font-weight: 600;">Cari</button>
+            </div>
           </div>
           <div id="tgTmdbResults" style="margin-top: 6px; font-size: 0.76rem;"></div>
         </div>
