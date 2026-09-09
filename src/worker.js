@@ -3975,7 +3975,7 @@ let availableFolders = [''];
 function getStorageMode(){ try{ return localStorage.getItem('harudrive_storage_mode') || 'gdrive'; }catch(e){ return 'gdrive'; } }
 function setStorageMode(m){ try{ localStorage.setItem('harudrive_storage_mode', m); document.cookie='harudrive_mode='+m+'; Path=/; Max-Age=2592000; SameSite=Lax'; }catch(e){} updateStorageModeUI(); }
 function toggleStorageMode(){ const cur=getStorageMode(); const nxt=cur==='hf'?'gdrive':'hf'; setStorageMode(nxt); loadFolder('', ''); }
-function updateStorageModeUI(){ const m=getStorageMode(); const cur=m==='gdrive'?'GDrive':'HF'; const nxt=m==='gdrive'?'HF':'GDrive'; const l=document.getElementById('storageModeLabel'); if(l) l.textContent='Mode: '+cur; const l2=document.getElementById('storageModeLabelAdmin'); if(l2) l2.textContent='Mode: '+cur; const t1=document.getElementById('storageModeToggle'); if(t1) t1.title='Saat ini: '+cur+' \u2014 klik untuk ganti ke '+nxt; const t2=document.getElementById('storageModeToggleAdmin'); if(t2) t2.title='Saat ini: '+cur+' \u2014 klik untuk ganti ke '+nxt; const isGDrive=m==='gdrive'; const mb=document.getElementById('cloudMirrorBtn'); if(mb) mb.style.display=isGDrive?'none':''; const sb=document.getElementById('syncIndexBtn'); if(sb) sb.style.display=isGDrive?'none':''; const ub=document.getElementById('uploadBtn'); if(ub) ub.style.display=isGDrive?'none':''; const fb=document.getElementById('newFolderBtn'); if(fb) fb.style.display=isGDrive?'none':''; }
+function updateStorageModeUI(){ const m=getStorageMode(); const cur=m==='gdrive'?'GDrive':'HF'; const nxt=m==='gdrive'?'HF':'GDrive'; const l=document.getElementById('storageModeLabel'); if(l) l.textContent='Mode: '+cur; const l2=document.getElementById('storageModeLabelAdmin'); if(l2) l2.textContent='Mode: '+cur; const t1=document.getElementById('storageModeToggle'); if(t1) t1.title='Saat ini: '+cur+' \u2014 klik untuk ganti ke '+nxt; const t2=document.getElementById('storageModeToggleAdmin'); if(t2) t2.title='Saat ini: '+cur+' \u2014 klik untuk ganti ke '+nxt; const isGDrive=m==='gdrive'; const mb=document.getElementById('cloudMirrorBtn'); if(mb) mb.style.display=isGDrive?'none':''; const sb=document.getElementById('syncIndexBtn'); if(sb) sb.style.display=isGDrive?'none':''; const ub=document.getElementById('uploadBtn'); if(ub) ub.style.display=isGDrive?'none':''; const fb=document.getElementById('newFolderBtn'); if(fb) fb.style.display=isGDrive?'none':''; const sInp=document.getElementById('searchInput'); if(sInp){ sInp.placeholder = isGDrive ? 'Search Lokal (Ctrl+K)...' : 'Global Search (Ctrl+K)...'; } }
 async function updateBandwidthIndicator(){ try{ const res=await fetch('/api/bandwidth'); if(!res.ok) return; const data=await res.json(); const stats=data.stats||[]; const hf=stats.find(function(s){return s.mode==='hf';}); const gd=stats.find(function(s){return s.mode==='gdrive';}); const fmt=function(b){ if(!b) return '-'; const v=Number(b); if(v>=1099511627776) return (v/1099511627776).toFixed(2)+' TB'; if(v>=1073741824) return (v/1073741824).toFixed(2)+' GB'; if(v>=1048576) return (v/1048576).toFixed(2)+' MB'; if(v>=1024) return (v/1024).toFixed(2)+' KB'; return v+' B'; }; const elHf=document.getElementById('bwHf'); if(elHf) elHf.textContent='HF: ' + (hf? fmt(hf.bytes) + ' ('+hf.requests+' req)':'-'); const elGd=document.getElementById('bwGDrive'); if(elGd) elGd.textContent='GDrive: ' + (gd? fmt(gd.bytes) + ' ('+gd.requests+' req)':'-'); const elUp=document.getElementById('bwUpdated'); if(elUp && stats.length){ const maxUpdated=Math.max.apply(null, stats.map(function(s){return s.updated||0;})); if(maxUpdated) elUp.textContent='Updated: ' + new Date(maxUpdated).toLocaleString(); } }catch(e){} }
 let activeFilter = 'all';
 const selectedFiles = new Set();
@@ -4395,6 +4395,7 @@ function renderFolderPickerUI(containerId, inputId, selectedValue = '') {
     html += '</div>';
   });
   container.innerHTML = html;
+  scheduleFolderSizeScan(allFiles);
 }
 
 function selectFolderPickerItem(containerId, inputId, folderPath) {
@@ -4436,6 +4437,7 @@ async function loadFolder(path = '', id = '') {
     currentFolderStats = data.folderStats || null;
     if (document.getElementById('guestCardTitle') && !guestRootPath && currentPath) { guestRootPath = currentPath; }
     allFiles = data.files || [];
+    window._fullFolderFiles = null;
 
     updateBreadcrumbs();
     renderFileList();
@@ -4568,6 +4570,73 @@ function updateBreadcrumbs() {
   nav.innerHTML = html;
 }
 
+
+// Folder Size Client Cache & Background Resolver
+function getCachedFolderSize(fPath) {
+  if (!fPath) return 0;
+  try {
+    const c = JSON.parse(localStorage.getItem('harudrive_folder_sizes_v1') || '{}');
+    return c[fPath] || 0;
+  } catch(e) { return 0; }
+}
+
+function cacheFolderSize(fPath, size) {
+  if (!fPath || !size) return;
+  try {
+    const c = JSON.parse(localStorage.getItem('harudrive_folder_sizes_v1') || '{}');
+    c[fPath] = size;
+    localStorage.setItem('harudrive_folder_sizes_v1', JSON.stringify(c));
+  } catch(e) {}
+}
+
+let _folderScanQueueRunning = false;
+async function scheduleFolderSizeScan(files) {
+  if (!files || files.length === 0 || _folderScanQueueRunning) return;
+  const _sm = getStorageMode();
+  if (_sm === 'gdrive') return; // GDrive uses direct folder stats, only scan in HF mode
+  
+  const unscanned = files.filter(f => {
+    const isDir = f.mimeType === 'application/vnd.google-apps.folder' || (!f.name.includes('.') && (!f.size || f.size === 0));
+    return isDir && (!f.size || f.size === 0) && !getCachedFolderSize(f.path);
+  });
+  
+  if (unscanned.length === 0) return;
+  _folderScanQueueRunning = true;
+
+  // Process in small batches (concurrency: 2)
+  const batch = unscanned.slice(0, 15);
+  for (let i = 0; i < batch.length; i += 2) {
+    const pair = batch.slice(i, i + 2);
+    await Promise.all(pair.map(async (f) => {
+      try {
+        const fetchUrl = '/api/list?' + (f.id ? ('id=' + encodeURIComponent(f.id)) : ('path=' + encodeURIComponent(f.path)));
+        const res = await fetch(fetchUrl);
+        if (res.ok) {
+          const data = await res.json();
+          const subFiles = data.files || [];
+          let totalBytes = (data.folderStats && data.folderStats.fileSize) || 0;
+          if (!totalBytes && subFiles.length > 0) {
+            totalBytes = subFiles.reduce((acc, sf) => acc + (sf.size || 0), 0);
+          }
+          if (totalBytes > 0) {
+            f.size = totalBytes;
+            cacheFolderSize(f.path, totalBytes);
+            const cellId = 'fsize-' + String(f.id || f.path).replace(/[^a-zA-Z0-9_-]/g, '_');
+            const cell = document.getElementById(cellId);
+            if (cell) {
+              cell.textContent = formatBytes(totalBytes);
+            }
+            const row = cell?.closest('.file-row');
+            if (row) row.setAttribute('data-bytes', totalBytes);
+          }
+        }
+      } catch(e) {}
+    }));
+    await new Promise(r => setTimeout(r, 100));
+  }
+  _folderScanQueueRunning = false;
+}
+
 function renderFileList() {
   const container = document.getElementById('fileListContainer');
   if (!container) return;
@@ -4659,7 +4728,18 @@ function renderFileList() {
     html += '    <div class="file-icon-box ' + iconType + '">' + getModernSvgIcon(iconType) + '</div>';
     html += '    <span class="file-title" title="' + safeName + '">' + safeName + '</span>';
     html += '  </div>';
-    html += '  <div class="file-size-cell" style="text-align: right;">' + (isDir ? (file.size > 0 ? formatBytes(file.size) : '-') : formatBytes(file.size)) + '</div>';
+    let fSizeDisplay = '-';
+    if (isDir) {
+      let b = file.size || getCachedFolderSize(file.path) || 0;
+      if (b > 0) {
+        file.size = b;
+        fSizeDisplay = formatBytes(b);
+      }
+    } else {
+      fSizeDisplay = formatBytes(file.size);
+    }
+    const safeCellId = 'fsize-' + String(file.id || file.path).replace(/[^a-zA-Z0-9_-]/g, '_');
+    html += '  <div class="file-size-cell" style="text-align: right;" id="' + safeCellId + '">' + fSizeDisplay + '</div>';
     
     const _isGuestCardRow = !!cardTitle;
     if (!_isGuestCardRow) {
@@ -5952,47 +6032,76 @@ function openTelegramModal(files) {
       document.getElementById('tgTmdbQuery').value = parsed.cleanTitle;
     }
     
-    // Jika item pertama adalah folder, cari video sample di dalam folder & hitung total size folder
+    // Scan ukuran SEMUA folder yang dipilih secara paralel (multi-season & multi-codec)
     window._sampleVideoFile = null;
     window._folderTotalBytes = 0;
-    const isFirstFolder = first.mimeType === 'application/vnd.google-apps.folder' || (!first.name.includes('.') && !first.size);
-    if (isFirstFolder) {
+    const isFolderItem = (f) => f.mimeType === 'application/vnd.google-apps.folder' || (!f.name.includes('.') && (!f.size || f.size === 0));
+    const foldersToScan = tgSelectedFiles.filter(isFolderItem);
+
+    if (foldersToScan.length > 0) {
       (async () => {
         try {
-          const fetchUrl = '/api/list?' + (first.id ? ('id=' + encodeURIComponent(first.id)) : ('path=' + encodeURIComponent(first.path)));
-          const res = await fetch(fetchUrl);
-          if (res.ok) {
-            const data = await res.json();
-            const files = data.files || [];
-            let totalBytes = (data.folderStats && data.folderStats.fileSize) || 0;
-            if (!totalBytes && files.length > 0) {
-              totalBytes = files.reduce((acc, f) => acc + (f.size || 0), 0);
-            }
-            if (totalBytes > 0) {
-              first.size = totalBytes;
-              window._folderTotalBytes = totalBytes;
-              const fsz = totalBytes > 1073741824 ? (totalBytes / 1073741824).toFixed(2) + ' GB' : totalBytes > 1048576 ? (totalBytes / 1048576).toFixed(1) + ' MB' : (totalBytes / 1024).toFixed(0) + ' KB';
-              const sizeInput = document.getElementById('tgSpecSize');
-              if (sizeInput) sizeInput.value = fsz;
-
-              const fileContainer = document.getElementById('tgSelectedFilesList') || document.getElementById('tgSelectedFiles');
-              if (fileContainer && tgSelectedFiles.length === 1) {
-                fileContainer.innerHTML = '<div style="padding: 4px 0; font-family: monospace;">📁 ' + escapeHtml(first.name || first.path) + ' <span style="color: var(--accent); font-weight: 700;">' + fsz + '</span> (' + files.length + ' files)</div>';
+          await Promise.all(foldersToScan.map(async (folder) => {
+            try {
+              const fetchUrl = '/api/list?' + (folder.id ? ('id=' + encodeURIComponent(folder.id)) : ('path=' + encodeURIComponent(folder.path)));
+              const res = await fetch(fetchUrl);
+              if (res.ok) {
+                const data = await res.json();
+                const subFiles = data.files || [];
+                let totalBytes = (data.folderStats && data.folderStats.fileSize) || 0;
+                if (!totalBytes && subFiles.length > 0) {
+                  totalBytes = subFiles.reduce((acc, sf) => acc + (sf.size || 0), 0);
+                }
+                if (totalBytes > 0) {
+                  folder.size = totalBytes;
+                  cacheFolderSize(folder.path, totalBytes);
+                  const af = allFiles.find(item => item.path === folder.path || item.id === folder.id);
+                  if (af) af.size = totalBytes;
+                }
+                if (!window._sampleVideoFile) {
+                  const sampleVid = subFiles.find(sf => (sf.mimeType && sf.mimeType.startsWith('video/')) || /\.(mkv|mp4|webm|avi)$/i.test(sf.name));
+                  if (sampleVid) {
+                    window._sampleVideoFile = sampleVid;
+                    await extractSpecsAndMediaInfo(sampleVid);
+                  }
+                }
               }
-              previewTelegramCaption();
+            } catch(errFolder) {
+              console.warn('Gagal ambil data folder:', folder.name, errFolder);
             }
+          }));
 
-            const sampleVid = files.find(f => (f.mimeType && f.mimeType.startsWith('video/')) || /\.(mkv|mp4|webm|avi)$/i.test(f.name));
-            if (sampleVid) {
-              window._sampleVideoFile = sampleVid;
-              await extractSpecsAndMediaInfo(sampleVid);
-              return;
-            }
+          // Perbarui tampilan daftar file di modal dengan ukuran akurat
+          const fileContainer = document.getElementById('tgSelectedFilesList') || document.getElementById('tgSelectedFiles');
+          if (fileContainer) {
+            let fh = '';
+            tgSelectedFiles.forEach(f => {
+              const isDir = isFolderItem(f);
+              const sz = f.size > 1073741824 ? (f.size / 1073741824).toFixed(2) + ' GB' : f.size > 1048576 ? (f.size / 1048576).toFixed(1) + ' MB' : (f.size / 1024).toFixed(0) + ' KB';
+              const szDisplay = f.size > 0 ? sz : '-';
+              fh += '<div style="padding: 4px 0; border-bottom: 1px solid var(--border); font-family: monospace;">' + (isDir ? '📁 ' : '📄 ') + escapeHtml(f.name || f.path) + ' <span style="color: var(--accent); font-weight: 700;">' + szDisplay + '</span></div>';
+            });
+            fileContainer.innerHTML = fh;
+          }
+
+          if (tgSelectedFiles.length === 1 && tgSelectedFiles[0].size > 0) {
+            const firstSz = tgSelectedFiles[0].size;
+            window._folderTotalBytes = firstSz;
+            const fsz = firstSz > 1073741824 ? (firstSz / 1073741824).toFixed(2) + ' GB' : firstSz > 1048576 ? (firstSz / 1048576).toFixed(1) + ' MB' : (firstSz / 1024).toFixed(0) + ' KB';
+            const sizeInput = document.getElementById('tgSpecSize');
+            if (sizeInput) sizeInput.value = fsz;
+          }
+
+          // Perbarui caption preview dan versi tersedia dengan ukuran aktual setiap season & codec!
+          previewTelegramCaption();
+
+          if (!window._sampleVideoFile && first) {
+            extractSpecsAndMediaInfo(first);
           }
         } catch(e) {
-          console.warn('Gagal ambil sample video folder:', e);
+          console.warn('Gagal scan folders:', e);
+          if (first) extractSpecsAndMediaInfo(first);
         }
-        extractSpecsAndMediaInfo(first);
       })();
     } else {
       if (first && first.size > 0) {
@@ -7361,25 +7470,35 @@ function debounce(fn, delay) {
 
 async function handleSearch(e) {
   const q = (e.target.value || '').trim();
-  if (!q) {
-    loadFolder(currentPath, currentFolderId);
-    return;
-  }
   const _sm = getStorageMode();
+
   if (_sm === 'gdrive') {
-    // Local search within current folder only (no global leak)
+    // Mode GDrive: Search LOKAL saja di folder saat ini
+    if (!window._fullFolderFiles) {
+      window._fullFolderFiles = [...allFiles];
+    }
+    if (!q) {
+      allFiles = [...window._fullFolderFiles];
+      renderFileList();
+      return;
+    }
     const lowerQ = q.toLowerCase();
-    const filtered = allFiles.filter(function(f){ return f.name.toLowerCase().includes(lowerQ); });
+    const filtered = window._fullFolderFiles.filter(function(f){ 
+      return (f.name || '').toLowerCase().includes(lowerQ); 
+    });
     const container2 = document.getElementById('fileListContainer');
     if (filtered.length === 0 && container2) {
       container2.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--text-muted);"><p>Tidak ada hasil untuk "' + escapeHtml(q) + '" di folder ini.</p></div>';
       return;
     }
-    // Temporarily swap allFiles for render, then restore
-    const _origFiles = allFiles;
     allFiles = filtered;
     renderFileList();
-    allFiles = _origFiles;
+    return;
+  }
+
+  // Mode HF: Global Search
+  if (!q) {
+    loadFolder(currentPath, currentFolderId);
     return;
   }
   const container = document.getElementById('fileListContainer');
@@ -7388,12 +7507,25 @@ async function handleSearch(e) {
   }
   try {
     const searchUrl = '/api/search?q=' + encodeURIComponent(q);
+    const res = await fetch(searchUrl);
     if (res.ok) {
       const data = await res.json();
       allFiles = data.files || [];
+      if (allFiles.length === 0 && container) {
+        container.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--text-muted);"><p>Tidak ada hasil untuk "' + escapeHtml(q) + '".</p></div>';
+        return;
+      }
       renderFileList();
+    } else {
+      if (container) {
+        container.innerHTML = '<div style="text-align: center; padding: 40px; color: #f87171;"><p>Gagal mencari. Silakan coba lagi.</p></div>';
+      }
     }
-  } catch (err) {}
+  } catch (err) {
+    if (container) {
+      container.innerHTML = '<div style="text-align: center; padding: 40px; color: #f87171;"><p>Error: ' + escapeHtml(err.message) + '</p></div>';
+    }
+  }
 }
 
 // MediaInfo Engine for HaruDrive - Ported from HaruStream (4-Layer)
