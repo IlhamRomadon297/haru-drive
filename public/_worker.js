@@ -1130,7 +1130,7 @@ export default {
         const durSpec = (specs && specs.duration && specs.duration.trim()) || '';
         const subsSpec = (specs && specs.subs && specs.subs.trim()) || '';
         const audioSpec = (specs && specs.audio && specs.audio.trim()) || '';
-        const sz = (!isSeries && versions && versions.length === 1 && versions[0] && versions[0].size) ? versions[0].size : '';
+        const sz = (specs && specs.size && specs.size.trim()) || body.folder_size || (versions && versions.length === 1 && versions[0] && versions[0].size) || '';
 
         const specHeader = [videoSpec, durSpec, sz].filter(Boolean).join(' \u2022 ');
         
@@ -5903,6 +5903,7 @@ function openTelegramModal(files) {
   document.getElementById('tgReleaseDate').value = '';
   document.getElementById('tgCountry').value = '';
   document.getElementById('tgSpecDuration').value = '';
+  document.getElementById('tgSpecSize').value = '';
   document.getElementById('tgSpecVideo').value = '';
   document.getElementById('tgSpecAudio').value = '';
   document.getElementById('tgSpecSubs').value = '';
@@ -5942,8 +5943,9 @@ function openTelegramModal(files) {
       document.getElementById('tgTmdbQuery').value = parsed.cleanTitle;
     }
     
-    // Jika item pertama adalah folder, cari video sample di dalam folder untuk mediainfo & spesifikasi akurat
+    // Jika item pertama adalah folder, cari video sample di dalam folder & hitung total size folder
     window._sampleVideoFile = null;
+    window._folderTotalBytes = 0;
     const isFirstFolder = first.mimeType === 'application/vnd.google-apps.folder' || (!first.name.includes('.') && !first.size);
     if (isFirstFolder) {
       (async () => {
@@ -5952,7 +5954,26 @@ function openTelegramModal(files) {
           const res = await fetch(fetchUrl);
           if (res.ok) {
             const data = await res.json();
-            const sampleVid = (data.files || []).find(f => (f.mimeType && f.mimeType.startsWith('video/')) || /\.(mkv|mp4|webm|avi)$/i.test(f.name));
+            const files = data.files || [];
+            let totalBytes = (data.folderStats && data.folderStats.fileSize) || 0;
+            if (!totalBytes && files.length > 0) {
+              totalBytes = files.reduce((acc, f) => acc + (f.size || 0), 0);
+            }
+            if (totalBytes > 0) {
+              first.size = totalBytes;
+              window._folderTotalBytes = totalBytes;
+              const fsz = totalBytes > 1073741824 ? (totalBytes / 1073741824).toFixed(2) + ' GB' : totalBytes > 1048576 ? (totalBytes / 1048576).toFixed(1) + ' MB' : (totalBytes / 1024).toFixed(0) + ' KB';
+              const sizeInput = document.getElementById('tgSpecSize');
+              if (sizeInput) sizeInput.value = fsz;
+
+              const fileContainer = document.getElementById('tgSelectedFilesList') || document.getElementById('tgSelectedFiles');
+              if (fileContainer && tgSelectedFiles.length === 1) {
+                fileContainer.innerHTML = '<div style="padding: 4px 0; font-family: monospace;">📁 ' + escapeHtml(first.name || first.path) + ' <span style="color: var(--accent); font-weight: 700;">' + fsz + '</span> (' + files.length + ' files)</div>';
+              }
+              previewTelegramCaption();
+            }
+
+            const sampleVid = files.find(f => (f.mimeType && f.mimeType.startsWith('video/')) || /\.(mkv|mp4|webm|avi)$/i.test(f.name));
             if (sampleVid) {
               window._sampleVideoFile = sampleVid;
               await extractSpecsAndMediaInfo(sampleVid);
@@ -5965,6 +5986,11 @@ function openTelegramModal(files) {
         extractSpecsAndMediaInfo(first);
       })();
     } else {
+      if (first && first.size > 0) {
+        const fsz = first.size > 1073741824 ? (first.size / 1073741824).toFixed(2) + ' GB' : first.size > 1048576 ? (first.size / 1048576).toFixed(1) + ' MB' : (first.size / 1024).toFixed(0) + ' KB';
+        const sizeInput = document.getElementById('tgSpecSize');
+        if (sizeInput) sizeInput.value = fsz;
+      }
       extractSpecsAndMediaInfo(first);
     }
   }
@@ -6237,26 +6263,28 @@ function generateTGCaption() {
   }
 
   // 3. Block Specs (Kotak Quote ala Screenshot 4)
-  let sz = '';
-  if (!isSeries && first && first.size && (!tgSelectedFiles || tgSelectedFiles.length === 1)) {
-    sz = first.size > 1073741824 ? (first.size / 1073741824).toFixed(2) + ' GB' : first.size > 1048576 ? (first.size / 1048576).toFixed(1) + ' MB' : (first.size / 1024).toFixed(0) + ' KB';
-  } else if (isSeries && tgSelectedFiles && tgSelectedFiles.length > 0) {
-    // Untuk series single season, tampilkan total ukuran semua file di block spec
-    // Untuk multi-season, ukuran per season sudah ditampilkan di Pilihan Versi
-    const seasonNums = new Set();
-    tgSelectedFiles.forEach(f => {
-      const fn = f.name || f.path || '';
-      const m = fn.match(/(?:^|[^a-zA-Z0-9])(?:S|Season[ \t]*)([0-9]{1,2})(?:[^a-zA-Z0-9]|$)/i) || (f.path || '').match(/(?:^|[^a-zA-Z0-9])(?:S|Season[ \t]*)([0-9]{1,2})(?:[^a-zA-Z0-9]|$)/i);
-      seasonNums.add(m ? parseInt(m[1], 10) : 1);
-    });
-    if (seasonNums.size === 1) {
-      // Single season: tampilkan total ukuran di block spec
-      const totalBytes = tgSelectedFiles.reduce((acc, f) => acc + (f.size || 0), 0);
-      if (totalBytes > 0) {
-        sz = totalBytes > 1073741824 ? (totalBytes / 1073741824).toFixed(2) + ' GB' : totalBytes > 1048576 ? (totalBytes / 1048576).toFixed(1) + ' MB' : (totalBytes / 1024).toFixed(0) + ' KB';
+  const inputSize = (document.getElementById('tgSpecSize')?.value || '').trim();
+  let sz = inputSize;
+  if (!sz) {
+    if (first && first.size > 0 && (!tgSelectedFiles || tgSelectedFiles.length === 1)) {
+      sz = first.size > 1073741824 ? (first.size / 1073741824).toFixed(2) + ' GB' : first.size > 1048576 ? (first.size / 1048576).toFixed(1) + ' MB' : (first.size / 1024).toFixed(0) + ' KB';
+    } else if (window._folderTotalBytes > 0) {
+      const tb = window._folderTotalBytes;
+      sz = tb > 1073741824 ? (tb / 1073741824).toFixed(2) + ' GB' : tb > 1048576 ? (tb / 1048576).toFixed(1) + ' MB' : (tb / 1024).toFixed(0) + ' KB';
+    } else if (tgSelectedFiles && tgSelectedFiles.length > 0) {
+      const seasonNums = new Set();
+      tgSelectedFiles.forEach(f => {
+        const fn = f.name || f.path || '';
+        const m = fn.match(/(?:^|[^a-zA-Z0-9])(?:S|Season[ \t]*)([0-9]{1,2})(?:[^a-zA-Z0-9]|$)/i) || (f.path || '').match(/(?:^|[^a-zA-Z0-9])(?:S|Season[ \t]*)([0-9]{1,2})(?:[^a-zA-Z0-9]|$)/i);
+        seasonNums.add(m ? parseInt(m[1], 10) : 1);
+      });
+      if (seasonNums.size === 1) {
+        const totalBytes = tgSelectedFiles.reduce((acc, f) => acc + (f.size || 0), 0);
+        if (totalBytes > 0) {
+          sz = totalBytes > 1073741824 ? (totalBytes / 1073741824).toFixed(2) + ' GB' : totalBytes > 1048576 ? (totalBytes / 1048576).toFixed(1) + ' MB' : (totalBytes / 1024).toFixed(0) + ' KB';
+        }
       }
     }
-    // Multi-season: omit sz dari block spec, sudah per-season di Pilihan Versi
   }
   
   const specParts = [];
@@ -7059,8 +7087,10 @@ async function sendToTelegram() {
       video: document.getElementById('tgSpecVideo').value,
       duration: document.getElementById('tgSpecDuration').value,
       audio: document.getElementById('tgSpecAudio').value,
-      subs: document.getElementById('tgSpecSubs').value
+      subs: document.getElementById('tgSpecSubs').value,
+      size: (document.getElementById('tgSpecSize')?.value || '').trim() || (versions && versions[0] && versions[0].size) || ''
     },
+    folder_size: (document.getElementById('tgSpecSize')?.value || '').trim() || (versions && versions[0] && versions[0].size) || '',
     hashtags: hashtags,
     channel_id: channelId,
     topic_id: topicId
@@ -8476,19 +8506,23 @@ function adminConsoleUI() {
           <div class="tg-form-specs-grid">
             <div>
               <label style="font-size: 0.74rem; font-weight: 600; color: var(--text-muted);">Format Video & Audio Specs</label>
-              <input type="text" id="tgSpecVideo" class="form-input-pro" placeholder="1080p AV1 10-bit • AAC 2.0" style="margin-top: 4px; font-size: 0.78rem;">
+              <input type="text" id="tgSpecVideo" class="form-input-pro" placeholder="1080p AV1 10-bit • AAC 2.0" style="margin-top: 4px; font-size: 0.78rem;" oninput="previewTelegramCaption()">
             </div>
             <div>
               <label style="font-size: 0.74rem; font-weight: 600; color: var(--text-muted);">Durasi</label>
-              <input type="text" id="tgSpecDuration" class="form-input-pro" placeholder="1h 44m" style="margin-top: 4px; font-size: 0.78rem;">
+              <input type="text" id="tgSpecDuration" class="form-input-pro" placeholder="1h 44m" style="margin-top: 4px; font-size: 0.78rem;" oninput="previewTelegramCaption()">
+            </div>
+            <div>
+              <label style="font-size: 0.74rem; font-weight: 600; color: var(--text-muted);">Total Size / Ukuran</label>
+              <input type="text" id="tgSpecSize" class="form-input-pro" placeholder="e.g. 16.32 GB" style="margin-top: 4px; font-size: 0.78rem;" oninput="previewTelegramCaption()">
             </div>
             <div>
               <label style="font-size: 0.74rem; font-weight: 600; color: var(--text-muted);">Audio (Bahasa Saja)</label>
-              <input type="text" id="tgSpecAudio" class="form-input-pro" placeholder="Japanese" style="margin-top: 4px; font-size: 0.78rem;">
+              <input type="text" id="tgSpecAudio" class="form-input-pro" placeholder="Japanese" style="margin-top: 4px; font-size: 0.78rem;" oninput="previewTelegramCaption()">
             </div>
             <div>
               <label style="font-size: 0.74rem; font-weight: 600; color: var(--text-muted);">Subtitle (Bahasa Saja)</label>
-              <input type="text" id="tgSpecSubs" class="form-input-pro" placeholder="Indonesia, English, etc." style="margin-top: 4px; font-size: 0.78rem;">
+              <input type="text" id="tgSpecSubs" class="form-input-pro" placeholder="Indonesia, English, etc." style="margin-top: 4px; font-size: 0.78rem;" oninput="previewTelegramCaption()">
             </div>
           </div>
 
