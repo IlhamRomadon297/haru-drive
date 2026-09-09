@@ -1213,8 +1213,28 @@ export default {
           posterFinal = `${VERCEL_POSTER_URL}/api/poster?${bannerParams.toString()}`;
         }
 
-        // Inline Keyboard Buttons ala Screenshot 4: [ 📄 MediaInfo ] [ 📥 Download ]
+        // Inline Keyboard Buttons: Gunakan custom_buttons jika disediakan admin
         const keyboard = [];
+        const customBtns = body.custom_buttons;
+        if (customBtns && Array.isArray(customBtns) && customBtns.length > 0) {
+          const validBtns = customBtns.filter(b => b && b.text && b.url && b.url.trim());
+          if (validBtns.length > 0) {
+            const mediaBtn = validBtns.find(b => b.text.includes('MediaInfo'));
+            const otherBtns = validBtns.filter(b => !b.text.includes('MediaInfo'));
+            if (mediaBtn) {
+              keyboard.push([{ text: mediaBtn.text.trim(), url: mediaBtn.url.trim() }]);
+            }
+            for (let i = 0; i < otherBtns.length; i += 2) {
+              keyboard.push(otherBtns.slice(i, i + 2).map(b => ({
+                text: b.text.trim(),
+                url: b.url.trim()
+              })));
+            }
+          }
+        }
+
+        // Fallback jika tidak ada custom_buttons
+        if (keyboard.length === 0) {
         const topRow = [];
         if (mediainfo_url && mediainfo_url.trim()) {
           topRow.push({
@@ -1271,6 +1291,8 @@ export default {
             });
           }
         }
+
+        } // End fallback keyboard
 
         let lastMessageId = null;
         let sentCount = 0;
@@ -6093,6 +6115,7 @@ function openTelegramModal(files) {
           }
 
           // Perbarui caption preview dan versi tersedia dengan ukuran aktual setiap season & codec!
+          renderTGButtonsEditor(true);
           previewTelegramCaption();
 
           if (!window._sampleVideoFile && first) {
@@ -6114,6 +6137,8 @@ function openTelegramModal(files) {
   }
   setupTelegramLivePreview();
   updateTGPosterPreview();
+  window._tgCustomButtons = null;
+  renderTGButtonsEditor(true);
   previewTelegramCaption();
   const autoQ = document.getElementById('tgTmdbQuery').value.trim();
   if (autoQ && autoQ.length >= 2) {
@@ -6973,6 +6998,177 @@ function editCaptionFromVisualPreview() {
   }
 }
 
+
+// CUSTOM INLINE BUTTONS EDITOR
+window._tgCustomButtons = null;
+
+function generateDefaultTGButtons() {
+  const origin = window.location.origin;
+  const buttons = [];
+  const miUrl = (document.getElementById('tgMediaInfoUrl')?.value || '').trim();
+  if (miUrl) {
+    buttons.push({ text: '📄 MediaInfo', url: miUrl });
+  }
+
+  const cat = (document.getElementById('tgCategory')?.value || 'movies').toLowerCase();
+  const isSeries = cat === 'series' || cat === 'anime';
+  const selFiles = (typeof tgSelectedFiles !== 'undefined' && tgSelectedFiles.length > 0) ? tgSelectedFiles : (window._tgSelectedFiles || []);
+
+  if (isSeries) {
+    const seasonMap = new Map();
+    selFiles.forEach(f => {
+      const fn = f.name || f.path || '';
+      const m = fn.match(/(?:^|[^a-zA-Z0-9])(?:S|Season[ \t]*)([0-9]{1,2})(?:[^a-zA-Z0-9]|$)/i) || (f.path || '').match(/(?:^|[^a-zA-Z0-9])(?:S|Season[ \t]*)([0-9]{1,2})(?:[^a-zA-Z0-9]|$)/i);
+      const sNum = m ? parseInt(m[1], 10) : 1;
+      const sKey = 'Season ' + sNum;
+      if (!seasonMap.has(sKey)) seasonMap.set(sKey, []);
+      seasonMap.get(sKey).push(f);
+    });
+
+    const sortedSeasons = Array.from(seasonMap.keys()).sort((a, b) => {
+      const na = parseInt(a.replace(/\D/g, '')) || 0;
+      const nb = parseInt(b.replace(/\D/g, '')) || 0;
+      return na - nb;
+    });
+
+    sortedSeasons.forEach(sName => {
+      const sFiles = seasonMap.get(sName);
+      const versionGroups = new Map();
+      sFiles.forEach(f => {
+        const isFolder = f.mimeType === 'application/vnd.google-apps.folder' || (!f.name.endsWith('.mkv') && !f.name.endsWith('.mp4') && !f.name.endsWith('.avi') && !f.name.endsWith('.webm'));
+        const q = detectQuality(f.name || f.path || '');
+        const hdr = detectHDR(f.name || f.path || '');
+        const p = parseFileName(f.name || f.path || '');
+        const c = formatCodec(p.codec || 'HEVC');
+        const vKey = isFolder ? (f.id || f.path || f.name) : ([q, hdr, c].filter(Boolean).join('_') || f.name);
+        if (!versionGroups.has(vKey)) versionGroups.set(vKey, []);
+        versionGroups.get(vKey).push(f);
+      });
+
+      const isMultiInSeason = versionGroups.size > 1;
+
+      versionGroups.forEach(vFiles => {
+        const f0 = vFiles[0];
+        const isFolder = f0.mimeType === 'application/vnd.google-apps.folder' || (!f0.name.endsWith('.mkv') && !f0.name.endsWith('.mp4') && !f0.name.endsWith('.avi') && !f0.name.endsWith('.webm'));
+        const q = detectQuality(f0.name || f0.path || '');
+        const hdr = detectHDR(f0.name || f0.path || '');
+        const p = parseFileName(f0.name || f0.path || '');
+        const c = formatCodec(p.codec || 'HEVC');
+
+        let directLink = origin;
+        if (isFolder) {
+          directLink = f0.id ? (origin + '/folder/' + f0.id) : (f0.path ? (origin + '/?p=' + encodeURIComponent(f0.path)) : origin);
+        } else {
+          directLink = f0.id ? (origin + '/d/' + f0.id) : (origin + '/file/' + encodeURIComponent(f0.path));
+        }
+
+        let btnLabel = sName;
+        const diffParts = [];
+        if (q) diffParts.push(q);
+        if (hdr) diffParts.push(hdr);
+        if (c) diffParts.push(c);
+        const diffTag = diffParts.join(' ');
+        if (diffTag) {
+          btnLabel = sName + ' (' + diffTag + ')';
+        }
+
+        buttons.push({
+          text: '📁 ' + btnLabel,
+          url: directLink
+        });
+      });
+    });
+  } else if (selFiles && selFiles.length > 1) {
+    selFiles.forEach(f => {
+      const fn = f.name || f.path || '';
+      const parsed = parseFileName(fn);
+      const q = detectQuality(fn);
+      const c = formatCodec(parsed.codec || 'AV1');
+      const btnLabel = (q + ' ' + c).trim();
+      const dlLink = f.id ? (origin + '/d/' + f.id) : (origin + '/file/' + encodeURIComponent(f.path));
+      buttons.push({
+        text: '📥 Download ' + btnLabel,
+        url: dlLink
+      });
+    });
+  } else {
+    const f0 = selFiles[0];
+    const isFolder = f0 && (f0.mimeType === 'application/vnd.google-apps.folder' || (!f0.name.endsWith('.mkv') && !f0.name.endsWith('.mp4') && !f0.name.endsWith('.avi') && !f0.name.endsWith('.webm')));
+    let dlLink = origin;
+    if (f0) {
+      if (isFolder) {
+        dlLink = f0.id ? (origin + '/folder/' + f0.id) : (f0.path ? (origin + '/?p=' + encodeURIComponent(f0.path)) : origin);
+      } else {
+        dlLink = f0.id ? (origin + '/d/' + f0.id) : (origin + '/file/' + encodeURIComponent(f0.path));
+      }
+    }
+    buttons.push({
+      text: isFolder ? '📁 Buka Folder' : '📥 Download',
+      url: dlLink
+    });
+  }
+
+  return buttons;
+}
+
+function renderTGButtonsEditor(forceReset = false) {
+  if (forceReset || !window._tgCustomButtons) {
+    window._tgCustomButtons = generateDefaultTGButtons();
+  }
+  const container = document.getElementById('tgButtonsContainer');
+  if (!container) return;
+
+  if (window._tgCustomButtons.length === 0) {
+    container.innerHTML = '<div style="color: var(--text-dim); font-size: 0.74rem; text-align: center; padding: 8px;">Belum ada tombol. Klik "Tambah Tombol" untuk menambahkan.</div>';
+    return;
+  }
+
+  let html = '';
+  window._tgCustomButtons.forEach((btn, idx) => {
+    html += '<div class="tg-btn-editor-row" style="display: flex; gap: 6px; align-items: center; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 6px 8px;">';
+    html += '  <div style="flex: 2; min-width: 140px;">';
+    html += '    <input type="text" class="form-input-pro" value="' + escapeHtml(btn.text) + '" placeholder="Nama Tombol" style="font-size: 0.76rem; padding: 4px 8px;" oninput="updateCustomTGButton(' + idx + ', \'text\', this.value)">';
+    html += '  </div>';
+    html += '  <div style="flex: 3; min-width: 180px;">';
+    html += '    <input type="text" class="form-input-pro" value="' + escapeHtml(btn.url) + '" placeholder="URL Link (https://...)" style="font-size: 0.76rem; padding: 4px 8px;" oninput="updateCustomTGButton(' + idx + ', \'url\', this.value)">';
+    html += '  </div>';
+    html += '  <button type="button" class="btn-act" onclick="deleteCustomTGButton(' + idx + ')" title="Hapus tombol ini" style="color: #ef4444; padding: 4px 6px; background: transparent; border: none; cursor: pointer;">';
+    html += '    <svg class="icon icon-sm" viewBox="0 0 24 24" style="width: 15px; height: 15px; stroke: #ef4444;"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>';
+    html += '  </button>';
+    html += '</div>';
+  });
+
+  container.innerHTML = html;
+}
+
+function updateCustomTGButton(idx, field, val) {
+  if (window._tgCustomButtons && window._tgCustomButtons[idx]) {
+    window._tgCustomButtons[idx][field] = val;
+  }
+}
+
+function addCustomTGButton() {
+  if (!window._tgCustomButtons) {
+    window._tgCustomButtons = generateDefaultTGButtons();
+  }
+  window._tgCustomButtons.push({ text: '📁 Tombol Baru', url: window.location.origin });
+  renderTGButtonsEditor();
+}
+
+function deleteCustomTGButton(idx) {
+  if (window._tgCustomButtons && window._tgCustomButtons[idx]) {
+    window._tgCustomButtons.splice(idx, 1);
+    renderTGButtonsEditor();
+  }
+}
+
+function getTGButtonsValue() {
+  if (window._tgCustomButtons && Array.isArray(window._tgCustomButtons)) {
+    return window._tgCustomButtons.filter(b => b && b.text && b.url && b.url.trim());
+  }
+  return generateDefaultTGButtons();
+}
+
 // INTERACTIVE VISUAL PREVIEW MODAL
 function openTelegramVisualPreview() {
   const modal = document.getElementById('tgVisualPreviewModal');
@@ -7023,106 +7219,30 @@ function openTelegramVisualPreview() {
     }
   }
 
-  // Render Inline Buttons Preview ala Screenshot 4: [ 📄 MediaInfo ↗️ ] [ 📥 Download ↗️ ]
+  // Render Inline Buttons Preview dari Custom Buttons Editor
   const btnContainer = document.getElementById('tgVisualButtons');
   if (btnContainer) {
-    const mediaInfoUrl = (document.getElementById('tgMediaInfoUrl')?.value || '').trim();
-    let bh = '';
-    const selFiles = (typeof tgSelectedFiles !== 'undefined' && tgSelectedFiles.length > 0) ? tgSelectedFiles : (window._tgSelectedFiles || []);
-    const cat = (document.getElementById('tgCategory')?.value || 'movies').toLowerCase();
-    const isSeries = cat === 'series' || cat === 'anime';
+    const activeBtns = getTGButtonsValue();
+    if (activeBtns.length === 0) {
+      btnContainer.innerHTML = '';
+    } else {
+      let bh = '';
+      const mediaBtn = activeBtns.find(b => b.text.includes('MediaInfo'));
+      const otherBtns = activeBtns.filter(b => !b.text.includes('MediaInfo'));
 
-    if (isSeries) {
-      const seasonMap = new Map();
-      selFiles.forEach(f => {
-        const fn = f.name || f.path || '';
-        const m = fn.match(/(?:^|[^a-zA-Z0-9])(?:S|Season[ \t]*)([0-9]{1,2})(?:[^a-zA-Z0-9]|$)/i) || (f.path || '').match(/(?:^|[^a-zA-Z0-9])(?:S|Season[ \t]*)([0-9]{1,2})(?:[^a-zA-Z0-9]|$)/i);
-        const sNum = m ? parseInt(m[1], 10) : 1;
-        const sKey = 'Season ' + sNum;
-        if (!seasonMap.has(sKey)) seasonMap.set(sKey, []);
-        seasonMap.get(sKey).push(f);
-      });
+      if (mediaBtn) {
+        bh += '<div style="background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); padding: 8px 12px; border-radius: 8px; font-size: 0.8rem; color: #ffffff; text-align: center; font-weight: 600; cursor: pointer;" title="' + escapeHtml(mediaBtn.url) + '">' + escapeHtml(mediaBtn.text) + ' ↗️</div>';
+      }
 
-      const sortedSeasons = Array.from(seasonMap.keys()).sort((a, b) => {
-        const na = parseInt(a.replace(/\D/g, '')) || 0;
-        const nb = parseInt(b.replace(/\D/g, '')) || 0;
-        return na - nb;
-      });
-
-      const allButtons = [];
-      sortedSeasons.forEach(sName => {
-        const sFiles = seasonMap.get(sName);
-        const versionGroups = new Map();
-        sFiles.forEach(f => {
-          const isFolder = f.mimeType === 'application/vnd.google-apps.folder' || (!f.name.endsWith('.mkv') && !f.name.endsWith('.mp4') && !f.name.endsWith('.avi') && !f.name.endsWith('.webm'));
-          const q = detectQuality(f.name || f.path || '');
-          const hdr = detectHDR(f.name || f.path || '');
-          const p = parseFileName(f.name || f.path || '');
-          const c = formatCodec(p.codec || 'HEVC');
-          const vKey = isFolder ? (f.id || f.path || f.name) : ([q, hdr, c].filter(Boolean).join('_') || f.name);
-          if (!versionGroups.has(vKey)) versionGroups.set(vKey, []);
-          versionGroups.get(vKey).push(f);
-        });
-
-        const isMultiInSeason = versionGroups.size > 1;
-
-        versionGroups.forEach(vFiles => {
-          const f0 = vFiles[0];
-          const q = detectQuality(f0.name || f0.path || '');
-          const hdr = detectHDR(f0.name || f0.path || '');
-          const p = parseFileName(f0.name || f0.path || '');
-          const c = formatCodec(p.codec || 'HEVC');
-          let btnLabel = sName;
-          if (isMultiInSeason) {
-            const diffTag = [q, hdr].filter(Boolean).join(' ') || c;
-            btnLabel = sName + ' (' + diffTag + ')';
-          }
-          allButtons.push(btnLabel);
-        });
-      });
-
-      if (allButtons.length > 1) {
-        bh += '<div style="display: flex; flex-direction: column; gap: 8px;">';
-        if (mediaInfoUrl) {
-          bh += '<div style="background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); padding: 8px 12px; border-radius: 8px; font-size: 0.8rem; color: #ffffff; text-align: center; font-weight: 600;">📄 MediaInfo ↗️</div>';
-        }
+      if (otherBtns.length > 0) {
         bh += '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px;">';
-        allButtons.forEach(btnName => {
-          bh += '<div style="background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.4); padding: 8px 12px; border-radius: 8px; font-size: 0.8rem; color: #38bdf8; text-align: center; font-weight: 600;">📁 ' + escapeHtml(btnName) + ' ↗️</div>';
+        otherBtns.forEach(btn => {
+          bh += '<div style="background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.4); padding: 8px 12px; border-radius: 8px; font-size: 0.8rem; color: #38bdf8; text-align: center; font-weight: 600; cursor: pointer;" title="' + escapeHtml(btn.url) + '">' + escapeHtml(btn.text) + ' ↗️</div>';
         });
-        bh += '</div></div>';
-      } else {
-        bh += '<div style="display: flex; gap: 8px; flex-wrap: wrap;">';
-        if (mediaInfoUrl) {
-          bh += '<div style="flex: 1; min-width: 120px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); padding: 8px 12px; border-radius: 8px; font-size: 0.8rem; color: #ffffff; text-align: center; font-weight: 600;">📄 MediaInfo ↗️</div>';
-        }
-        const bText = allButtons[0] ? ('📁 ' + escapeHtml(allButtons[0]) + ' ↗️') : '📁 Buka Folder ↗️';
-        bh += '<div style="flex: 1; min-width: 120px; background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.4); padding: 8px 12px; border-radius: 8px; font-size: 0.8rem; color: #38bdf8; text-align: center; font-weight: 600;">' + bText + '</div>';
         bh += '</div>';
       }
-    } else if (selFiles && selFiles.length > 1) {
-      bh += '<div style="display: flex; flex-direction: column; gap: 8px;">';
-      if (mediaInfoUrl) {
-        bh += '<div style="background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); padding: 8px 12px; border-radius: 8px; font-size: 0.8rem; color: #ffffff; text-align: center; font-weight: 600;">📄 MediaInfo ↗️</div>';
-      }
-      selFiles.forEach(f => {
-        const fn = f.name || f.path || '';
-        const parsed = parseFileName(fn);
-        const q = detectQuality(fn);
-        const c = formatCodec(parsed.codec || 'AV1');
-        const btnLabel = (q + ' ' + c).trim();
-        bh += '<div style="background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.4); padding: 8px 12px; border-radius: 8px; font-size: 0.8rem; color: #38bdf8; text-align: center; font-weight: 600;">📥 Download ' + escapeHtml(btnLabel) + ' ↗️</div>';
-      });
-      bh += '</div>';
-    } else {
-      bh += '<div style="display: flex; gap: 8px; flex-wrap: wrap;">';
-      if (mediaInfoUrl) {
-        bh += '<div style="flex: 1; min-width: 120px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); padding: 8px 12px; border-radius: 8px; font-size: 0.8rem; color: #ffffff; text-align: center; font-weight: 600;">📄 MediaInfo ↗️</div>';
-      }
-      bh += '<div style="flex: 1; min-width: 120px; background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.4); padding: 8px 12px; border-radius: 8px; font-size: 0.8rem; color: #38bdf8; text-align: center; font-weight: 600;">📥 Download ↗️</div>';
-      bh += '</div>';
+      btnContainer.innerHTML = bh;
     }
-    btnContainer.innerHTML = bh;
   }
 
   modal.style.display = 'flex';
@@ -7308,6 +7428,7 @@ async function sendToTelegram() {
     },
     folder_size: (document.getElementById('tgSpecSize')?.value || '').trim() || (versions && versions[0] && versions[0].size) || '',
     custom_caption: getTGCaptionValue(),
+    custom_buttons: getTGButtonsValue(),
     hashtags: hashtags,
     channel_id: channelId,
     topic_id: topicId
@@ -8894,6 +9015,23 @@ function adminConsoleUI() {
         <div style="margin-bottom: 14px;">
           <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">PIN Admin</label>
           <input type="text" id="tgAdminPin" class="form-input-pro" placeholder="••••••" autocomplete="new-password" style="margin-top: 4px; -webkit-text-security: disc; text-security: disc;">
+        </div>
+
+        <!-- Inline Buttons Editor -->
+        <div style="margin-bottom: 14px; background: rgba(0,0,0,0.2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; flex-wrap: wrap; gap: 6px;">
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <label style="font-size: 0.78rem; font-weight: 600; color: #38bdf8;">Inline Buttons Telegram</label>
+              <span style="font-size: 0.68rem; color: var(--text-dim);">(Bisa Diedit Nama & Link)</span>
+            </div>
+            <div style="display: flex; gap: 6px;">
+              <button type="button" class="nav-btn" onclick="addCustomTGButton()" style="font-size: 0.72rem; padding: 3px 8px; height: auto; background: rgba(56, 189, 248, 0.15); border-color: rgba(56, 189, 248, 0.35); color: #38bdf8;">➕ Tambah Tombol</button>
+              <button type="button" class="nav-btn" onclick="renderTGButtonsEditor(true)" title="Reset ke tombol bawaan dari pilihan file & mediainfo" style="font-size: 0.72rem; padding: 3px 8px; height: auto;">🔄 Reset Tombol</button>
+            </div>
+          </div>
+          <div id="tgButtonsContainer" style="display: flex; flex-direction: column; gap: 8px;">
+            <!-- Rendered by renderTGButtonsEditor() -->
+          </div>
         </div>
 
         <!-- Caption Preview & Manual Edit Box -->
