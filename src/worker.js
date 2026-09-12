@@ -7636,7 +7636,7 @@ function playVideo(fileId, fileName) {
   });
 
   if (extContainer) {
-    const rawNoProto = videoUrl.replace(/^https?:\/\//i, '');
+    const rawNoProto = videoUrl.includes('://') ? videoUrl.split('://')[1] : videoUrl;
     const isHttps = videoUrl.startsWith('https');
     const ua = (navigator.userAgent || '').toLowerCase();
     const isAndroid = ua.includes('android');
@@ -7670,12 +7670,17 @@ function playVideo(fileId, fileName) {
     }
 
     // Salin Link Stream
-    eHtml += '<button type="button" onclick="copyStreamDirectLink(' + JSON.stringify(videoUrl).replace(/"/g, '&quot;') + ')" class="btn-ext-player" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; border-color: rgba(56, 189, 248, 0.35); cursor: pointer;"><svg class="icon icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg><span>Salin Link</span></button>';
+    eHtml += '<button type="button" id="btnCopyStreamDirect" class="btn-ext-player" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; border-color: rgba(56, 189, 248, 0.35); cursor: pointer;"><svg class="icon icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg><span>Salin Link</span></button>';
 
     // Download File button
     eHtml += '<a href="' + videoUrl + '" target="_blank" download class="btn-ext-player" style="background: rgba(16, 185, 129, 0.15); color: #10b981; border-color: rgba(16, 185, 129, 0.3); margin-left:auto;"><svg class="icon icon-xs" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg><span>Download File</span></a>';
 
     extContainer.innerHTML = eHtml;
+
+    const copyBtn = document.getElementById('btnCopyStreamDirect');
+    if (copyBtn) {
+      copyBtn.onclick = function() { copyStreamDirectLink(videoUrl); };
+    }
   }
 
   modal.style.display = 'flex';
