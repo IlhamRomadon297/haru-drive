@@ -5498,7 +5498,11 @@ function detectCleanLanguage(str) {
 }
 
 function cleanSubtitleLanguages(subs) {
-  if (!subs) return 'Indonesian & English';
+  if (subs === undefined || subs === null) return '-';
+  const strTrim = String(subs).trim();
+  if (!strTrim || /^[-–—]+$/.test(strTrim) || /^(none|tidak ada|no sub)$/i.test(strTrim)) {
+    return '-';
+  }
   let rawItems = [];
   if (Array.isArray(subs)) {
     rawItems = subs;
@@ -5512,7 +5516,7 @@ function cleanSubtitleLanguages(subs) {
   rawItems.forEach(item => {
     if (!item) return;
     const str = String(item).trim();
-    if (!str) return;
+    if (!str || /^[-–—]+$/.test(str)) return;
     const detected = detectCleanLanguage(str);
     if (detected) {
       if (!cleanList.includes(detected)) cleanList.push(detected);
@@ -5526,7 +5530,10 @@ function cleanSubtitleLanguages(subs) {
     }
   });
 
-  if (cleanList.length === 0) return 'Indonesian & English';
+  if (cleanList.length === 0) {
+    if (/^[-–—]+$/.test(strTrim) || /^(none|tidak ada|no sub)$/i.test(strTrim)) return '-';
+    return strTrim || '-';
+  }
 
   const priority = ['Indonesian', 'English', 'Japanese', 'Malay', 'Korean'];
   const matchedPrio = priority.filter(p => cleanList.includes(p));
@@ -5546,13 +5553,17 @@ function cleanSubtitleLanguages(subs) {
 }
 
 function cleanAudioLanguages(rawList) {
-  if (!rawList) return 'Indonesian';
+  if (rawList === undefined || rawList === null) return 'Indonesian';
+  const strTrim = String(rawList).trim();
+  if (!strTrim || /^[-–—]+$/.test(strTrim) || /^(none|tidak ada)$/i.test(strTrim)) {
+    return '-';
+  }
   let arr = Array.isArray(rawList) ? rawList : String(rawList).split(/[,/&]/);
 
   const cleanList = [];
   arr.forEach(s => {
     let cleanStr = String(s).trim();
-    if (!cleanStr) return;
+    if (!cleanStr || /^[-–—]+$/.test(cleanStr)) return;
     cleanStr = cleanStr.replace(/\s*(AAC.*|DDP.*|DTS.*|FLAC.*|AC3.*|Atmos.*|5\.1|2\.0|7\.1)/gi, '').trim();
     const detected = detectCleanLanguage(cleanStr);
     if (detected) {
@@ -5567,7 +5578,10 @@ function cleanAudioLanguages(rawList) {
     }
   });
 
-  if (cleanList.length === 0) return 'Indonesian';
+  if (cleanList.length === 0) {
+    if (/^[-–—]+$/.test(strTrim) || /^(none|tidak ada)$/i.test(strTrim)) return '-';
+    return strTrim || 'Indonesian';
+  }
 
   const priority = ['Indonesian', 'English', 'Japanese', 'Korean', 'Malay'];
   const hasIndonesian = cleanList.includes('Indonesian');
@@ -5679,8 +5693,10 @@ function getTGBannerUrl() {
   const videoSpec = (document.getElementById('tgSpecVideo')?.value || '').trim();
   const quality = formatQuality(videoSpec ? videoSpec.split(' ')[0] : '1080p');
   const genres = (document.getElementById('tgGenres')?.value || '').trim() || '-';
-  const audio = cleanAudioLanguage((document.getElementById('tgSpecAudio')?.value || '').trim());
-  const subs = cleanSubtitleLanguages((document.getElementById('tgSpecSubs')?.value || '').trim());
+  const rawAudio = (document.getElementById('tgSpecAudio')?.value || '').trim();
+  const audio = (!rawAudio || /^[-–—]+$/.test(rawAudio)) ? '-' : cleanAudioLanguage(rawAudio);
+  const rawSubs = (document.getElementById('tgSpecSubs')?.value || '').trim();
+  const subs = (!rawSubs || /^[-–—]+$/.test(rawSubs)) ? '-' : cleanSubtitleLanguages(rawSubs);
 
   const p = new URLSearchParams();
   p.set('poster_url', posterUrl || 'https://via.placeholder.com/500x750/141414/0ea5e9?text=No+Poster');
@@ -6540,7 +6556,7 @@ function generateTGCaption() {
   const fileName = (first ? (first.name || first.path) : '').trim();
   const videoSpec = (document.getElementById('tgSpecVideo')?.value || '1080p AV1 10-bit').trim();
   const duration = (document.getElementById('tgSpecDuration')?.value || '').trim();
-  const subsSpec = (document.getElementById('tgSpecSubs')?.value || 'Indonesian, English').trim();
+  const subsSpec = (document.getElementById('tgSpecSubs')?.value || '').trim();
   const audioSpec = (document.getElementById('tgSpecAudio')?.value || '').trim();
   const hashtagsRaw = (document.getElementById('tgHashtags')?.value || '').trim();
   const synopsis = (document.getElementById('tgSynopsis')?.value || '').trim();
@@ -9178,7 +9194,7 @@ function adminConsoleUI() {
           <div class="tg-form-specs-grid">
             <div>
               <label style="font-size: 0.74rem; font-weight: 600; color: var(--text-muted);">Format Video & Audio Specs</label>
-              <input type="text" id="tgSpecVideo" class="form-input-pro" placeholder="1080p AV1 10-bit • AAC 2.0" style="margin-top: 4px; font-size: 0.78rem;" oninput="previewTelegramCaption()">
+              <input type="text" id="tgSpecVideo" class="form-input-pro" placeholder="1080p AV1 10-bit • AAC 2.0" style="margin-top: 4px; font-size: 0.78rem;" oninput="updateTGPosterPreview(); previewTelegramCaption();">
             </div>
             <div>
               <label style="font-size: 0.74rem; font-weight: 600; color: var(--text-muted);">Durasi</label>
@@ -9190,11 +9206,11 @@ function adminConsoleUI() {
             </div>
             <div>
               <label style="font-size: 0.74rem; font-weight: 600; color: var(--text-muted);">Audio (Bahasa Saja)</label>
-              <input type="text" id="tgSpecAudio" class="form-input-pro" placeholder="Japanese" style="margin-top: 4px; font-size: 0.78rem;" oninput="previewTelegramCaption()">
+              <input type="text" id="tgSpecAudio" class="form-input-pro" placeholder="Japanese" style="margin-top: 4px; font-size: 0.78rem;" oninput="updateTGPosterPreview(); previewTelegramCaption();">
             </div>
             <div>
               <label style="font-size: 0.74rem; font-weight: 600; color: var(--text-muted);">Subtitle (Bahasa Saja)</label>
-              <input type="text" id="tgSpecSubs" class="form-input-pro" placeholder="Indonesia, English, etc." style="margin-top: 4px; font-size: 0.78rem;" oninput="previewTelegramCaption()">
+              <input type="text" id="tgSpecSubs" class="form-input-pro" placeholder="Indonesia, English, etc." style="margin-top: 4px; font-size: 0.78rem;" oninput="updateTGPosterPreview(); previewTelegramCaption();">
             </div>
           </div>
 
