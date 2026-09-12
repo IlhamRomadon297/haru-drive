@@ -1254,17 +1254,19 @@ export default {
         if (customBtns && Array.isArray(customBtns) && customBtns.length > 0) {
           const validBtns = customBtns.filter(b => b && b.text && b.url && b.url.trim());
           if (validBtns.length > 0) {
-            const mediaBtn = validBtns.find(b => b.text.includes('MediaInfo'));
-            const otherBtns = validBtns.filter(b => !b.text.includes('MediaInfo'));
-            if (mediaBtn) {
-              keyboard.push([{ text: mediaBtn.text.trim(), url: mediaBtn.url.trim() }]);
-            }
-            for (let i = 0; i < otherBtns.length; i += 2) {
-              keyboard.push(otherBtns.slice(i, i + 2).map(b => ({
-                text: b.text.trim(),
-                url: b.url.trim()
-              })));
-            }
+            let currentRow = [];
+            validBtns.forEach(b => {
+              let safeUrl = b.url.trim();
+              try { safeUrl = encodeURI(safeUrl); } catch(e){}
+              const btnObj = { text: b.text.trim(), url: safeUrl };
+              if (b.same_row && currentRow.length > 0 && currentRow.length < 3) {
+                currentRow.push(btnObj);
+              } else {
+                if (currentRow.length > 0) keyboard.push(currentRow);
+                currentRow = [btnObj];
+              }
+            });
+            if (currentRow.length > 0) keyboard.push(currentRow);
           }
         }
 
@@ -2929,6 +2931,25 @@ function htmlPage(content, env, pageMode = 'public') {
         padding: 10px 12px !important;
         flex-wrap: wrap !important;
         gap: 8px !important;
+      }
+      .tg-btn-editor-card {
+        width: 100% !important;
+        box-sizing: border-box !important;
+        padding: 8px !important;
+        overflow: hidden !important;
+      }
+      .tg-btn-row-header {
+        width: 100% !important;
+        box-sizing: border-box !important;
+      }
+      .tg-btn-row-url {
+        width: 100% !important;
+        box-sizing: border-box !important;
+      }
+      .tg-btn-row-url input {
+        width: 100% !important;
+        box-sizing: border-box !important;
+        max-width: 100% !important;
       }
       .form-input-pro {
         font-size: 14px !important;
@@ -6879,6 +6900,7 @@ async function createTelegraphMediaInfo() {
     const data = await res.json();
     if (res.ok && data.success && data.url) {
       if (urlInput) urlInput.value = data.url;
+      syncMediaInfoToCustomButtons(data.url);
       previewTelegramCaption();
       if (btn) btn.textContent = '✓ Berhasil dibuat!';
       setTimeout(function(){ if (btn) { btn.disabled = false; btn.textContent = '⚡ Buat ke Telegra.ph'; } }, 2000);
@@ -7140,13 +7162,32 @@ function editCaptionFromVisualPreview() {
 // CUSTOM INLINE BUTTONS EDITOR
 window._tgCustomButtons = null;
 
+function syncMediaInfoToCustomButtons(url) {
+  const cleanUrl = (url !== undefined ? url : (document.getElementById('tgMediaInfoUrl')?.value || '')).trim();
+  if (!window._tgCustomButtons) {
+    window._tgCustomButtons = generateDefaultTGButtons();
+  }
+  const existingIdx = window._tgCustomButtons.findIndex(b => 
+    /mediainfo/i.test(b.text) || (b.url && b.url.includes('telegra.ph'))
+  );
+  if (cleanUrl) {
+    if (existingIdx !== -1) {
+      window._tgCustomButtons[existingIdx].url = cleanUrl;
+    } else {
+      window._tgCustomButtons.push({ text: '📄 MediaInfo', url: cleanUrl, same_row: false });
+    }
+  } else {
+    if (existingIdx !== -1 && /mediainfo/i.test(window._tgCustomButtons[existingIdx].text)) {
+      window._tgCustomButtons.splice(existingIdx, 1);
+    }
+  }
+  renderTGButtonsEditor();
+  if (typeof previewTelegramCaption === 'function') previewTelegramCaption();
+}
+
 function generateDefaultTGButtons() {
   const origin = window.location.origin;
   const buttons = [];
-  const miUrl = (document.getElementById('tgMediaInfoUrl')?.value || '').trim();
-  if (miUrl) {
-    buttons.push({ text: '📄 MediaInfo', url: miUrl });
-  }
 
   const cat = (document.getElementById('tgCategory')?.value || 'movies').toLowerCase();
   const isSeries = cat === 'series' || cat === 'anime';
@@ -7183,8 +7224,6 @@ function generateDefaultTGButtons() {
         versionGroups.get(vKey).push(f);
       });
 
-      const isMultiInSeason = versionGroups.size > 1;
-
       versionGroups.forEach(vFiles => {
         const f0 = vFiles[0];
         const isFolder = f0.mimeType === 'application/vnd.google-apps.folder' || (!f0.name.endsWith('.mkv') && !f0.name.endsWith('.mp4') && !f0.name.endsWith('.avi') && !f0.name.endsWith('.webm'));
@@ -7212,7 +7251,8 @@ function generateDefaultTGButtons() {
 
         buttons.push({
           text: '📁 ' + btnLabel,
-          url: directLink
+          url: directLink,
+          same_row: false
         });
       });
     });
@@ -7226,7 +7266,8 @@ function generateDefaultTGButtons() {
       const dlLink = f.id ? (origin + '/d/' + f.id) : (origin + '/file/' + encodeURIComponent(f.path));
       buttons.push({
         text: '📥 Download ' + btnLabel,
-        url: dlLink
+        url: dlLink,
+        same_row: false
       });
     });
   } else {
@@ -7242,8 +7283,14 @@ function generateDefaultTGButtons() {
     }
     buttons.push({
       text: isFolder ? '📁 Buka Folder' : '📥 Download',
-      url: dlLink
+      url: dlLink,
+      same_row: false
     });
+  }
+
+  const miUrl = (document.getElementById('tgMediaInfoUrl')?.value || '').trim();
+  if (miUrl) {
+    buttons.push({ text: '📄 MediaInfo', url: miUrl, same_row: false });
   }
 
   return buttons;
@@ -7257,22 +7304,49 @@ function renderTGButtonsEditor(forceReset = false) {
   if (!container) return;
 
   if (window._tgCustomButtons.length === 0) {
-    container.innerHTML = '<div style="color: var(--text-dim); font-size: 0.74rem; text-align: center; padding: 8px;">Belum ada tombol. Klik "Tambah Tombol" untuk menambahkan.</div>';
+    container.innerHTML = '<div style="color: var(--text-dim); font-size: 0.74rem; text-align: center; padding: 12px; border: 1px dashed var(--border); border-radius: 8px;">Belum ada tombol. Klik "+ Tombol" di atas untuk menambahkan.</div>';
     return;
   }
 
+  const total = window._tgCustomButtons.length;
   let html = '';
   window._tgCustomButtons.forEach((btn, idx) => {
-    html += '<div class="tg-btn-editor-row" style="display: flex; gap: 6px; align-items: center; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 6px 8px;">';
-    html += '  <div style="flex: 2; min-width: 140px;">';
-    html += '    <input type="text" class="form-input-pro" value="' + escapeHtml(btn.text) + '" placeholder="Nama Tombol" style="font-size: 0.76rem; padding: 4px 8px;" data-idx="' + idx + '" data-field="text" oninput="updateCustomTGButton(this)">';
+    const isSameRow = !!btn.same_row;
+    html += '<div class="tg-btn-editor-card" style="display: flex; flex-direction: column; gap: 6px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 8px 10px; box-sizing: border-box; width: 100%;">';
+    
+    // Baris 1: Reorder [▲ ▼] + Input Nama Tombol + Layout Toggle + Hapus
+    html += '  <div class="tg-btn-row-header" style="display: flex; gap: 6px; align-items: center; width: 100%; box-sizing: border-box;">';
+    
+    // Reorder buttons
+    html += '    <div style="display: flex; gap: 2px; flex-shrink: 0;">';
+    html += '      <button type="button" class="btn-act" onclick="moveCustomTGButton(' + idx + ', -1)" ' + (idx === 0 ? 'disabled style="opacity:0.25; cursor:not-allowed;"' : '') + ' title="Geser ke Atas" style="padding: 4px 6px; font-size: 0.72rem; border-radius: 5px; background: rgba(255,255,255,0.06); color: var(--text); border: 1px solid var(--border); cursor: pointer;">▲</button>';
+    html += '      <button type="button" class="btn-act" onclick="moveCustomTGButton(' + idx + ', 1)" ' + (idx === total - 1 ? 'disabled style="opacity:0.25; cursor:not-allowed;"' : '') + ' title="Geser ke Bawah" style="padding: 4px 6px; font-size: 0.72rem; border-radius: 5px; background: rgba(255,255,255,0.06); color: var(--text); border: 1px solid var(--border); cursor: pointer;">▼</button>';
+    html += '    </div>';
+
+    // Input Nama Tombol
+    html += '    <div style="flex: 1; min-width: 0;">';
+    html += '      <input type="text" class="form-input-pro" value="' + escapeHtml(btn.text) + '" placeholder="Nama Tombol (misal: 📁 Season 1)" style="font-size: 0.76rem; padding: 5px 8px; width: 100%; box-sizing: border-box;" data-idx="' + idx + '" data-field="text" oninput="updateCustomTGButton(this)">';
+    html += '    </div>';
+
+    // Layout Toggle (Baris Baru vs Sejajar)
+    if (idx > 0) {
+      const toggleColor = isSameRow ? '#10b981' : '#94a3b8';
+      const toggleBg = isSameRow ? 'rgba(16,185,129,0.15)' : 'rgba(255,255,255,0.05)';
+      const toggleBorder = isSameRow ? 'rgba(16,185,129,0.35)' : 'var(--border)';
+      html += '    <button type="button" onclick="toggleTGButtonSameRow(' + idx + ')" title="Klik untuk mengubah posisi: Baris Baru atau Sejajar dengan tombol sebelumnya" style="flex-shrink: 0; font-size: 0.7rem; font-weight: 600; padding: 4px 8px; border-radius: 6px; border: 1px solid ' + toggleBorder + '; background: ' + toggleBg + '; color: ' + toggleColor + '; cursor: pointer; white-space: nowrap;">' + (isSameRow ? '⇥ Sejajar' : '↵ Baris Baru') + '</button>';
+    }
+
+    // Delete Button
+    html += '    <button type="button" class="btn-act" onclick="deleteCustomTGButton(' + idx + ')" title="Hapus tombol ini" style="color: #ef4444; padding: 4px 7px; background: rgba(239,68,68,0.12); border: 1px solid rgba(239,68,68,0.3); border-radius: 6px; cursor: pointer; flex-shrink: 0;">';
+    html += '      <svg class="icon icon-sm" viewBox="0 0 24 24" style="width: 14px; height: 14px; stroke: #ef4444;"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>';
+    html += '    </button>';
     html += '  </div>';
-    html += '  <div style="flex: 3; min-width: 180px;">';
-    html += '    <input type="text" class="form-input-pro" value="' + escapeHtml(btn.url) + '" placeholder="URL Link (https://...)" style="font-size: 0.76rem; padding: 4px 8px;" data-idx="' + idx + '" data-field="url" oninput="updateCustomTGButton(this)">';
+
+    // Baris 2: URL Input (100% Full Width Responsif)
+    html += '  <div class="tg-btn-row-url" style="width: 100%; box-sizing: border-box;">';
+    html += '    <input type="text" class="form-input-pro" value="' + escapeHtml(btn.url) + '" placeholder="URL Link (https://...)" style="font-size: 0.74rem; font-family: monospace; padding: 5px 8px; width: 100%; box-sizing: border-box;" data-idx="' + idx + '" data-field="url" oninput="updateCustomTGButton(this)">';
     html += '  </div>';
-    html += '  <button type="button" class="btn-act" data-idx="' + idx + '" onclick="deleteCustomTGButton(this)" title="Hapus tombol ini" style="color: #ef4444; padding: 4px 6px; background: transparent; border: none; cursor: pointer;">';
-    html += '    <svg class="icon icon-sm" viewBox="0 0 24 24" style="width: 15px; height: 15px; stroke: #ef4444;"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>';
-    html += '  </button>';
+
     html += '</div>';
   });
 
@@ -7285,15 +7359,47 @@ function updateCustomTGButton(el) {
   const field = el.getAttribute('data-field');
   if (window._tgCustomButtons && !isNaN(idx) && window._tgCustomButtons[idx] && field) {
     window._tgCustomButtons[idx][field] = el.value;
+    if (typeof previewTelegramCaption === 'function') previewTelegramCaption();
   }
 }
 
-function addCustomTGButton() {
+function moveCustomTGButton(idx, direction) {
+  if (!window._tgCustomButtons) return;
+  const targetIdx = idx + direction;
+  if (targetIdx < 0 || targetIdx >= window._tgCustomButtons.length) return;
+  const item = window._tgCustomButtons.splice(idx, 1)[0];
+  window._tgCustomButtons.splice(targetIdx, 0, item);
+  renderTGButtonsEditor();
+  if (typeof previewTelegramCaption === 'function') previewTelegramCaption();
+}
+
+function toggleTGButtonSameRow(idx) {
+  if (!window._tgCustomButtons || !window._tgCustomButtons[idx]) return;
+  window._tgCustomButtons[idx].same_row = !window._tgCustomButtons[idx].same_row;
+  renderTGButtonsEditor();
+  if (typeof previewTelegramCaption === 'function') previewTelegramCaption();
+}
+
+function addCustomTGButton(type = 'custom') {
   if (!window._tgCustomButtons) {
     window._tgCustomButtons = generateDefaultTGButtons();
   }
-  window._tgCustomButtons.push({ text: '📁 Tombol Baru', url: window.location.origin });
+  if (type === 'mediainfo') {
+    const miUrl = (document.getElementById('tgMediaInfoUrl')?.value || '').trim();
+    window._tgCustomButtons.push({
+      text: '📄 MediaInfo',
+      url: miUrl || 'https://telegra.ph/',
+      same_row: false
+    });
+  } else {
+    window._tgCustomButtons.push({
+      text: '📁 Tombol Baru',
+      url: window.location.origin,
+      same_row: false
+    });
+  }
   renderTGButtonsEditor();
+  if (typeof previewTelegramCaption === 'function') previewTelegramCaption();
 }
 
 function deleteCustomTGButton(elOrIdx) {
@@ -7301,6 +7407,7 @@ function deleteCustomTGButton(elOrIdx) {
   if (window._tgCustomButtons && !isNaN(idx) && window._tgCustomButtons[idx]) {
     window._tgCustomButtons.splice(idx, 1);
     renderTGButtonsEditor();
+    if (typeof previewTelegramCaption === 'function') previewTelegramCaption();
   }
 }
 
@@ -7369,20 +7476,25 @@ function openTelegramVisualPreview() {
       btnContainer.innerHTML = '';
     } else {
       let bh = '';
-      const mediaBtn = activeBtns.find(b => b.text.includes('MediaInfo'));
-      const otherBtns = activeBtns.filter(b => !b.text.includes('MediaInfo'));
+      const rows = [];
+      let currentRow = [];
+      activeBtns.forEach(btn => {
+        if (btn.same_row && currentRow.length > 0 && currentRow.length < 3) {
+          currentRow.push(btn);
+        } else {
+          if (currentRow.length > 0) rows.push(currentRow);
+          currentRow = [btn];
+        }
+      });
+      if (currentRow.length > 0) rows.push(currentRow);
 
-      if (mediaBtn) {
-        bh += '<div style="background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); padding: 8px 12px; border-radius: 8px; font-size: 0.8rem; color: #ffffff; text-align: center; font-weight: 600; cursor: pointer;" title="' + escapeHtml(mediaBtn.url) + '">' + escapeHtml(mediaBtn.text) + ' ↗️</div>';
-      }
-
-      if (otherBtns.length > 0) {
-        bh += '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px;">';
-        otherBtns.forEach(btn => {
-          bh += '<div style="background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.4); padding: 8px 12px; border-radius: 8px; font-size: 0.8rem; color: #38bdf8; text-align: center; font-weight: 600; cursor: pointer;" title="' + escapeHtml(btn.url) + '">' + escapeHtml(btn.text) + ' ↗️</div>';
+      rows.forEach(row => {
+        bh += '<div style="display: flex; gap: 8px; margin-bottom: 6px; width: 100%;">';
+        row.forEach(btn => {
+          bh += '<div style="flex: 1; min-width: 0; background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.4); padding: 8px 10px; border-radius: 8px; font-size: 0.78rem; color: #38bdf8; text-align: center; font-weight: 600; cursor: pointer; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;" title="' + escapeHtml(btn.url) + '">' + escapeHtml(btn.text) + ' ↗️</div>';
         });
         bh += '</div>';
-      }
+      });
       btnContainer.innerHTML = bh;
     }
   }
@@ -9102,7 +9214,7 @@ function adminConsoleUI() {
               </div>
             </div>
             <div style="display: flex; gap: 6px;">
-              <input type="text" id="tgMediaInfoUrl" class="form-input-pro" placeholder="https://telegra.ph/... (Bisa auto generate atau isi manual / paste link)" style="flex: 1; font-size: 0.78rem;" onchange="previewTelegramCaption()">
+              <input type="text" id="tgMediaInfoUrl" class="form-input-pro" placeholder="https://telegra.ph/... (Bisa auto generate atau isi manual / paste link)" style="flex: 1; font-size: 0.78rem;" oninput="syncMediaInfoToCustomButtons(this.value)" onchange="previewTelegramCaption()">
               <button type="button" class="nav-btn" style="font-size: 0.74rem; padding: 0 10px;" onclick="const u = document.getElementById('tgMediaInfoUrl').value; if(u) window.open(u, '_blank'); else alert('Link MediaInfo masih kosong.');" title="Buka Link">
                 🔗
               </button>
@@ -9217,18 +9329,19 @@ function adminConsoleUI() {
         </div>
 
         <!-- Inline Buttons Editor -->
-        <div style="margin-bottom: 14px; background: rgba(0,0,0,0.2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;">
+        <div style="margin-bottom: 14px; background: rgba(0,0,0,0.2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; box-sizing: border-box; width: 100%;">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; flex-wrap: wrap; gap: 6px;">
             <div style="display: flex; align-items: center; gap: 6px;">
               <label style="font-size: 0.78rem; font-weight: 600; color: #38bdf8;">Inline Buttons Telegram</label>
-              <span style="font-size: 0.68rem; color: var(--text-dim);">(Bisa Diedit Nama & Link)</span>
+              <span style="font-size: 0.68rem; color: var(--text-dim);">(Bisa Diedit Nama, Link & Urutan)</span>
             </div>
-            <div style="display: flex; gap: 6px;">
-              <button type="button" class="nav-btn" onclick="addCustomTGButton()" style="font-size: 0.72rem; padding: 3px 8px; height: auto; background: rgba(56, 189, 248, 0.15); border-color: rgba(56, 189, 248, 0.35); color: #38bdf8;">➕ Tambah Tombol</button>
-              <button type="button" class="nav-btn" onclick="renderTGButtonsEditor(true)" title="Reset ke tombol bawaan dari pilihan file & mediainfo" style="font-size: 0.72rem; padding: 3px 8px; height: auto;">🔄 Reset Tombol</button>
+            <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+              <button type="button" class="nav-btn" onclick="addCustomTGButton('custom')" style="font-size: 0.72rem; padding: 3px 8px; height: auto; background: rgba(56, 189, 248, 0.15); border-color: rgba(56, 189, 248, 0.35); color: #38bdf8;">➕ Tombol</button>
+              <button type="button" class="nav-btn" onclick="addCustomTGButton('mediainfo')" style="font-size: 0.72rem; padding: 3px 8px; height: auto; background: rgba(168, 85, 247, 0.15); border-color: rgba(168, 85, 247, 0.35); color: #c084fc;" title="Tambah tombol MediaInfo">📄 + MediaInfo</button>
+              <button type="button" class="nav-btn" onclick="renderTGButtonsEditor(true)" title="Reset ke tombol bawaan dari pilihan file & mediainfo" style="font-size: 0.72rem; padding: 3px 8px; height: auto;">🔄 Reset</button>
             </div>
           </div>
-          <div id="tgButtonsContainer" style="display: flex; flex-direction: column; gap: 8px;">
+          <div id="tgButtonsContainer" style="display: flex; flex-direction: column; gap: 8px; width: 100%; box-sizing: border-box;">
             <!-- Rendered by renderTGButtonsEditor() -->
           </div>
         </div>
