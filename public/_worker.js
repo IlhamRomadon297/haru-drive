@@ -191,8 +191,21 @@ export default {
       });
     }
 
+    // Handle CORS preflight OPTIONS
+    if (request.method === 'OPTIONS') {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, HEAD, POST, OPTIONS',
+          'Access-Control-Allow-Headers': '*',
+          'Access-Control-Max-Age': '86400'
+        }
+      });
+    }
+
     // ---- PUBLIC / GUEST ROUTES (no login): shared-folder links + read-only APIs ----
-    const isPublicGet = request.method === 'GET' && (
+    const isPublicGet = (request.method === 'GET' || request.method === 'HEAD') && (
       (url.pathname === '/' && url.searchParams.has('p')) ||
       url.pathname === '/api/list' ||
       url.pathname === '/api/folders' ||
@@ -388,9 +401,11 @@ export default {
         reqPath = reqPath.replace(/^\/+|\/+$/g, '');
 
         const repoId = HF_REPO_ID;
-        const hfTreeUrl = reqPath 
-          ? `https://huggingface.co/api/datasets/${repoId}/tree/main/${encodeURI(reqPath)}`
-          : `https://huggingface.co/api/datasets/${repoId}/tree/main`;
+        const isRecursive = url.searchParams.get('recursive') === 'true';
+        const encodedReqPath = reqPath ? reqPath.split('/').map(seg => encodeURIComponent(seg)).join('/') : '';
+        const hfTreeUrl = encodedReqPath 
+          ? `https://huggingface.co/api/datasets/${repoId}/tree/main/${encodedReqPath}${isRecursive ? '?recursive=true' : ''}`
+          : `https://huggingface.co/api/datasets/${repoId}/tree/main${isRecursive ? '?recursive=true' : ''}`;
 
         const hfHeaders = { 'User-Agent': 'HaruDrive/1.0' };
         if (HF_TOKEN) hfHeaders['Authorization'] = `Bearer ${HF_TOKEN}`;
@@ -406,6 +421,26 @@ export default {
 
         const hfItems = await hfRes.json();
         const folderName = reqPath ? reqPath.split('/').pop() : 'Home';
+
+        if (isRecursive && Array.isArray(hfItems)) {
+          let recSize = 0, recFiles = 0;
+          for (const item of hfItems) {
+            if (item.type !== 'directory' && item.path && !item.path.startsWith('.') && item.path !== 'README.md') {
+              recSize += (item.size || 0);
+              recFiles += 1;
+            }
+          }
+          if (env.harudrive_db && recSize > 0) {
+            try {
+              await env.harudrive_db.prepare('CREATE TABLE IF NOT EXISTS folder_sizes (path TEXT PRIMARY KEY, size INTEGER, files INTEGER)').run();
+              await env.harudrive_db.prepare('INSERT OR REPLACE INTO folder_sizes (path, size, files) VALUES (?, ?, ?)').bind(reqPath, recSize, recFiles).run();
+            } catch(e) {}
+          }
+          return new Response(JSON.stringify({ folderName, currentPath: reqPath, folderStats: { fileCount: recFiles, fileSize: recSize } }), {
+            headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+          });
+        }
+
         const formattedFiles = [];
 
         for (const item of hfItems) {
@@ -1928,19 +1963,42 @@ export default {
       const shortId = pathAfterPrefix.split('/')[0];
 
       // Resolve shortId -> determine backend by content type (shared links carry no reliable mode).
-      // HF shortIds map to paths containing '/'; Drive shortIds map to Drive IDs (no slash).
+      // A Google Drive ID is strictly alphanumeric with _ and - (length 25 to 50),
+      // and NEVER contains file extensions, slashes, spaces, or non-ASCII characters.
+      const isPureGDriveId = (s) => typeof s === 'string' && /^[a-zA-Z0-9_-]{25,50}$/.test(s) && !/\.[a-zA-Z0-9]{2,5}$/i.test(s) && !s.includes('/') && !s.includes(' ');
       let dIsHf = false, dIsDrive = false, dDriveFileId = '';
       if (env.harudrive_db) {
         try {
           const r2 = await env.harudrive_db.prepare('SELECT file_path FROM shortlinks WHERE short_id = ?').bind(shortId).first();
           if (r2 && r2.file_path) {
-            if (r2.file_path.indexOf('/') !== -1) dIsHf = true;
-            else if (r2.file_path.length > 20) { dIsDrive = true; dDriveFileId = r2.file_path; }
-          } else if (shortId.length > 20) { dIsDrive = true; dDriveFileId = shortId; }
+            if (r2.file_path.indexOf('/') !== -1 || /\.[a-zA-Z0-9]{2,5}$/i.test(r2.file_path) || /[^\x00-\x7F]/.test(r2.file_path)) {
+              dIsHf = true;
+            } else if (isPureGDriveId(r2.file_path)) {
+              dIsDrive = true;
+              dDriveFileId = r2.file_path;
+            } else {
+              dIsHf = true;
+            }
+          } else if (isPureGDriveId(shortId)) {
+            dIsDrive = true;
+            dDriveFileId = shortId;
+          } else {
+            dIsHf = true;
+          }
         } catch(e) {
-          if (shortId.length > 20) { dIsDrive = true; dDriveFileId = shortId; }
+          if (isPureGDriveId(shortId)) {
+            dIsDrive = true;
+            dDriveFileId = shortId;
+          } else {
+            dIsHf = true;
+          }
         }
-      } else if (shortId.length > 20) { dIsDrive = true; dDriveFileId = shortId; }
+      } else if (isPureGDriveId(shortId)) {
+        dIsDrive = true;
+        dDriveFileId = shortId;
+      } else {
+        dIsHf = true;
+      }
       const gMode2 = url.searchParams.get('mode') || request.headers.get('X-Storage-Mode') || '';
       const effectiveGDriveId = dDriveFileId || shortId;
       if ((gMode2 === 'gdrive' && !dIsHf) || (dIsDrive && gMode2 !== 'hf')) {
@@ -1951,10 +2009,15 @@ export default {
         gHeaders.set('Authorization', `Bearer ${gToken}`);
         const gRange = request.headers.get('Range');
         if (gRange) gHeaders.set('Range', gRange);
-        const gRes = await fetch(gDriveUrl, { headers: gHeaders });
+        const gFetchMethod = request.method === 'HEAD' ? 'HEAD' : 'GET';
+        const gRes = await fetch(gDriveUrl, { method: gFetchMethod, headers: gHeaders });
         if (!gRes.ok && gRes.status !== 206) return new Response(`Drive File Not Found (${gRes.status})`, { status: gRes.status });
         const gRespHeaders = new Headers(gRes.headers);
         gRespHeaders.set('Access-Control-Allow-Origin', '*');
+        gRespHeaders.set('Access-Control-Allow-Headers', '*');
+        gRespHeaders.set('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+        gRespHeaders.set('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges');
+        gRespHeaders.set('Accept-Ranges', 'bytes');
         let gFileName = effectiveGDriveId;
         try {
           const metaRes = await fetch(`https://www.googleapis.com/drive/v3/files/${effectiveGDriveId}?fields=name,size&supportsAllDrives=true`, { headers: { 'Authorization': `Bearer ${gToken}` } });
@@ -1967,6 +2030,9 @@ export default {
         const gDisp = isDownload ? 'attachment' : 'inline';
         gRespHeaders.set('Content-Disposition', `${gDisp}; filename="${gFileName.replace(/"/g, '')}"; filename*=UTF-8''${gSafeName}`);
         if (!gRespHeaders.get('Content-Type')) gRespHeaders.set('Content-Type', getMimeType(gFileName));
+        if (request.method === 'HEAD') {
+          return new Response(null, { status: gRes.status, headers: gRespHeaders });
+        }
         return new Response(gRes.body, { status: gRes.status, headers: gRespHeaders });
       }
       let filePath = '';
@@ -1985,14 +2051,16 @@ export default {
         fileName = filePath.split('/').pop() || 'file';
       }
 
-      const hfFileUrl = `https://huggingface.co/datasets/${HF_REPO_ID}/resolve/main/${encodeURI(filePath)}`;
+      const encodedHfPath = filePath.split('/').map(seg => encodeURIComponent(seg)).join('/');
+      const hfFileUrl = `https://huggingface.co/datasets/${HF_REPO_ID}/resolve/main/${encodedHfPath}`;
       const hfHeaders = new Headers();
       if (HF_TOKEN) hfHeaders.set('Authorization', `Bearer ${HF_TOKEN}`);
 
       const range = request.headers.get('Range');
       if (range) hfHeaders.set('Range', range);
 
-      const hfRes = await fetch(hfFileUrl, { headers: hfHeaders });
+      const hfFetchMethod = request.method === 'HEAD' ? 'HEAD' : 'GET';
+      const hfRes = await fetch(hfFileUrl, { method: hfFetchMethod, headers: hfHeaders });
       if (!hfRes.ok && hfRes.status !== 206) {
         return new Response(`File Not Found on Storage (${hfRes.status})`, { status: hfRes.status });
       }
@@ -2002,11 +2070,22 @@ export default {
       const respHeaders = new Headers(hfRes.headers);
       const mime = getMimeType(fileName);
       respHeaders.set('Content-Type', mime);
+      respHeaders.set('Accept-Ranges', 'bytes');
       respHeaders.set('Access-Control-Allow-Origin', '*');
+      respHeaders.set('Access-Control-Allow-Headers', '*');
+      respHeaders.set('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+      respHeaders.set('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges');
 
       const safeFileName = encodeURIComponent(fileName);
       const disposition = isDownload ? 'attachment' : 'inline';
       respHeaders.set('Content-Disposition', `${disposition}; filename="${fileName.replace(/"/g, '')}"; filename*=UTF-8''${safeFileName}`);
+
+      if (request.method === 'HEAD') {
+        return new Response(null, {
+          status: hfRes.status,
+          headers: respHeaders
+        });
+      }
 
       return new Response(hfRes.body, {
         status: hfRes.status,
@@ -2856,6 +2935,59 @@ function htmlPage(content, env, pageMode = 'public') {
         padding: 8px 10px !important;
         border-radius: 10px !important;
       }
+      .search-box {
+        width: 100% !important;
+        max-width: 100% !important;
+        flex: 1 1 100% !important;
+      }
+      .search-box .form-input-pro,
+      .search-box input#searchInput {
+        padding-left: 38px !important;
+        padding-right: 36px !important;
+        height: 40px !important;
+        font-size: 0.88rem !important;
+        box-sizing: border-box !important;
+      }
+      #modal-mediainfo .modal-card {
+        width: 96% !important;
+        max-width: 96% !important;
+        max-height: 94vh !important;
+        margin: auto !important;
+        border-radius: 16px !important;
+      }
+      .mi-modal-header {
+        display: flex !important;
+        flex-direction: column !important;
+        padding: 12px 14px !important;
+        gap: 8px !important;
+      }
+      .mi-header-top {
+        width: 100% !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: space-between !important;
+      }
+      .mi-header-actions {
+        width: 100% !important;
+        display: flex !important;
+        align-items: center !important;
+        gap: 8px !important;
+        justify-content: flex-start !important;
+      }
+      .mi-tabs-bar {
+        padding: 8px 12px !important;
+        gap: 6px !important;
+        overflow-x: auto !important;
+        -webkit-overflow-scrolling: touch !important;
+        scrollbar-width: none !important;
+      }
+      .mi-tabs-bar::-webkit-scrollbar { display: none !important; }
+      .mi-tabs-bar button {
+        flex-shrink: 0 !important;
+        white-space: nowrap !important;
+        padding: 5px 10px !important;
+        font-size: 0.75rem !important;
+      }
     }
 
     .btn-action-tool {
@@ -3425,9 +3557,16 @@ function htmlPage(content, env, pageMode = 'public') {
         gap: 8px;
       }
       .search-box {
-        max-width: 100%;
-        width: 100%;
-        flex: 1 1 auto;
+        max-width: 100% !important;
+        width: 100% !important;
+        flex: 1 1 100% !important;
+      }
+      .search-box .form-input-pro,
+      .search-box input#searchInput {
+        padding-left: 38px !important;
+        padding-right: 36px !important;
+        height: 40px !important;
+        box-sizing: border-box !important;
       }
       .toolbar-btn-group {
         display: flex;
@@ -3443,17 +3582,6 @@ function htmlPage(content, env, pageMode = 'public') {
       .btn-action-tool {
         padding: 7px 10px;
         font-size: 0.76rem;
-        flex-shrink: 0;
-        white-space: nowrap;
-      }
-      .search-box {
-        flex: 1 1 0;
-        min-width: 0;
-        max-width: none;
-      }
-      .btn-action-tool {
-        padding: 8px 10px;
-        font-size: 0.78rem;
         flex-shrink: 0;
         white-space: nowrap;
       }
@@ -3935,25 +4063,28 @@ function htmlPage(content, env, pageMode = 'public') {
   <!-- MediaInfo Inspector Modal (HaruDrive Port) -->
   <div id="modal-mediainfo" class="modal-backdrop" style="display:none;">
     <div class="modal-card" style="max-width:860px;width:96%;padding:0;overflow:hidden">
-      <div class="flex items-center justify-between px-5 py-3.5" style="border-bottom:1px solid var(--border);background:rgba(20,20,40,0.9)">
-        <div class="flex items-center gap-3 min-w-0">
-          <div class="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0" style="background:rgba(99,102,241,0.2);border:1px solid rgba(99,102,241,0.3)"><span style="font-size:14px">🎞️</span></div>
-          <div class="min-w-0">
-            <div class="text-sm font-bold flex items-center gap-2" style="color:var(--text)">MediaInfo Inspector <span id="mi-badge-format" class="badge" style="background:rgba(168,85,247,0.2);color:#c4b5fd;border:1px solid rgba(168,85,247,0.3);font-size:10px;padding:2px 6px;border-radius:6px"></span> <span id="mi-scan-badge" class="badge" style="background:rgba(255,255,255,0.08);color:var(--text-muted);font-size:10px;padding:2px 6px;border-radius:6px">Ready</span></div>
-            <div id="mi-filename" class="text-xs font-mono truncate mt-0.5" style="color:var(--text-muted)"></div>
+      <div class="mi-modal-header flex flex-col sm:flex-row sm:items-center justify-between px-4 sm:px-5 py-3 sm:py-3.5 gap-2" style="border-bottom:1px solid var(--border);background:rgba(20,20,40,0.9)">
+        <div class="mi-header-top flex items-center justify-between gap-3 min-w-0">
+          <div class="flex items-center gap-2.5 sm:gap-3 min-w-0">
+            <div class="w-8 h-8 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center flex-shrink-0" style="background:rgba(99,102,241,0.2);border:1px solid rgba(99,102,241,0.3)"><span style="font-size:14px">🎞️</span></div>
+            <div class="min-w-0">
+              <div class="text-sm font-bold flex items-center gap-1.5 sm:gap-2 flex-wrap" style="color:var(--text)"><span>MediaInfo Inspector</span> <span id="mi-badge-format" class="badge" style="background:rgba(168,85,247,0.2);color:#c4b5fd;border:1px solid rgba(168,85,247,0.3);font-size:10px;padding:2px 6px;border-radius:6px"></span> <span id="mi-scan-badge" class="badge" style="background:rgba(255,255,255,0.08);color:var(--text-muted);font-size:10px;padding:2px 6px;border-radius:6px">Ready</span></div>
+              <div id="mi-filename" class="text-xs font-mono truncate mt-0.5" style="color:var(--text-muted)"></div>
+            </div>
           </div>
+          <button onclick="closeMediaInfoModal()" class="mi-close-btn-mobile sm:hidden" style="color:var(--text-dim);background:rgba(255,255,255,0.05);border:1px solid var(--border);border-radius:8px;cursor:pointer;width:30px;height:30px;display:flex;align-items:center;justify-content:center;flex-shrink:0;">✕</button>
         </div>
-        <div class="flex items-center gap-2">
-          <button id="mi-btn-rescan" onclick="startBinaryMediaInfoScan(true)" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold" style="background:rgba(99,102,241,0.2);color:#a5b4fc;border:1px solid rgba(99,102,241,0.3)">Scan Header</button>
-          <button onclick="switchMediaInfoTab('edit')" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold" style="background:rgba(16,185,129,0.15);color:#34d399;border:1px solid rgba(16,185,129,0.3)">Paste Text</button>
-          <button onclick="closeMediaInfoModal()" style="color:var(--text-dim);background:rgba(255,255,255,0.05);border:1px solid var(--border);border-radius:8px;cursor:pointer;width:32px;height:32px;display:flex;align-items:center;justify-content:center">✕</button>
+        <div class="mi-header-actions flex items-center gap-2 mt-1 sm:mt-0 w-full sm:w-auto">
+          <button id="mi-btn-rescan" onclick="startBinaryMediaInfoScan(true)" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold flex-1 sm:flex-initial justify-center" style="background:rgba(99,102,241,0.2);color:#a5b4fc;border:1px solid rgba(99,102,241,0.3)">Scan Header</button>
+          <button onclick="switchMediaInfoTab('edit')" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold flex-1 sm:flex-initial justify-center" style="background:rgba(16,185,129,0.15);color:#34d399;border:1px solid rgba(16,185,129,0.3)">Paste Text</button>
+          <button onclick="closeMediaInfoModal()" class="mi-close-btn-desktop hidden sm:flex" style="color:var(--text-dim);background:rgba(255,255,255,0.05);border:1px solid var(--border);border-radius:8px;cursor:pointer;width:32px;height:32px;align-items:center;justify-content:center;flex-shrink:0;">✕</button>
         </div>
       </div>
-      <div class="flex items-center gap-2 px-5 py-2.5" style="background:rgba(12,12,30,0.9);border-bottom:1px solid var(--border)">
-        <button id="mi-tab-btn-tracks" onclick="switchMediaInfoTab('tracks')" class="tab-btn active text-xs" style="padding:6px 12px;border-radius:8px;background:var(--primary);color:#fff">Tracks & Specs</button>
-        <button id="mi-tab-btn-text" onclick="switchMediaInfoTab('text')" class="tab-btn text-xs" style="padding:6px 12px;border-radius:8px;background:transparent;color:var(--text-muted);border:1px solid var(--border)">Official MediaInfo Text</button>
-        <button id="mi-tab-btn-edit" onclick="switchMediaInfoTab('edit')" class="tab-btn text-xs" style="padding:6px 12px;border-radius:8px;background:transparent;color:var(--text-muted);border:1px solid var(--border)">Paste / Edit Report</button>
-        <button id="mi-tab-btn-links" onclick="switchMediaInfoTab('links')" class="tab-btn text-xs" style="padding:6px 12px;border-radius:8px;background:transparent;color:var(--text-muted);border:1px solid var(--border)">Endpoints</button>
+      <div class="mi-tabs-bar flex items-center gap-2 px-3 sm:px-5 py-2.5 overflow-x-auto" style="background:rgba(12,12,30,0.9);border-bottom:1px solid var(--border);scrollbar-width:none;-webkit-overflow-scrolling:touch;">
+        <button id="mi-tab-btn-tracks" onclick="switchMediaInfoTab('tracks')" class="tab-btn active text-xs whitespace-nowrap flex-shrink-0" style="padding:6px 12px;border-radius:8px;background:var(--primary);color:#fff">Tracks & Specs</button>
+        <button id="mi-tab-btn-text" onclick="switchMediaInfoTab('text')" class="tab-btn text-xs whitespace-nowrap flex-shrink-0" style="padding:6px 12px;border-radius:8px;background:transparent;color:var(--text-muted);border:1px solid var(--border)">Official MediaInfo Text</button>
+        <button id="mi-tab-btn-edit" onclick="switchMediaInfoTab('edit')" class="tab-btn text-xs whitespace-nowrap flex-shrink-0" style="padding:6px 12px;border-radius:8px;background:transparent;color:var(--text-muted);border:1px solid var(--border)">Paste / Edit Report</button>
+        <button id="mi-tab-btn-links" onclick="switchMediaInfoTab('links')" class="tab-btn text-xs whitespace-nowrap flex-shrink-0" style="padding:6px 12px;border-radius:8px;background:transparent;color:var(--text-muted);border:1px solid var(--border)">Endpoints</button>
       </div>
       <div class="p-5 space-y-4" style="background:var(--bg);max-height:75vh;overflow-y:auto">
         <div id="mi-tab-tracks" class="space-y-4">
@@ -4463,6 +4594,7 @@ async function loadFolder(path = '', id = '') {
 
     updateBreadcrumbs();
     renderFileList();
+    scheduleFolderSizeScan(allFiles);
   } catch (err) {
     if (container) {
       container.innerHTML = '<div style="text-align: center; padding: 40px; color: #ef4444;"><p>Gagal memuat: ' + escapeHtml(err.message) + '</p><button class="nav-btn" style="margin-top: 12px;" onclick="loadFolder(currentPath, currentFolderId)">Coba Lagi</button></div>';
@@ -4611,11 +4743,14 @@ function cacheFolderSize(fPath, size) {
   } catch(e) {}
 }
 
+let _folderScanSessionId = 0;
 let _folderScanQueueRunning = false;
 async function scheduleFolderSizeScan(files) {
-  if (!files || files.length === 0 || _folderScanQueueRunning) return;
+  if (!files || files.length === 0) return;
   const _sm = getStorageMode();
   if (_sm === 'gdrive') return; // GDrive uses direct folder stats, only scan in HF mode
+  
+  const currentSession = ++_folderScanSessionId;
   
   const unscanned = files.filter(f => {
     const isDir = f.mimeType === 'application/vnd.google-apps.folder' || (!f.name.includes('.') && (!f.size || f.size === 0));
@@ -4625,13 +4760,14 @@ async function scheduleFolderSizeScan(files) {
   if (unscanned.length === 0) return;
   _folderScanQueueRunning = true;
 
-  // Process in small batches (concurrency: 2)
-  const batch = unscanned.slice(0, 15);
-  for (let i = 0; i < batch.length; i += 2) {
-    const pair = batch.slice(i, i + 2);
+  // Process ALL unscanned items in batches of 4 (concurrency: 4)
+  const CONCURRENCY = 4;
+  for (let i = 0; i < unscanned.length; i += CONCURRENCY) {
+    if (_folderScanSessionId !== currentSession) break;
+    const pair = unscanned.slice(i, i + CONCURRENCY);
     await Promise.all(pair.map(async (f) => {
       try {
-        const fetchUrl = '/api/list?' + (f.id ? ('id=' + encodeURIComponent(f.id)) : ('path=' + encodeURIComponent(f.path)));
+        const fetchUrl = '/api/list?recursive=true&' + (f.id ? ('id=' + encodeURIComponent(f.id)) : ('path=' + encodeURIComponent(f.path)));
         const res = await fetch(fetchUrl);
         if (res.ok) {
           const data = await res.json();
@@ -4654,9 +4790,11 @@ async function scheduleFolderSizeScan(files) {
         }
       } catch(e) {}
     }));
-    await new Promise(r => setTimeout(r, 100));
+    await new Promise(r => setTimeout(r, 60));
   }
-  _folderScanQueueRunning = false;
+  if (_folderScanSessionId === currentSession) {
+    _folderScanQueueRunning = false;
+  }
 }
 
 function renderFileList() {
@@ -7445,17 +7583,35 @@ async function sendToTelegram() {
     });
     const data = await res.json();
     if (res.ok && data.success) {
-      alert('Berhasil memposting ke Telegram! 🚀 (Caption: ' + data.caption_length + ' chars)');
+      if (btn) {
+        btn.textContent = '✅ Berhasil Terkirim!';
+        btn.style.background = '#10b981';
+        setTimeout(() => {
+          if (btn) {
+            btn.textContent = 'Send to Channel';
+            btn.style.background = '#38bdf8';
+          }
+        }, 3500);
+      }
+      showCopyToast('Berhasil memposting ke Telegram! 🚀 (Caption: ' + data.caption_length + ' chars)');
       closeTelegramVisualPreview();
-      closeTelegramModal();
+      // Keep modal open for testing as requested by user!
     } else {
       alert('Gagal memposting: ' + (data.error || 'Unknown error'));
     }
   } catch (err) {
     alert('Error: ' + err.message);
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = 'Send to Channel'; }
+    if (btn) { btn.disabled = false; }
   }
+}
+
+function copyStreamDirectLink(url) {
+  navigator.clipboard.writeText(url).then(() => {
+    showCopyToast('Link stream disalin ke clipboard!');
+  }).catch(() => {
+    prompt('Salin link stream video:', url);
+  });
 }
 
 // Video Player Modal
@@ -7480,11 +7636,45 @@ function playVideo(fileId, fileName) {
   });
 
   if (extContainer) {
+    const rawNoProto = videoUrl.replace(/^https?:\/\//i, '');
+    const isHttps = videoUrl.startsWith('https');
+    const ua = (navigator.userAgent || '').toLowerCase();
+    const isAndroid = ua.includes('android');
+    const isIOS = /ipad|iphone|ipod/.test(ua) || (navigator.platform === 'macintel' && navigator.maxTouchPoints > 1);
+
+    // VLC link: Android intent vs iOS x-callback vs Desktop vlc://
+    const vlcAndroid = 'intent://' + rawNoProto + '#Intent;scheme=' + (isHttps ? 'https' : 'http') + ';type=video/*;package=org.videolan.vlc;action=android.intent.action.VIEW;end';
+    const vlcIOS = 'vlc-x-callback://x-callback-url/stream?url=' + encodeURIComponent(videoUrl);
+    const vlcDesktop = 'vlc://' + videoUrl;
+    const vlcHref = isAndroid ? vlcAndroid : (isIOS ? vlcIOS : vlcDesktop);
+
+    // MX Player link (Standard Android Intent)
+    const mxAndroid = 'intent://' + rawNoProto + '#Intent;scheme=' + (isHttps ? 'https' : 'http') + ';type=video/*;package=com.mxtech.videoplayer.ad;action=android.intent.action.VIEW;end';
+
+    // Outplayer for iOS
+    const outplayerIOS = 'outplayer://' + videoUrl;
+
+    // PotPlayer for Windows / Desktop
+    const potplayerHref = 'potplayer://' + videoUrl;
+
     let eHtml = '';
-    eHtml += '<a href="vlc://' + videoUrl + '" class="btn-ext-player"><span>VLC Player</span></a>';
-    eHtml += '<a href="potplayer://' + videoUrl + '" class="btn-ext-player"><span>PotPlayer</span></a>';
-    eHtml += '<a href="intent:' + videoUrl + '#Intent;type=video/*;package=com.mxtech.videoplayer.ad;end" class="btn-ext-player"><span>MX Player</span></a>';
+    eHtml += '<a href="' + vlcHref + '" class="btn-ext-player" title="Buka di VLC Media Player"><span>VLC Player</span></a>';
+    if (isAndroid || (!isIOS && !isAndroid)) {
+      eHtml += '<a href="' + mxAndroid + '" class="btn-ext-player" title="Buka di MX Player Android"><span>MX Player</span></a>';
+    }
+    if (!isIOS) {
+      eHtml += '<a href="' + potplayerHref + '" class="btn-ext-player" title="Buka di PotPlayer Windows"><span>PotPlayer</span></a>';
+    }
+    if (isIOS || (!isIOS && !isAndroid)) {
+      eHtml += '<a href="' + outplayerIOS + '" class="btn-ext-player" title="Buka di Outplayer iOS (iPhone/iPad)"><span>Outplayer (iOS)</span></a>';
+    }
+
+    // Salin Link Stream
+    eHtml += '<button type="button" onclick="copyStreamDirectLink(' + JSON.stringify(videoUrl).replace(/"/g, '&quot;') + ')" class="btn-ext-player" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; border-color: rgba(56, 189, 248, 0.35); cursor: pointer;"><svg class="icon icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg><span>Salin Link</span></button>';
+
+    // Download File button
     eHtml += '<a href="' + videoUrl + '" target="_blank" download class="btn-ext-player" style="background: rgba(16, 185, 129, 0.15); color: #10b981; border-color: rgba(16, 185, 129, 0.3); margin-left:auto;"><svg class="icon icon-xs" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg><span>Download File</span></a>';
+
     extContainer.innerHTML = eHtml;
   }
 
