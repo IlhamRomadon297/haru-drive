@@ -5694,9 +5694,9 @@ function getTGBannerUrl() {
   const quality = formatQuality(videoSpec ? videoSpec.split(' ')[0] : '1080p');
   const genres = (document.getElementById('tgGenres')?.value || '').trim() || '-';
   const rawAudio = (document.getElementById('tgSpecAudio')?.value || '').trim();
-  const audio = (!rawAudio || /^[-–—]+$/.test(rawAudio)) ? '-' : cleanAudioLanguage(rawAudio);
+  const audio = rawAudio || '-';
   const rawSubs = (document.getElementById('tgSpecSubs')?.value || '').trim();
-  const subs = (!rawSubs || /^[-–—]+$/.test(rawSubs)) ? '-' : cleanSubtitleLanguages(rawSubs);
+  const subs = rawSubs || '-';
 
   const p = new URLSearchParams();
   p.set('poster_url', posterUrl || 'https://via.placeholder.com/500x750/141414/0ea5e9?text=No+Poster');
