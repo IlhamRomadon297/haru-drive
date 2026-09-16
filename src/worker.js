@@ -151,9 +151,10 @@ export default {
     const cookie = request.headers.get('Cookie') || '';
     const isLoggedIn = cookie.includes('harudrive_auth=true');
 
-    // Already authenticated -> go straight to the file manager.
+    // Already authenticated -> go straight to the destination
     if (url.pathname === '/login' && isLoggedIn) {
-      return new Response(null, { status: 302, headers: { 'Location': '/' } });
+      const target = url.searchParams.get('redirect') || '/';
+      return new Response(null, { status: 302, headers: { 'Location': target } });
     }
 
     // ---- LOGIN PAGE ----
@@ -161,21 +162,22 @@ export default {
       if (request.method === 'POST') {
         const formData = await request.formData();
         const password = formData.get('password');
+        const redirectParam = formData.get('redirect') || url.searchParams.get('redirect') || '/';
         if (password === APP_PASSWORD) {
           return new Response('Logged in', {
             status: 302,
             headers: {
-              'Location': '/',
+              'Location': redirectParam,
               'Set-Cookie': 'harudrive_auth=true; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=604800'
             }
           });
         } else {
-          return new Response(htmlPage(loginUI('Password salah. Silakan coba lagi.'), env, 'login'), {
+          return new Response(htmlPage(loginUI('Password salah. Silakan coba lagi.', redirectParam), env, 'login'), {
             headers: { 'Content-Type': 'text/html;charset=UTF-8' }
           });
         }
       }
-      return new Response(htmlPage(loginUI(), env, 'login'), {
+      return new Response(htmlPage(loginUI('', url.searchParams.get('redirect') || ''), env, 'login'), {
         headers: { 'Content-Type': 'text/html;charset=UTF-8' }
       });
     }
@@ -204,6 +206,84 @@ export default {
       });
     }
 
+    // API: System Access Configuration & Maintenance Mode Toggle
+    if (url.pathname === '/api/admin/system-access') {
+      if (request.method === 'GET') {
+        const cfg = await getPublicAccessConfig(env);
+        return new Response(JSON.stringify({ success: true, ...cfg }), {
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      if (request.method === 'POST') {
+        try {
+          const body = await request.json();
+          if (!verifyPin(body.admin_pin || body.pin) && !isLoggedIn) {
+            return new Response(JSON.stringify({ error: 'PIN Admin Salah / Tidak Terotentikasi!' }), { status: 403 });
+          }
+          const updated = {
+            public_access: body.public_access === 'closed' ? 'closed' : 'open',
+            public_index: body.public_index === '0' ? '0' : '1',
+            guest_access: body.guest_access === '0' ? '0' : '1'
+          };
+          await setPublicAccessConfig(env, updated);
+          return new Response(JSON.stringify({ success: true, ...updated }), {
+            headers: { 'Content-Type': 'application/json' }
+          });
+        } catch (err) {
+          return new Response(JSON.stringify({ error: err.message }), { status: 500 });
+        }
+      }
+    }
+
+    // Read Public Access Configuration
+    const accessConfig = await getPublicAccessConfig(env);
+
+    // If access is closed or restricted, enforce on non-admin visitors
+    if (!isLoggedIn) {
+      const isPublicStatic = url.pathname.startsWith('/static/') || url.pathname.endsWith('.ico') || url.pathname.endsWith('.png');
+      const isAdminRoute = url.pathname === '/admin' || url.pathname === '/login' || url.pathname === '/logout' || url.pathname.startsWith('/api/admin/');
+
+      if (!isAdminRoute && !isPublicStatic) {
+        // Master Public Access Switch
+        if (accessConfig.public_access === 'closed') {
+          if (url.pathname.startsWith('/api/')) {
+            return new Response(JSON.stringify({ error: 'HaruDrive is currently in maintenance mode' }), {
+              status: 503,
+              headers: { 'Content-Type': 'application/json' }
+            });
+          }
+          return new Response(htmlPage(privateModeUI('Layanan penyimpanan HaruDrive saat ini sedang dalam Mode Private / Pemeliharaan. Akses publik dan unduhan dinonaktifkan sementara oleh pemilik sistem.'), env, 'public'), {
+            status: 200,
+            headers: { 'Content-Type': 'text/html;charset=UTF-8' }
+          });
+        }
+
+        // Granular Switch 1: Public Index (Root)
+        const isRootIndex = url.pathname === '/' && !url.searchParams.has('p');
+        if (accessConfig.public_index === '0' && isRootIndex) {
+          return new Response(htmlPage(privateModeUI('Halaman indeks utama HaruDrive saat ini sedang dinonaktifkan untuk umum.'), env, 'public'), {
+            status: 200,
+            headers: { 'Content-Type': 'text/html;charset=UTF-8' }
+          });
+        }
+
+        // Granular Switch 2: Guest Access (Shared folders / files / downloads)
+        const isGuestLink = (url.pathname === '/' && url.searchParams.has('p')) || url.pathname.startsWith('/folder/') || url.pathname.startsWith('/file/') || url.pathname.startsWith('/d/') || url.pathname.startsWith('/raw/');
+        if (accessConfig.guest_access === '0' && isGuestLink) {
+          if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/d/') || url.pathname.startsWith('/raw/')) {
+            return new Response(JSON.stringify({ error: 'Guest access is currently disabled' }), {
+              status: 403,
+              headers: { 'Content-Type': 'application/json' }
+            });
+          }
+          return new Response(htmlPage(privateModeUI('Tautan folder dan unduhan tamu sedang dinonaktifkan sementara.'), env, 'public'), {
+            status: 200,
+            headers: { 'Content-Type': 'text/html;charset=UTF-8' }
+          });
+        }
+      }
+    }
+
     // ---- PUBLIC / GUEST ROUTES (no login): shared-folder links + read-only APIs ----
     const isPublicGet = (request.method === 'GET' || request.method === 'HEAD') && (
       (url.pathname === '/' && url.searchParams.has('p')) ||
@@ -220,12 +300,13 @@ export default {
     );
 
     // Page routes (GET, not public, not API) require an authenticated session.
-    // If not logged in -> bounce to the login page.
+    // If not logged in -> bounce to the login page with redirect param.
     const isPageRoute = request.method === 'GET' && !isPublicGet && !url.pathname.startsWith('/api/');
     if (isPageRoute && !isLoggedIn) {
+      const redirectParam = (url.pathname === '/admin' || url.pathname !== '/') ? '?redirect=' + encodeURIComponent(url.pathname + url.search) : '';
       return new Response(null, {
         status: 302,
-        headers: { 'Location': '/login' }
+        headers: { 'Location': '/login' + redirectParam }
       });
     }
 
@@ -2197,6 +2278,39 @@ async function generateShortId(path) {
   return base64.substring(0, 8);
 }
 
+async function getPublicAccessConfig(env) {
+  const def = { public_access: 'open', public_index: '1', guest_access: '1' };
+  if (!env || !env.harudrive_db) return def;
+  try {
+    await env.harudrive_db.prepare('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)').run().catch(() => {});
+    const rows = await env.harudrive_db.prepare("SELECT key, value FROM meta WHERE key IN ('public_access', 'public_index', 'guest_access')").all().catch(() => ({ results: [] }));
+    if (rows && rows.results) {
+      for (const r of rows.results) {
+        if (r.key in def && r.value !== null && r.value !== undefined) def[r.key] = String(r.value);
+      }
+    }
+    return def;
+  } catch (e) {
+    return def;
+  }
+}
+
+async function setPublicAccessConfig(env, cfg) {
+  if (!env || !env.harudrive_db) return false;
+  try {
+    await env.harudrive_db.prepare('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)').run().catch(() => {});
+    const keys = ['public_access', 'public_index', 'guest_access'];
+    for (const k of keys) {
+      if (k in cfg) {
+        await env.harudrive_db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)").bind(k, String(cfg[k])).run();
+      }
+    }
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
 function getMimeType(filename) {
   const ext = (filename || '').split('.').pop().toLowerCase();
   const mimeTypes = {
@@ -2319,7 +2433,7 @@ function htmlPage(content, env, pageMode = 'public') {
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    html { scrollbar-gutter: stable; }
+    html { scrollbar-gutter: stable; max-width: 100vw; overflow-x: hidden; }
     body {
       font-family: var(--font);
       background-color: var(--bg);
@@ -2328,6 +2442,8 @@ function htmlPage(content, env, pageMode = 'public') {
                         radial-gradient(at 50% 100%, rgba(168, 85, 247, 0.1) 0px, transparent 50%);
       color: var(--text);
       min-height: 100vh;
+      max-width: 100vw;
+      overflow-x: hidden;
       display: flex;
       flex-direction: column;
       transition: background 0.25s, color 0.25s;
@@ -3592,12 +3708,17 @@ function htmlPage(content, env, pageMode = 'public') {
         padding: 0 8px !important;
         margin: 12px auto 28px !important;
         width: 100% !important;
+        max-width: 100% !important;
         box-sizing: border-box !important;
+        overflow: hidden !important;
       }
       .guest-main-card {
         padding: 18px 10px 16px !important;
         border-radius: 16px !important;
+        width: 100% !important;
+        max-width: 100% !important;
         box-sizing: border-box !important;
+        overflow: hidden !important;
       }
       .guest-folder-header, .guest-header-box {
         margin-bottom: 16px !important;
@@ -3615,15 +3736,22 @@ function htmlPage(content, env, pageMode = 'public') {
         font-size: 1.1rem !important;
       }
       .guest-table-box {
-        overflow-x: auto !important;
+        overflow-x: hidden !important;
         overflow-y: hidden !important;
-        -webkit-overflow-scrolling: touch !important;
         border-radius: 12px !important;
+        width: 100% !important;
+        max-width: 100% !important;
+        box-sizing: border-box !important;
       }
       .guest-table-header,
       .guest-file-list .file-row {
-        min-width: 520px !important;
-        grid-template-columns: 40px minmax(220px, 1fr) 90px 115px !important;
+        min-width: 0 !important;
+        width: 100% !important;
+        max-width: 100% !important;
+        box-sizing: border-box !important;
+        grid-template-columns: 28px minmax(0, 1fr) 58px 75px !important;
+        gap: 6px !important;
+        padding: 10px 8px !important;
       }
       .guest-table-box .col-size,
       .guest-table-box .file-size-cell {
@@ -3631,12 +3759,16 @@ function htmlPage(content, env, pageMode = 'public') {
         justify-content: flex-end !important;
         align-items: center !important;
         width: auto !important;
+        font-size: 0.72rem !important;
+        white-space: nowrap !important;
       }
       .guest-file-list {
         max-height: 60vh !important;
         overflow-y: auto !important;
-        overflow-x: visible !important;
+        overflow-x: hidden !important;
         -webkit-overflow-scrolling: touch !important;
+        width: 100% !important;
+        box-sizing: border-box !important;
       }
       
       .table-header { padding: 10px 12px; }
@@ -4012,6 +4144,22 @@ function htmlPage(content, env, pageMode = 'public') {
 .btn-bulk-copy-subtle:hover {
   background: rgba(255, 255, 255, 0.08);
   color: var(--text);
+}
+
+/* Switch Toggle Styles for Maintenance & Public Access */
+.switch-toggle input:checked + .slider-round { background-color: #10b981 !important; box-shadow: 0 0 10px rgba(16, 185, 129, 0.4); }
+.switch-toggle .slider-round:before {
+  position: absolute; content: ""; height: 18px; width: 18px; left: 4px; bottom: 4px;
+  background-color: white; transition: .25s ease; border-radius: 50%; box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+}
+.switch-toggle input:checked + .slider-round:before {
+  transform: translateX(22px);
+}
+.switch-toggle .slider-round.round-sm:before {
+  height: 16px; width: 16px; left: 3px; bottom: 3px;
+}
+.switch-toggle input:checked + .slider-round.round-sm:before {
+  transform: translateX(20px);
 }
 
 /* === ANIMATED BOTTOM-RIGHT TOAST (Screenshot 2 Style) === */
@@ -4459,7 +4607,7 @@ async function initAdminConsole() {
           const urlParams = new URLSearchParams(window.location.search);
           loadFolder(urlParams.get('p') || '', '');
         }
-        fetchFolderTree(); fetchAndRenderTasks();
+        fetchFolderTree(); fetchAndRenderTasks(); fetchPublicAccessStatus();
         return;
       }
     } catch(e) {}
@@ -4473,6 +4621,120 @@ async function initAdminConsole() {
   const oStep = document.getElementById('gateOtpStep');
   if (pStep) pStep.style.display = 'block';
   if (oStep) oStep.style.display = 'none';
+  fetchPublicAccessStatus();
+}
+
+// Public & Guest System Access Management
+let currentAccessConfig = { public_access: 'open', public_index: '1', guest_access: '1' };
+
+async function fetchPublicAccessStatus() {
+  try {
+    const res = await fetch('/api/admin/system-access');
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data && data.success) {
+      currentAccessConfig = {
+        public_access: data.public_access || 'open',
+        public_index: data.public_index || '1',
+        guest_access: data.guest_access || '1'
+      };
+      updatePublicAccessNavbarUI();
+    }
+  } catch (e) {}
+}
+
+function updatePublicAccessNavbarUI() {
+  const dot = document.getElementById('publicAccessDot');
+  const label = document.getElementById('publicAccessLabel');
+  const btn = document.getElementById('publicAccessToggleAdmin');
+  const isOpen = currentAccessConfig.public_access === 'open';
+  if (dot) {
+    dot.style.background = isOpen ? '#10b981' : '#ef4444';
+    dot.style.boxShadow = isOpen ? '0 0 8px #10b981' : '0 0 8px #ef4444';
+  }
+  if (label) {
+    label.textContent = isOpen ? 'Akses: Terbuka' : 'Akses: Ditutup';
+  }
+  if (btn) {
+    btn.style.borderColor = isOpen ? 'rgba(16,185,129,0.35)' : 'rgba(239,68,68,0.4)';
+    btn.title = isOpen ? 'Akses publik sedang aktif (klik untuk ubah)' : 'Mode Pemeliharaan aktif (klik untuk ubah)';
+  }
+}
+
+function openPublicAccessModal() {
+  const modal = document.getElementById('publicAccessModal');
+  const mToggle = document.getElementById('toggleMasterAccess');
+  const iToggle = document.getElementById('toggleIndexAccess');
+  const gToggle = document.getElementById('toggleGuestAccess');
+  
+  if (mToggle) mToggle.checked = (currentAccessConfig.public_access === 'open');
+  if (iToggle) iToggle.checked = (currentAccessConfig.public_index === '1');
+  if (gToggle) gToggle.checked = (currentAccessConfig.guest_access === '1');
+  
+  handleMasterAccessChange();
+  if (modal) modal.style.display = 'flex';
+}
+
+function closePublicAccessModal() {
+  const modal = document.getElementById('publicAccessModal');
+  if (modal) modal.style.display = 'none';
+}
+
+function handleMasterAccessChange() {
+  const mToggle = document.getElementById('toggleMasterAccess');
+  const gWrap = document.getElementById('granularAccessWrap');
+  const desc = document.getElementById('modalMasterStatusDesc');
+  const isOpen = mToggle ? mToggle.checked : true;
+  if (desc) {
+    desc.textContent = isOpen ? 'Akses publik & tamu terbuka aktif' : 'Semua akses publik & tamu ditutup (Mode Private/Maintenance)';
+    desc.style.color = isOpen ? '#10b981' : '#ef4444';
+  }
+  if (gWrap) {
+    gWrap.style.opacity = isOpen ? '1' : '0.4';
+    gWrap.style.pointerEvents = isOpen ? 'auto' : 'none';
+  }
+}
+
+async function savePublicAccessConfig() {
+  const btn = document.getElementById('btnSavePublicAccess');
+  const mToggle = document.getElementById('toggleMasterAccess');
+  const iToggle = document.getElementById('toggleIndexAccess');
+  const gToggle = document.getElementById('toggleGuestAccess');
+  const pin = localStorage.getItem('harudrive_admin_pin') || getCookie('harudrive_admin_pin') || '';
+
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Menyimpan...'; }
+
+  const payload = {
+    admin_pin: pin,
+    public_access: mToggle && mToggle.checked ? 'open' : 'closed',
+    public_index: iToggle && iToggle.checked ? '1' : '0',
+    guest_access: gToggle && gToggle.checked ? '1' : '0'
+  };
+
+  try {
+    const res = await fetch('/api/admin/system-access', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json().catch(function(){ return {}; });
+    if (res.ok && data.success) {
+      currentAccessConfig = {
+        public_access: payload.public_access,
+        public_index: payload.public_index,
+        guest_access: payload.guest_access
+      };
+      updatePublicAccessNavbarUI();
+      closePublicAccessModal();
+      showCopyToast('Status akses berhasil diperbarui: ' + (payload.public_access === 'open' ? 'Terbuka' : 'Mode Private / Maintenance'));
+    } else {
+      alert(data.error || 'Gagal menyimpan status akses.');
+    }
+  } catch (e) {
+    alert('Terjadi kesalahan jaringan saat menyimpan status akses.');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '💾 Simpan & Terapkan Status Akses'; }
+  }
 }
 
 // Navigation
@@ -5898,7 +6160,7 @@ async function extractSpecsAndMediaInfo(file) {
           let bdepth = bitDepth;
           if (v.bitDepth) {
             const bNum = String(v.bitDepth).replace(/[^0-9]/g, '');
-            bdepth = bNum ? bNum + '-bit' : '10-bit';
+            bdepth = (bNum === '10' || bNum === '12') ? bNum + '-bit' : '';
           }
           videoSpec = [resLabel, miHdr, fmt, bdepth].filter(Boolean).join(' ');
         }
@@ -6966,7 +7228,7 @@ function applyMediaInfoDataToForm(j) {
     fmt = formatCodec(v.format || '');
     if (v.bitDepth) {
       const bNum = String(v.bitDepth).replace(/[^0-9]/g, '');
-      bdepth = bNum ? bNum + '-bit' : '10-bit';
+      bdepth = (bNum === '10' || bNum === '12') ? bNum + '-bit' : '';
     }
   }
 
@@ -8105,7 +8367,7 @@ function parseMatroskaEBML(bytes, file) {
       if (id === null || size === null) break;
       const elEnd = pos + size;
       if (id === 0xAE) {
-        let track = { isDefault: false, isForced: false, width: 1920, height: 1080 };
+        let track = { isDefault: null, isForced: false, width: 1920, height: 1080 };
         while (pos < elEnd && pos < len) {
           const subId = readId(); const subSize = readSize();
           if (subId === null || subSize === null) break;
@@ -8148,14 +8410,28 @@ function parseMatroskaEBML(bytes, file) {
           } else { pos = subEnd; }
         }
         const cId = track.codecId || '';
+        let isDef = track.isDefault;
         if (track.type === 1) {
+          if (isDef === null) isDef = result.video.length === 0;
           let fmt = 'AVC', profile = 'High@L4.1';
           if (cId.includes('HEVC') || cId.includes('H265')) { fmt = 'HEVC'; profile = 'Main 10@L5@Main'; }
           else if (cId.includes('AV1')) { fmt = 'AV1'; profile = 'Main@L5.0'; }
           else if (cId.includes('VP9')) { fmt = 'VP9'; profile = 'Profile 0'; }
           else if (cId.includes('MPEG4') || cId.includes('AVC')) { fmt = 'AVC'; profile = 'High@L4.1'; }
-          result.video.push({ id: track.id || (result.video.length + 1), format: fmt, profile: profile, codecId: cId, width: track.width || 1920, height: track.height || 1080, aspect: (track.displayWidth && track.displayHeight) ? (track.displayWidth/track.displayHeight).toFixed(2) + ':1' : '16:9', frameRate: track.frameRate || '23.976 FPS', colorSpace: 'YUV', chroma: '4:2:0', bitDepth: track.bitDepth || '10 bits', language: track.language || 'Japanese', isDefault: track.isDefault, isForced: track.isForced });
+          let vBitDepth = track.bitDepth;
+          if (!vBitDepth) {
+            const rawName = ((file.name || '') + ' ' + (result.general.title || '')).toLowerCase();
+            if (rawName.includes('10bit') || rawName.includes('10-bit') || rawName.includes('hi10p')) {
+              vBitDepth = '10 bits';
+            } else if (fmt === 'HEVC' && profile.includes('10')) {
+              vBitDepth = '10 bits';
+            } else {
+              vBitDepth = '8 bits';
+            }
+          }
+          result.video.push({ id: track.id || (result.video.length + 1), format: fmt, profile: profile, codecId: cId, width: track.width || 1920, height: track.height || 1080, aspect: (track.displayWidth && track.displayHeight) ? (track.displayWidth/track.displayHeight).toFixed(2) + ':1' : '16:9', frameRate: track.frameRate || '23.976 FPS', colorSpace: 'YUV', chroma: '4:2:0', bitDepth: vBitDepth, language: track.language || 'Japanese', isDefault: isDef, isForced: track.isForced });
         } else if (track.type === 2) {
+          if (isDef === null) isDef = result.audio.length === 0;
           let fmt = 'AAC LC';
           if (cId.includes('FLAC')) fmt = 'FLAC';
           else if (cId.includes('OPUS')) fmt = 'Opus';
@@ -8163,13 +8439,14 @@ function parseMatroskaEBML(bytes, file) {
           else if (cId.includes('AC3')) fmt = 'AC-3';
           else if (cId.includes('DTS')) fmt = 'DTS';
           else if (cId.includes('TRUEHD')) fmt = 'TrueHD';
-          result.audio.push({ id: track.id || (result.audio.length + 1), format: fmt, codecId: cId, channels: track.channels || '2 channels (Stereo)', samplingRate: track.samplingRate || '48.0 kHz', title: track.title || track.language || 'Audio #' + (result.audio.length + 1), language: track.language || 'Indonesian', isDefault: track.isDefault, isForced: track.isForced });
+          result.audio.push({ id: track.id || (result.audio.length + 1), format: fmt, codecId: cId, channels: track.channels || '2 channels (Stereo)', samplingRate: track.samplingRate || '48.0 kHz', title: track.title || track.language || 'Audio #' + (result.audio.length + 1), language: track.language || 'Indonesian', isDefault: isDef, isForced: track.isForced });
         } else if (track.type === 17) {
+          if (isDef === null) isDef = false;
           let fmt = 'ASS';
           if (cId.includes('UTF8')) fmt = 'SubRip (SRT)';
           else if (cId.includes('PGS') || cId.includes('HDMV')) fmt = 'PGS';
           else if (cId.includes('VOBSUB')) fmt = 'VobSub';
-          result.text.push({ id: track.id || (result.text.length + 1), format: fmt, codecId: cId, title: track.title || track.language || 'Subtitle #' + (result.text.length + 1), language: track.language || 'Indonesian', isDefault: track.isDefault, isForced: track.isForced });
+          result.text.push({ id: track.id || (result.text.length + 1), format: fmt, codecId: cId, title: track.title || track.language || 'Subtitle #' + (result.text.length + 1), language: track.language || 'Indonesian', isDefault: isDef, isForced: track.isForced });
         }
       } else { pos = elEnd; }
     }
@@ -8198,6 +8475,12 @@ function parseMatroskaEBML(bytes, file) {
       }
       break;
     } else { pos = elEnd; }
+  }
+  if (result.video.length > 0 && !result.video.some(v => v.isDefault)) {
+    result.video[0].isDefault = true;
+  }
+  if (result.audio.length > 0 && !result.audio.some(a => a.isDefault)) {
+    result.audio[0].isDefault = true;
   }
   return result;
 }
@@ -8434,7 +8717,14 @@ function generateSmartInitialMediaInfo(file) {
   const sizeBytes = Number(file.size || 0);
   const sizeFormatted = formatBytes(sizeBytes);
   let vFormat = 'AVC'; let vFormatInfo = 'Advanced Video Codec'; let vProfile = 'High@L4.1'; let vCodecID = isMkv ? 'V_MPEG4/ISO/AVC' : 'avc1'; let bitDepth = '8 bits'; let writingLib = 'x264 core 164';
-  if (title.includes('hevc') || title.includes('x265') || title.includes('h.265') || title.includes('h265')) { vFormat = 'HEVC'; vFormatInfo = 'High Efficiency Video Coding'; vProfile = 'Main 10@L5@Main'; vCodecID = isMkv ? 'V_MPEGH/ISO/HEVC' : 'hvc1'; bitDepth = '10 bits'; writingLib = 'x265 3.5+19 10bit'; }
+  if (title.includes('hevc') || title.includes('x265') || title.includes('h.265') || title.includes('h265')) {
+    vFormat = 'HEVC'; vFormatInfo = 'High Efficiency Video Coding';
+    const is10 = title.includes('10bit') || title.includes('10-bit') || title.includes('hi10p') || title.includes('main10') || title.includes('main 10');
+    vProfile = is10 ? 'Main 10@L5@Main' : 'Main@L5@Main';
+    vCodecID = isMkv ? 'V_MPEGH/ISO/HEVC' : 'hvc1';
+    bitDepth = is10 ? '10 bits' : '8 bits';
+    writingLib = is10 ? 'x265 3.5+19 10bit' : 'x265 3.5+19 8bit';
+  }
   else if (title.includes('av1')) { vFormat = 'AV1'; vFormatInfo = 'AOMedia Video 1'; vProfile = 'Main@L5.0'; vCodecID = isMkv ? 'V_AV1' : 'av01'; writingLib = 'libsvtav1'; }
   else if (title.includes('vp9')) { vFormat = 'VP9'; vFormatInfo = 'Google VP9'; vProfile = 'Profile 0'; vCodecID = isMkv ? 'V_VP9' : 'vp09'; writingLib = 'libvpx-vp9'; }
   if (title.includes('10bit') || title.includes('10-bit') || title.includes('hi10p')) { bitDepth = '10 bits'; }
@@ -8564,19 +8854,58 @@ async function applyAndSavePastedMediaInfo() {
 </html>`;
 }
 
-function loginUI(errorMsg = '') {
+function privateModeUI(customMessage = '') {
+  const msg = customMessage || 'Layanan HaruDrive saat ini sedang dalam Mode Private / Pemeliharaan. Akses publik dan tautan unduhan dinonaktifkan sementara oleh pemilik sistem.';
+  return `
+  <div style="min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px;">
+    <div class="glass" style="max-width: 480px; width: 100%; padding: 40px 28px; border-radius: 24px; text-align: center; box-shadow: 0 20px 50px rgba(0,0,0,0.4); border: 1px solid var(--border);">
+      <div class="logo-glow-wrap" style="margin: 0 auto 16px; width: 64px; height: 64px; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.35); display: flex; align-items: center; justify-content: center; border-radius: 50%;">
+        <svg style="color: #ef4444; width: 32px; height: 32px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+          <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+        </svg>
+      </div>
+      <div style="display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.4); border-radius: 20px; font-size: 11px; font-weight: 700; color: #f87171; margin-bottom: 16px; letter-spacing: 0.5px;">
+        <span style="width: 6px; height: 6px; border-radius: 50%; background: #ef4444; display: inline-block;"></span>
+        MODE PRIVATE / PEMELIHARAAN
+      </div>
+      <h1 style="font-size: 1.5rem; font-weight: 800; margin-bottom: 10px; color: var(--text);">HaruDrive Sedang Ditutup</h1>
+      <p style="font-size: 0.88rem; color: var(--text-muted); line-height: 1.6; margin-bottom: 24px;">
+        ${escapeHtml(msg)}
+      </p>
+      
+      <div style="display: flex; flex-direction: column; gap: 10px;">
+        <a href="/admin" class="nav-btn" style="width: 100%; justify-content: center; padding: 12px; background: var(--accent-gradient); color: white; border: none; font-size: 0.92rem; font-weight: 700; border-radius: 12px; text-decoration: none; box-shadow: 0 4px 14px rgba(236,72,153,0.3); display: flex; align-items: center; gap: 8px;">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          Masuk ke Admin Console
+        </a>
+        <button onclick="window.location.reload()" class="nav-btn" style="width: 100%; justify-content: center; padding: 10px; background: rgba(255,255,255,0.05); color: var(--text-muted); border: 1px solid var(--border); font-size: 0.85rem; border-radius: 12px; cursor: pointer; display: flex; align-items: center; gap: 6px;">
+          <svg class="icon icon-xs" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+          Muat Ulang Halaman
+        </button>
+      </div>
+
+      <div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border); font-size: 0.75rem; color: var(--text-dim);">
+        HaruDrive Cloud Storage &bull; Hak Akses Dibatasi
+      </div>
+    </div>
+  </div>`;
+}
+
+function loginUI(errorMsg = '', redirect = '') {
   return `
   <div style="min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px;">
     <div class="glass" style="max-width: 400px; width: 100%; padding: 32px; border-radius: 24px; text-align: center; box-shadow: 0 20px 50px rgba(0,0,0,0.3);">
       <div class="logo-glow-wrap" style="margin: 0 auto 16px; width: 56px; height: 56px;">
-        <svg class="sakura-icon-svg" style="width: 32px; height: 32px;" viewBox="0 0 24 24"><path d="M12 2a4 4 0 0 0-3.5 6 4 4 0 0 0-6 3.5 4 4 0 0 0 3.5 6 4 4 0 0 0 6 3.5 4 4 0 0 0 6-3.5 4 4 0 0 0 3.5-6 4 4 0 0 0-3.5-6 4 4 0 0 0-6-3.5z"/><circle cx="12" cy="12" r="2.5" fill="#ffffff"/></svg>
+        <svg class="sakura-icon-svg" style="width: 32px; height: 32px;" viewBox="0 0 24 24"><path d="M12 2a4 4 0 0 0-3.5 6 4 4 0 0 0-6 3.5 4 4 0 0 0 3.5 6 4 4 0 0 0 6 3.5 4 4 0 0 0 3.5-6 4 4 0 0 0-3.5-6 4 4 0 0 0-6-3.5z"/><circle cx="12" cy="12" r="2.5" fill="#ffffff"/></svg>
       </div>
       <h2 style="font-size: 1.6rem; font-weight: 800; margin-bottom: 6px; background: var(--accent-gradient); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">HaruDrive</h2>
       <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 24px;">Masukkan password untuk mengakses storage cloud.</p>
       
       ${errorMsg ? `<div style="background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.4); color: #f87171; padding: 10px; border-radius: 10px; font-size: 0.85rem; margin-bottom: 18px;">${errorMsg}</div>` : ''}
 
-      <form method="POST" action="/login" style="display: flex; flex-direction: column; gap: 14px;">
+      <form method="POST" action="/login${redirect ? '?redirect=' + encodeURIComponent(redirect) : ''}" style="display: flex; flex-direction: column; gap: 14px;">
+        ${redirect ? `<input type="hidden" name="redirect" value="${escapeHtml(redirect)}">` : ''}
         <input type="password" name="password" placeholder="Password Akses..." required autofocus class="form-input-pro" style="padding: 12px 16px; font-size: 1rem; text-align: center;">
         <button type="submit" class="nav-btn" style="width: 100%; justify-content: center; padding: 12px; background: var(--accent-gradient); color: white; border: none; font-size: 0.95rem; font-weight: 700; border-radius: 12px;">Buka HaruDrive</button>
       </form>
@@ -8821,6 +9150,10 @@ function adminConsoleUI() {
         <button class="nav-btn" id="storageModeToggleAdmin" onclick="toggleStorageMode()" title="Saat ini: GDrive — klik untuk ganti ke HF" style="border-color: rgba(99,102,241,0.3);">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M12 2v8M12 14v8"/><path d="M4.93 10a5 5 0 0 1 6.07-6"/><path d="M19.07 14a5 5 0 0 1-6.07 6"/><circle cx="12" cy="12" r="3"/></svg>
           <span id="storageModeLabelAdmin">Mode: GDrive</span>
+        </button>
+        <button class="nav-btn" id="publicAccessToggleAdmin" onclick="openPublicAccessModal()" title="Pengaturan Akses Publik & Mode Maintenance" style="border-color: rgba(16,185,129,0.35);">
+          <span id="publicAccessDot" style="width: 8px; height: 8px; border-radius: 50%; background: #10b981; display: inline-block; box-shadow: 0 0 8px #10b981;"></span>
+          <span id="publicAccessLabel">Akses: Terbuka</span>
         </button>
         <a href="/" class="nav-btn" title="Kembali ke Web Publik">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
@@ -9480,6 +9813,82 @@ function adminConsoleUI() {
         </div>
       </div>
     </div>
+  </div>
+
+  <!-- MODAL: PENGATURAN AKSES PUBLIK & MAINTENANCE -->
+  <div class="modal-backdrop" id="publicAccessModal" style="display: none;" onclick="if(event.target===this)closePublicAccessModal()">
+    <div class="modal-card glass" style="max-width: 480px; width: 100%; padding: 24px; border-radius: 20px; border: 1px solid var(--border); box-shadow: 0 20px 50px rgba(0,0,0,0.5);">
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px;">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <div style="width: 36px; height: 36px; border-radius: 10px; background: rgba(236,72,153,0.15); display: flex; align-items: center; justify-content: center; color: var(--primary);">
+            <svg class="icon icon-sm" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          </div>
+          <div>
+            <h3 style="font-size: 1.05rem; font-weight: 700; color: var(--text);">Akses Publik & Pemeliharaan</h3>
+            <p style="font-size: 0.76rem; color: var(--text-muted);">Kontrol izin akses untuk pengunjung dan tamu</p>
+          </div>
+        </div>
+        <button onclick="closePublicAccessModal()" style="background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 1.3rem; padding: 4px; line-height: 1;">&times;</button>
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 14px;">
+        <!-- MASTER TOGGLE CARD -->
+        <div style="padding: 14px; border-radius: 14px; background: rgba(255,255,255,0.03); border: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between;">
+          <div>
+            <div style="font-weight: 700; font-size: 0.9rem; color: var(--text);">Master Akses Publik</div>
+            <div style="font-size: 0.76rem; color: var(--text-muted);" id="modalMasterStatusDesc">Mengontrol seluruh akses publik & tamu sekaligus</div>
+          </div>
+          <label class="switch-toggle" style="position: relative; display: inline-block; width: 48px; height: 26px; margin: 0;">
+            <input type="checkbox" id="toggleMasterAccess" style="opacity: 0; width: 0; height: 0;" onchange="handleMasterAccessChange()">
+            <span class="slider-round" style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #374151; transition: .3s; border-radius: 26px;"></span>
+          </label>
+        </div>
+
+        <!-- GRANULAR CONTROLS -->
+        <div id="granularAccessWrap" style="display: flex; flex-direction: column; gap: 10px;">
+          <!-- Index Toggle -->
+          <div style="padding: 12px 14px; border-radius: 12px; background: rgba(255,255,255,0.02); border: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between;">
+            <div>
+              <div style="font-weight: 600; font-size: 0.84rem; color: var(--text);">🌐 Halaman Indeks Utama (/)</div>
+              <div style="font-size: 0.74rem; color: var(--text-muted);">Izinkan publik melihat beranda file/folder</div>
+            </div>
+            <label class="switch-toggle" style="position: relative; display: inline-block; width: 42px; height: 22px; margin: 0;">
+              <input type="checkbox" id="toggleIndexAccess" style="opacity: 0; width: 0; height: 0;">
+              <span class="slider-round round-sm" style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #374151; transition: .3s; border-radius: 22px;"></span>
+            </label>
+          </div>
+
+          <!-- Guest Links Toggle -->
+          <div style="padding: 12px 14px; border-radius: 12px; background: rgba(255,255,255,0.02); border: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between;">
+            <div>
+              <div style="font-weight: 600; font-size: 0.84rem; color: var(--text);">📁 Tautan Tamu & Download (/folder/, /d/)</div>
+              <div style="font-size: 0.74rem; color: var(--text-muted);">Izinkan tamu membuka tautan share & mendownload</div>
+            </div>
+            <label class="switch-toggle" style="position: relative; display: inline-block; width: 42px; height: 22px; margin: 0;">
+              <input type="checkbox" id="toggleGuestAccess" style="opacity: 0; width: 0; height: 0;">
+              <span class="slider-round round-sm" style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #374151; transition: .3s; border-radius: 22px;"></span>
+            </label>
+          </div>
+        </div>
+
+        <!-- INFO BANNER -->
+        <div style="padding: 10px 12px; border-radius: 10px; background: rgba(99,102,241,0.1); border: 1px solid rgba(99,102,241,0.25); font-size: 0.76rem; color: #a5b4fc; line-height: 1.5;">
+          💡 <strong>Akses Admin Bebas:</strong> Sebagai admin yang login, Anda tetap bisa masuk langsung melalui link <code>/admin</code> kapan saja tanpa terpengaruh pembatasan.
+        </div>
+
+        <!-- SAVE BUTTON -->
+        <button id="btnSavePublicAccess" onclick="savePublicAccessConfig()" class="nav-btn" style="width: 100%; justify-content: center; padding: 11px; background: var(--accent-gradient); color: white; border: none; font-size: 0.9rem; font-weight: 700; border-radius: 12px; cursor: pointer; margin-top: 4px;">
+          💾 Simpan & Terapkan Status Akses
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toastCopiedBadge" class="toast-copied-badge">
+    <div class="toast-check-icon">
+      <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
+    </div>
+    <span id="toastCopiedText">Link copied</span>
   </div>
   `;
 }
