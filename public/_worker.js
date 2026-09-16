@@ -248,42 +248,53 @@ export default {
 
     // Gatekeeper: Admin routes and static assets are ALWAYS accessible
     if (!isAdminRoute && !isPublicStatic) {
+      const isGuestReq = url.pathname.startsWith('/folder/') || url.pathname.startsWith('/file/') || url.pathname.startsWith('/d/') || url.pathname.startsWith('/raw/') || (url.pathname === '/' && url.searchParams.has('p'));
+
       // 1. MASTER SWITCH: When closed, shut down everything public (index + guest links + public APIs)
       if (accessConfig.public_access === 'closed') {
+        // Authenticated admin can ALWAYS use APIs in admin console (/api/list, /api/bandwidth, etc.)
         if (url.pathname.startsWith('/api/')) {
-          return new Response(JSON.stringify({ error: 'HaruDrive is currently in maintenance mode' }), {
-            status: 503,
-            headers: { 'Content-Type': 'application/json' }
+          if (!isLoggedIn) {
+            return new Response(JSON.stringify({ error: 'HaruDrive is currently in maintenance mode' }), {
+              status: 503,
+              headers: { 'Content-Type': 'application/json' }
+            });
+          }
+        } else {
+          // Web pages: render maintenance page (hide admin button for guests)
+          const mText = isGuestReq
+            ? 'Tautan berkas atau folder ini sedang dinonaktifkan sementara oleh pemilik sistem.'
+            : 'Layanan penyimpanan HaruDrive saat ini sedang dalam Mode Private / Pemeliharaan. Akses publik dan unduhan dinonaktifkan sementara oleh pemilik sistem.';
+          return new Response(htmlPage(privateModeUI(mText, isLoggedIn, isGuestReq), env, 'public'), {
+            status: 200,
+            headers: { 'Content-Type': 'text/html;charset=UTF-8' }
           });
         }
-        return new Response(htmlPage(privateModeUI('Layanan penyimpanan HaruDrive saat ini sedang dalam Mode Private / Pemeliharaan. Akses publik dan unduhan dinonaktifkan sementara oleh pemilik sistem.', isLoggedIn), env, 'public'), {
-          status: 200,
-          headers: { 'Content-Type': 'text/html;charset=UTF-8' }
-        });
       }
 
       // 2. PUBLIC INDEX SWITCH: When off ('0'), shut down root index (/)
       const isRootIndex = url.pathname === '/' && !url.searchParams.has('p');
       if (accessConfig.public_index === '0' && isRootIndex) {
-        return new Response(htmlPage(privateModeUI('Halaman indeks utama HaruDrive saat ini sedang dinonaktifkan untuk umum.', isLoggedIn), env, 'public'), {
+        return new Response(htmlPage(privateModeUI('Halaman indeks utama HaruDrive saat ini sedang dinonaktifkan untuk umum.', isLoggedIn, false), env, 'public'), {
           status: 200,
           headers: { 'Content-Type': 'text/html;charset=UTF-8' }
         });
       }
 
       // 3. GUEST LINKS SWITCH: When off ('0'), shut down shared links (/folder/, /file/, /?p=..., /d/, /raw/)
-      const isGuestLink = (url.pathname === '/' && url.searchParams.has('p')) || url.pathname.startsWith('/folder/') || url.pathname.startsWith('/file/') || url.pathname.startsWith('/d/') || url.pathname.startsWith('/raw/');
-      if (accessConfig.guest_access === '0' && isGuestLink) {
-        if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/d/') || url.pathname.startsWith('/raw/')) {
-          return new Response(JSON.stringify({ error: 'Guest access is currently disabled' }), {
-            status: 403,
-            headers: { 'Content-Type': 'application/json' }
+      if (accessConfig.guest_access === '0' && isGuestReq) {
+        if (!isLoggedIn) {
+          if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/d/') || url.pathname.startsWith('/raw/')) {
+            return new Response(JSON.stringify({ error: 'Guest access is currently disabled' }), {
+              status: 403,
+              headers: { 'Content-Type': 'application/json' }
+            });
+          }
+          return new Response(htmlPage(privateModeUI('Tautan folder dan unduhan tamu sedang dinonaktifkan sementara.', isLoggedIn, true), env, 'public'), {
+            status: 200,
+            headers: { 'Content-Type': 'text/html;charset=UTF-8' }
           });
         }
-        return new Response(htmlPage(privateModeUI('Tautan folder dan unduhan tamu sedang dinonaktifkan sementara.', isLoggedIn), env, 'public'), {
-          status: 200,
-          headers: { 'Content-Type': 'text/html;charset=UTF-8' }
-        });
       }
     }
 
@@ -8967,7 +8978,7 @@ async function applyAndSavePastedMediaInfo() {
 </html>`;
 }
 
-function privateModeUI(customMessage = '', isAdmin = false) {
+function privateModeUI(customMessage = '', isAdmin = false, isGuest = false) {
   const msg = customMessage || 'Layanan HaruDrive saat ini sedang dalam Mode Private / Pemeliharaan. Akses publik dan tautan unduhan dinonaktifkan sementara oleh pemilik sistem.';
   return `
   <div style="min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px;">
@@ -8995,10 +9006,11 @@ function privateModeUI(customMessage = '', isAdmin = false) {
       </p>
       
       <div style="display: flex; flex-direction: column; gap: 10px;">
+        ${!isGuest ? `
         <a href="/admin" class="nav-btn" style="width: 100%; justify-content: center; padding: 12px; background: var(--accent-gradient); color: white; border: none; font-size: 0.92rem; font-weight: 700; border-radius: 12px; text-decoration: none; box-shadow: 0 4px 14px rgba(236,72,153,0.3); display: flex; align-items: center; gap: 8px;">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
           Masuk ke Admin Console
-        </a>
+        </a>` : ''}
         <button onclick="window.location.reload()" class="nav-btn" style="width: 100%; justify-content: center; padding: 10px; background: rgba(255,255,255,0.05); color: var(--text-muted); border: 1px solid var(--border); font-size: 0.85rem; border-radius: 12px; cursor: pointer; display: flex; align-items: center; gap: 6px;">
           <svg class="icon icon-xs" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
           Muat Ulang Halaman
