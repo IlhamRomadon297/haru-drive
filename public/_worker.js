@@ -1,3 +1,7 @@
+function safeEscapeHtml(str) {
+  return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -239,54 +243,53 @@ export default {
     const accessConfig = await getPublicAccessConfig(env);
 
     // If access is closed or restricted, enforce on non-admin visitors
-    if (!isLoggedIn) {
-      const isPublicStatic = url.pathname.startsWith('/static/') || url.pathname.endsWith('.ico') || url.pathname.endsWith('.png');
-      const isAdminRoute = url.pathname === '/admin' || url.pathname === '/login' || url.pathname === '/logout' || url.pathname.startsWith('/api/admin/');
+    const isPublicStatic = url.pathname.startsWith('/static/') || url.pathname.endsWith('.ico') || url.pathname.endsWith('.png');
+    const isAdminRoute = url.pathname === '/admin' || url.pathname === '/login' || url.pathname === '/logout' || url.pathname.startsWith('/api/admin/');
 
-      if (!isAdminRoute && !isPublicStatic) {
-        // Master Public Access Switch
-        if (accessConfig.public_access === 'closed') {
-          if (url.pathname.startsWith('/api/')) {
-            return new Response(JSON.stringify({ error: 'HaruDrive is currently in maintenance mode' }), {
-              status: 503,
-              headers: { 'Content-Type': 'application/json' }
-            });
-          }
-          return new Response(htmlPage(privateModeUI('Layanan penyimpanan HaruDrive saat ini sedang dalam Mode Private / Pemeliharaan. Akses publik dan unduhan dinonaktifkan sementara oleh pemilik sistem.'), env, 'public'), {
-            status: 200,
-            headers: { 'Content-Type': 'text/html;charset=UTF-8' }
+    // Gatekeeper: Admin routes and static assets are ALWAYS accessible
+    if (!isAdminRoute && !isPublicStatic) {
+      // 1. MASTER SWITCH: When closed, shut down everything public (index + guest links + public APIs)
+      if (accessConfig.public_access === 'closed') {
+        if (url.pathname.startsWith('/api/')) {
+          return new Response(JSON.stringify({ error: 'HaruDrive is currently in maintenance mode' }), {
+            status: 503,
+            headers: { 'Content-Type': 'application/json' }
           });
         }
+        return new Response(htmlPage(privateModeUI('Layanan penyimpanan HaruDrive saat ini sedang dalam Mode Private / Pemeliharaan. Akses publik dan unduhan dinonaktifkan sementara oleh pemilik sistem.', isLoggedIn), env, 'public'), {
+          status: 200,
+          headers: { 'Content-Type': 'text/html;charset=UTF-8' }
+        });
+      }
 
-        // Granular Switch 1: Public Index (Root)
-        const isRootIndex = url.pathname === '/' && !url.searchParams.has('p');
-        if (accessConfig.public_index === '0' && isRootIndex) {
-          return new Response(htmlPage(privateModeUI('Halaman indeks utama HaruDrive saat ini sedang dinonaktifkan untuk umum.'), env, 'public'), {
-            status: 200,
-            headers: { 'Content-Type': 'text/html;charset=UTF-8' }
+      // 2. PUBLIC INDEX SWITCH: When off ('0'), shut down root index (/)
+      const isRootIndex = url.pathname === '/' && !url.searchParams.has('p');
+      if (accessConfig.public_index === '0' && isRootIndex) {
+        return new Response(htmlPage(privateModeUI('Halaman indeks utama HaruDrive saat ini sedang dinonaktifkan untuk umum.', isLoggedIn), env, 'public'), {
+          status: 200,
+          headers: { 'Content-Type': 'text/html;charset=UTF-8' }
+        });
+      }
+
+      // 3. GUEST LINKS SWITCH: When off ('0'), shut down shared links (/folder/, /file/, /?p=..., /d/, /raw/)
+      const isGuestLink = (url.pathname === '/' && url.searchParams.has('p')) || url.pathname.startsWith('/folder/') || url.pathname.startsWith('/file/') || url.pathname.startsWith('/d/') || url.pathname.startsWith('/raw/');
+      if (accessConfig.guest_access === '0' && isGuestLink) {
+        if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/d/') || url.pathname.startsWith('/raw/')) {
+          return new Response(JSON.stringify({ error: 'Guest access is currently disabled' }), {
+            status: 403,
+            headers: { 'Content-Type': 'application/json' }
           });
         }
-
-        // Granular Switch 2: Guest Access (Shared folders / files / downloads)
-        const isGuestLink = (url.pathname === '/' && url.searchParams.has('p')) || url.pathname.startsWith('/folder/') || url.pathname.startsWith('/file/') || url.pathname.startsWith('/d/') || url.pathname.startsWith('/raw/');
-        if (accessConfig.guest_access === '0' && isGuestLink) {
-          if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/d/') || url.pathname.startsWith('/raw/')) {
-            return new Response(JSON.stringify({ error: 'Guest access is currently disabled' }), {
-              status: 403,
-              headers: { 'Content-Type': 'application/json' }
-            });
-          }
-          return new Response(htmlPage(privateModeUI('Tautan folder dan unduhan tamu sedang dinonaktifkan sementara.'), env, 'public'), {
-            status: 200,
-            headers: { 'Content-Type': 'text/html;charset=UTF-8' }
-          });
-        }
+        return new Response(htmlPage(privateModeUI('Tautan folder dan unduhan tamu sedang dinonaktifkan sementara.', isLoggedIn), env, 'public'), {
+          status: 200,
+          headers: { 'Content-Type': 'text/html;charset=UTF-8' }
+        });
       }
     }
 
     // ---- PUBLIC / GUEST ROUTES (no login): shared-folder links + read-only APIs ----
     const isPublicGet = (request.method === 'GET' || request.method === 'HEAD') && (
-      (url.pathname === '/' && url.searchParams.has('p')) ||
+      url.pathname === '/' ||
       url.pathname === '/api/list' ||
       url.pathname === '/api/folders' ||
       url.pathname === '/api/search' ||
@@ -8854,11 +8857,18 @@ async function applyAndSavePastedMediaInfo() {
 </html>`;
 }
 
-function privateModeUI(customMessage = '') {
+function privateModeUI(customMessage = '', isAdmin = false) {
   const msg = customMessage || 'Layanan HaruDrive saat ini sedang dalam Mode Private / Pemeliharaan. Akses publik dan tautan unduhan dinonaktifkan sementara oleh pemilik sistem.';
   return `
   <div style="min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px;">
     <div class="glass" style="max-width: 480px; width: 100%; padding: 40px 28px; border-radius: 24px; text-align: center; box-shadow: 0 20px 50px rgba(0,0,0,0.4); border: 1px solid var(--border);">
+      
+      ${isAdmin ? `
+      <div style="background: rgba(168,85,247,0.15); border: 1px solid rgba(168,85,247,0.4); color: #c4b5fd; padding: 10px 14px; border-radius: 12px; font-size: 0.8rem; margin-bottom: 20px; display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+        <span>👑 <strong>Mode Admin:</strong> Halaman publik ini sedang ditutup.</span>
+        <a href="/admin" style="color: #38bdf8; font-weight: 700; text-decoration: underline; white-space: nowrap;">Ke Admin Console &rarr;</a>
+      </div>` : ''}
+
       <div class="logo-glow-wrap" style="margin: 0 auto 16px; width: 64px; height: 64px; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.35); display: flex; align-items: center; justify-content: center; border-radius: 50%;">
         <svg style="color: #ef4444; width: 32px; height: 32px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
@@ -8871,7 +8881,7 @@ function privateModeUI(customMessage = '') {
       </div>
       <h1 style="font-size: 1.5rem; font-weight: 800; margin-bottom: 10px; color: var(--text);">HaruDrive Sedang Ditutup</h1>
       <p style="font-size: 0.88rem; color: var(--text-muted); line-height: 1.6; margin-bottom: 24px;">
-        ${escapeHtml(msg)}
+        ${safeEscapeHtml(msg)}
       </p>
       
       <div style="display: flex; flex-direction: column; gap: 10px;">
@@ -8905,7 +8915,7 @@ function loginUI(errorMsg = '', redirect = '') {
       ${errorMsg ? `<div style="background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.4); color: #f87171; padding: 10px; border-radius: 10px; font-size: 0.85rem; margin-bottom: 18px;">${errorMsg}</div>` : ''}
 
       <form method="POST" action="/login${redirect ? '?redirect=' + encodeURIComponent(redirect) : ''}" style="display: flex; flex-direction: column; gap: 14px;">
-        ${redirect ? `<input type="hidden" name="redirect" value="${escapeHtml(redirect)}">` : ''}
+        ${redirect ? `<input type="hidden" name="redirect" value="${safeEscapeHtml(redirect)}">` : ''}
         <input type="password" name="password" placeholder="Password Akses..." required autofocus class="form-input-pro" style="padding: 12px 16px; font-size: 1rem; text-align: center;">
         <button type="submit" class="nav-btn" style="width: 100%; justify-content: center; padding: 12px; background: var(--accent-gradient); color: white; border: none; font-size: 0.95rem; font-weight: 700; border-radius: 12px;">Buka HaruDrive</button>
       </form>
