@@ -7086,11 +7086,11 @@ async function getOrScanMediaInfoForFile(fileOrUrl) {
       let j = d.mediainfo_json;
       if (typeof j === 'string') { try { j = JSON.parse(j); } catch(e){} }
       let raw = d.mediainfo_raw || d.raw || '';
-      if (j && (j.video?.length || j.audio?.length)) {
+      if (j && (j.video?.length || j.audio?.length) && (j._v >= 2 || j._pasted)) {
         if (!raw) raw = buildMediaInfoRawText(j);
         if (typeof mediaInfoMemoryCache !== 'undefined') mediaInfoMemoryCache.set(fileObj.id, j);
         return { json: j, raw: raw, file: fileObj };
-      } else if (raw) {
+      } else if (raw && j && (j._v >= 2 || j._pasted)) {
         return { json: j || generateSmartInitialMediaInfo(fileObj), raw: raw, file: fileObj };
       }
     }
@@ -8364,6 +8364,7 @@ function parseMatroskaEBML(bytes, file) {
     video: [], audio: [], text: [], attachments: [], menus: []
   };
   const LANG_MAP = { ind: 'Indonesian', id: 'Indonesian', in: 'Indonesian', jpn: 'Japanese', ja: 'Japanese', eng: 'English', en: 'English', fre: 'French', fra: 'French', fr: 'French', ger: 'German', deu: 'German', de: 'German', ita: 'Italian', it: 'Italian', spa: 'Spanish', es: 'Spanish', por: 'Portuguese', pt: 'Portuguese', rus: 'Russian', ru: 'Russian', ara: 'Arabic', ar: 'Arabic', chi: 'Chinese', zho: 'Chinese', zh: 'Chinese', kor: 'Korean', ko: 'Korean', tha: 'Thai', th: 'Thai', vie: 'Vietnamese', vi: 'Vietnamese', und: 'Undetermined' };
+
   function parseTracksElement(endPos) {
     while (pos < endPos && pos < len) {
       const id = readId(); const size = readSize();
@@ -8383,6 +8384,7 @@ function parseMatroskaEBML(bytes, file) {
           else if (subId === 0x536E) track.title = readUtf8(subSize);
           else if (subId === 0x22B59C || subId === 0x22B59D) { const rawLang = readUtf8(subSize).toLowerCase(); track.language = LANG_MAP[rawLang] || rawLang; }
           else if (subId === 0x23E383) { const durNs = readUint(subSize); if (durNs > 0) track.frameRate = (1000000000 / durNs).toFixed(3) + ' FPS'; }
+          else if (subId === 0x63A2) { track.codecPrivate = bytes.slice(pos, subEnd); pos = subEnd; }
           else if (subId === 0xE0) {
             while (pos < subEnd && pos < len) {
               const vid = readId(); const vsize = readSize();
@@ -8396,45 +8398,89 @@ function parseMatroskaEBML(bytes, file) {
                 while (pos < vEnd && pos < len) {
                   const cid = readId(); const csize = readSize();
                   if (cid === null || csize === null) break;
+                  const cEnd = pos + csize;
                   if (cid === 0x55B2) track.bitDepth = readUint(csize) + ' bits';
-                  else pos += csize;
+                  else pos = cEnd;
                 }
-              } else pos = vEnd;
+              }
+              pos = vEnd;
             }
+            pos = subEnd;
           } else if (subId === 0xE1) {
             while (pos < subEnd && pos < len) {
               const aid = readId(); const asize = readSize();
               if (aid === null || asize === null) break;
+              const aEnd = pos + asize;
               if (aid === 0xB5) track.samplingRate = (readFloat(asize) / 1000).toFixed(1) + ' kHz';
               else if (aid === 0x9F) { const ch = readUint(asize); track.channels = ch === 1 ? '1 channel (Mono)' : ch === 2 ? '2 channels (Stereo)' : ch === 6 ? '6 channels (5.1 Surround)' : ch + ' channels'; }
               else if (aid === 0x6264) track.bitDepth = readUint(asize) + ' bits';
-              else pos += asize;
+              pos = aEnd;
             }
+            pos = subEnd;
           } else { pos = subEnd; }
         }
         const cId = track.codecId || '';
-        let isDef = track.isDefault;
         if (track.type === 1) {
-          if (isDef === null) isDef = result.video.length === 0;
           let fmt = 'AVC', profile = 'High@L4.1';
-          if (cId.includes('HEVC') || cId.includes('H265')) { fmt = 'HEVC'; profile = 'Main 10@L5@Main'; }
-          else if (cId.includes('AV1')) { fmt = 'AV1'; profile = 'Main@L5.0'; }
-          else if (cId.includes('VP9')) { fmt = 'VP9'; profile = 'Profile 0'; }
-          else if (cId.includes('MPEG4') || cId.includes('AVC')) { fmt = 'AVC'; profile = 'High@L4.1'; }
+          if (cId.includes('HEVC') || cId.includes('H265')) {
+            fmt = 'HEVC'; profile = 'Main 10@L5@Main';
+            if (track.codecPrivate && track.codecPrivate.length >= 2) {
+              const cp = track.codecPrivate;
+              const profIdc = cp[1] & 0x1F;
+              if (profIdc === 2) { profile = 'Main 10@L5@Main'; track.bitDepth = '10 bits'; }
+              else if (profIdc === 1) { profile = 'Main@L5@Main'; track.bitDepth = '8 bits'; }
+              if (cp.length > 13) {
+                const bd = (cp[13] & 0x07) + 8;
+                if (bd === 10 || bd === 12 || bd === 8) {
+                  track.bitDepth = bd + ' bits';
+                  if (bd === 10 && !profile.includes('10')) profile = 'Main 10@L5@Main';
+                }
+              }
+            }
+          } else if (cId.includes('AV1')) {
+            fmt = 'AV1'; profile = 'Main@L4.0';
+            if (track.codecPrivate && track.codecPrivate.length >= 3) {
+              const cp = track.codecPrivate;
+              const profId = (cp[1] >> 5) & 7;
+              const profName = profId === 0 ? 'Main' : profId === 1 ? 'High' : profId === 2 ? 'Professional' : 'Main';
+              const lvlIdx = cp[1] & 0x1F;
+              const majorLvl = (lvlIdx >> 2) + 2;
+              const minorLvl = lvlIdx & 3;
+              profile = profName + '@L' + majorLvl + '.' + minorLvl;
+              const highBd = (cp[2] >> 6) & 1;
+              const twelveBit = (cp[2] >> 5) & 1;
+              track.bitDepth = twelveBit ? '12 bits' : (highBd ? '10 bits' : '8 bits');
+            }
+          } else if (cId.includes('VP9')) { fmt = 'VP9'; profile = 'Profile 0'; }
+          else if (cId.includes('MPEG4') || cId.includes('AVC')) {
+            fmt = 'AVC'; profile = 'High@L4.1';
+            if (track.codecPrivate && track.codecPrivate.length >= 4) {
+              const cp = track.codecPrivate;
+              if (cp[1] === 110) { profile = 'High 10@L4.1'; track.bitDepth = '10 bits'; }
+              else if (cp[1] === 100) { profile = 'High@L4.1'; track.bitDepth = '8 bits'; }
+            }
+          }
           let vBitDepth = track.bitDepth;
           if (!vBitDepth) {
             const rawName = ((file.name || '') + ' ' + (result.general.title || '')).toLowerCase();
-            if (rawName.includes('10bit') || rawName.includes('10-bit') || rawName.includes('hi10p')) {
+            if (rawName.includes('10bit') || rawName.includes('10-bit') || rawName.includes('hi10p') || rawName.includes('main10') || rawName.includes('main 10')) {
               vBitDepth = '10 bits';
             } else if (fmt === 'HEVC' && profile.includes('10')) {
               vBitDepth = '10 bits';
+            } else if (fmt === 'AV1') {
+              vBitDepth = rawName.includes('8bit') ? '8 bits' : '10 bits';
             } else {
               vBitDepth = '8 bits';
             }
           }
-          result.video.push({ id: track.id || (result.video.length + 1), format: fmt, profile: profile, codecId: cId, width: track.width || 1920, height: track.height || 1080, aspect: (track.displayWidth && track.displayHeight) ? (track.displayWidth/track.displayHeight).toFixed(2) + ':1' : '16:9', frameRate: track.frameRate || '23.976 FPS', colorSpace: 'YUV', chroma: '4:2:0', bitDepth: vBitDepth, language: track.language || 'Japanese', isDefault: isDef, isForced: track.isForced });
+          result.video.push({
+            id: track.id || (result.video.length + 1), format: fmt, profile: profile, codecId: cId,
+            width: track.width || 1920, height: track.height || 1080,
+            aspect: (track.displayWidth && track.displayHeight) ? (track.displayWidth/track.displayHeight).toFixed(2) + ':1' : '16:9',
+            frameRate: track.frameRate || '23.976 FPS', colorSpace: 'YUV', chroma: '4:2:0', bitDepth: vBitDepth,
+            language: track.language || 'Japanese', rawIsDefault: track.isDefault, isDefault: false, isForced: track.isForced
+          });
         } else if (track.type === 2) {
-          if (isDef === null) isDef = result.audio.length === 0;
           let fmt = 'AAC LC';
           if (cId.includes('FLAC')) fmt = 'FLAC';
           else if (cId.includes('OPUS')) fmt = 'Opus';
@@ -8442,18 +8488,27 @@ function parseMatroskaEBML(bytes, file) {
           else if (cId.includes('AC3')) fmt = 'AC-3';
           else if (cId.includes('DTS')) fmt = 'DTS';
           else if (cId.includes('TRUEHD')) fmt = 'TrueHD';
-          result.audio.push({ id: track.id || (result.audio.length + 1), format: fmt, codecId: cId, channels: track.channels || '2 channels (Stereo)', samplingRate: track.samplingRate || '48.0 kHz', title: track.title || track.language || 'Audio #' + (result.audio.length + 1), language: track.language || 'Indonesian', isDefault: isDef, isForced: track.isForced });
+          result.audio.push({
+            id: track.id || (result.audio.length + 1), format: fmt, codecId: cId,
+            channels: track.channels || '2 channels (Stereo)', samplingRate: track.samplingRate || '48.0 kHz',
+            title: track.title || track.language || 'Audio #' + (result.audio.length + 1),
+            language: track.language || 'Indonesian', rawIsDefault: track.isDefault, isDefault: false, isForced: track.isForced
+          });
         } else if (track.type === 17) {
-          if (isDef === null) isDef = false;
           let fmt = 'ASS';
           if (cId.includes('UTF8')) fmt = 'SubRip (SRT)';
           else if (cId.includes('PGS') || cId.includes('HDMV')) fmt = 'PGS';
           else if (cId.includes('VOBSUB')) fmt = 'VobSub';
-          result.text.push({ id: track.id || (result.text.length + 1), format: fmt, codecId: cId, title: track.title || track.language || 'Subtitle #' + (result.text.length + 1), language: track.language || 'Indonesian', isDefault: isDef, isForced: track.isForced });
+          result.text.push({
+            id: track.id || (result.text.length + 1), format: fmt, codecId: cId,
+            title: track.title || track.language || 'Subtitle #' + (result.text.length + 1),
+            language: track.language || 'Indonesian', rawIsDefault: track.isDefault, isDefault: false, isForced: track.isForced
+          });
         }
       } else { pos = elEnd; }
     }
   }
+
   while (pos < len) {
     const id = readId(); const size = readSize();
     if (id === null || size === null) break;
@@ -8479,12 +8534,59 @@ function parseMatroskaEBML(bytes, file) {
       break;
     } else { pos = elEnd; }
   }
-  if (result.video.length > 0 && !result.video.some(v => v.isDefault)) {
-    result.video[0].isDefault = true;
+
+  // Resolve Video Default
+  if (result.video.length > 0) {
+    const defV = result.video.find(v => v.rawIsDefault === true);
+    if (defV) {
+      result.video.forEach(v => { v.isDefault = (v === defV); });
+    } else {
+      result.video[0].isDefault = true;
+    }
   }
-  if (result.audio.length > 0 && !result.audio.some(a => a.isDefault)) {
-    result.audio[0].isDefault = true;
+
+  // Resolve Audio Default
+  if (result.audio.length > 0) {
+    const defA = result.audio.find(a => a.rawIsDefault === true);
+    if (defA) {
+      result.audio.forEach(a => { a.isDefault = (a === defA); });
+    } else {
+      const nullA = result.audio.filter(a => a.rawIsDefault === null);
+      if (nullA.length === 1 && result.audio.some(a => a.rawIsDefault === false)) {
+        result.audio.forEach(a => { a.isDefault = (a === nullA[0]); });
+      } else {
+        result.audio[0].isDefault = true;
+      }
+    }
   }
+
+  // Resolve Text / Subtitle Default
+  if (result.text.length > 0) {
+    const defT = result.text.find(t => t.rawIsDefault === true);
+    if (defT) {
+      result.text.forEach(t => { t.isDefault = (t === defT); });
+    } else {
+      const nullT = result.text.filter(t => t.rawIsDefault === null);
+      const falseT = result.text.filter(t => t.rawIsDefault === false);
+      if (nullT.length === 1 && falseT.length > 0) {
+        result.text.forEach(t => { t.isDefault = (t === nullT[0]); });
+      } else {
+        const indoT = result.text.find(t => t.rawIsDefault !== false && (
+          (t.language && t.language.toLowerCase().includes('ind')) ||
+          (t.title && (t.title.toLowerCase().includes('indonesia') || t.title.toLowerCase().includes('bahasa')))
+        ));
+        if (indoT) {
+          result.text.forEach(t => { t.isDefault = (t === indoT); });
+        } else if (result.text.length === 1 && result.text[0].rawIsDefault !== false) {
+          result.text[0].isDefault = true;
+        } else {
+          result.text.forEach(t => { t.isDefault = false; });
+        }
+      }
+    }
+  }
+
+  result._v = 2;
   return result;
 }
 function parseMp4Boxes(bytes, file) {
@@ -8579,7 +8681,7 @@ function parseMp4Boxes(bytes, file) {
     }
     pos += boxSize;
   }
-  if (result.video.length || result.audio.length) return result;
+  if (result.video.length || result.audio.length) { result._v = 2; return result; }
   return null;
 }
 function buildMediaInfoRawText(data) {
@@ -8728,7 +8830,13 @@ function generateSmartInitialMediaInfo(file) {
     bitDepth = is10 ? '10 bits' : '8 bits';
     writingLib = is10 ? 'x265 3.5+19 10bit' : 'x265 3.5+19 8bit';
   }
-  else if (title.includes('av1')) { vFormat = 'AV1'; vFormatInfo = 'AOMedia Video 1'; vProfile = 'Main@L5.0'; vCodecID = isMkv ? 'V_AV1' : 'av01'; writingLib = 'libsvtav1'; }
+  else if (title.includes('av1')) {
+    vFormat = 'AV1'; vFormatInfo = 'AOMedia Video 1';
+    vProfile = 'Main@L4.0';
+    vCodecID = isMkv ? 'V_AV1' : 'av01';
+    bitDepth = (title.includes('8bit') || title.includes('8-bit')) ? '8 bits' : '10 bits';
+    writingLib = 'libsvtav1';
+  }
   else if (title.includes('vp9')) { vFormat = 'VP9'; vFormatInfo = 'Google VP9'; vProfile = 'Profile 0'; vCodecID = isMkv ? 'V_VP9' : 'vp09'; writingLib = 'libvpx-vp9'; }
   if (title.includes('10bit') || title.includes('10-bit') || title.includes('hi10p')) { bitDepth = '10 bits'; }
   let width = 1920, height = 1080;
@@ -8752,8 +8860,10 @@ async function startBinaryMediaInfoScan(force) {
   // Layer 1: RAM cache
   if (!force && mediaInfoMemoryCache.has(scanTargetId)) {
     const cached = mediaInfoMemoryCache.get(scanTargetId);
-    if (activeMediaInfoFileId === scanTargetId) { renderMediaInfoCards(cached); if (scanBadge) { scanBadge.style.background='rgba(16,185,129,0.15)'; scanBadge.style.color='#6ee7b7'; scanBadge.textContent='Cached'; } }
-    return;
+    if (cached && (cached._v >= 2 || cached._pasted)) {
+      if (activeMediaInfoFileId === scanTargetId) { renderMediaInfoCards(cached); if (scanBadge) { scanBadge.style.background='rgba(16,185,129,0.15)'; scanBadge.style.color='#6ee7b7'; scanBadge.textContent='Cached'; } }
+      return;
+    }
   }
   // Layer 2: D1 cache
   if (!force) {
@@ -8764,7 +8874,7 @@ async function startBinaryMediaInfoScan(force) {
         if (j.cached && j.mediainfo_json) {
           let parsed = j.mediainfo_json;
           if (typeof parsed === 'string') { try { parsed = JSON.parse(parsed); } catch(e) {} }
-          if (parsed && (parsed.video || parsed.audio)) {
+          if (parsed && (parsed.video || parsed.audio) && (parsed._v >= 2 || parsed._pasted)) {
             mediaInfoMemoryCache.set(scanTargetId, parsed);
             if (activeMediaInfoFileId === scanTargetId) { renderMediaInfoCards(parsed); if (scanBadge) { scanBadge.style.background='rgba(16,185,129,0.15)'; scanBadge.style.color='#6ee7b7'; scanBadge.textContent='D1 Cached'; } }
             return;
@@ -9890,6 +10000,25 @@ function adminConsoleUI() {
         <button id="btnSavePublicAccess" onclick="savePublicAccessConfig()" class="nav-btn" style="width: 100%; justify-content: center; padding: 11px; background: var(--accent-gradient); color: white; border: none; font-size: 0.9rem; font-weight: 700; border-radius: 12px; cursor: pointer; margin-top: 4px;">
           💾 Simpan & Terapkan Status Akses
         </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- THEATER PLYR VIDEO MODAL -->
+  <div id="videoModal" class="modal-backdrop" style="display: none;" onclick="if(event.target===this)closeVideoModal()">
+    <div class="modal-card video-card">
+      <div class="modal-header">
+        <span class="modal-title" id="videoModalTitle">Video Player</span>
+        <button class="btn-close-circle" onclick="closeVideoModal()">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="video-container-wrap">
+        <video id="plyrPlayer" playsinline controls></video>
+      </div>
+      <div class="modal-body" style="padding: 12px 18px 14px;">
+        <div style="font-size: 0.72rem; font-weight: 700; color: var(--text-dim); text-transform: uppercase; margin-bottom: 6px;">Buka di External Player:</div>
+        <div class="external-players-row" id="externalPlayersContainer"></div>
       </div>
     </div>
   </div>
