@@ -246,30 +246,26 @@ export default {
     const isPublicStatic = url.pathname.startsWith('/static/') || url.pathname.endsWith('.ico') || url.pathname.endsWith('.png');
     const isAdminRoute = url.pathname === '/admin' || url.pathname === '/login' || url.pathname === '/logout' || url.pathname.startsWith('/api/admin/');
 
-    // Gatekeeper: Admin routes and static assets are ALWAYS accessible
-    if (!isAdminRoute && !isPublicStatic) {
+    // Gatekeeper: Admin routes, static assets, and logged-in admins ALWAYS bypass maintenance restrictions
+    if (!isLoggedIn && !isAdminRoute && !isPublicStatic) {
       const isGuestReq = url.pathname.startsWith('/folder/') || url.pathname.startsWith('/file/') || url.pathname.startsWith('/d/') || url.pathname.startsWith('/raw/') || (url.pathname === '/' && url.searchParams.has('p'));
 
       // 1. MASTER SWITCH: When closed, shut down everything public (index + guest links + public APIs)
       if (accessConfig.public_access === 'closed') {
-        // Authenticated admin can ALWAYS use APIs in admin console (/api/list, /api/bandwidth, etc.)
-        if (url.pathname.startsWith('/api/')) {
-          if (!isLoggedIn) {
-            return new Response(JSON.stringify({ error: 'HaruDrive is currently in maintenance mode' }), {
-              status: 503,
-              headers: { 'Content-Type': 'application/json' }
-            });
-          }
-        } else {
-          // Web pages: render maintenance page (hide admin button for guests)
-          const mText = isGuestReq
-            ? 'Tautan berkas atau folder ini sedang dinonaktifkan sementara oleh pemilik sistem.'
-            : 'Layanan penyimpanan HaruDrive saat ini sedang dalam Mode Private / Pemeliharaan. Akses publik dan unduhan dinonaktifkan sementara oleh pemilik sistem.';
-          return new Response(htmlPage(privateModeUI(mText, isLoggedIn, isGuestReq), env, 'public'), {
-            status: 200,
-            headers: { 'Content-Type': 'text/html;charset=UTF-8' }
+        if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/d/') || url.pathname.startsWith('/raw/')) {
+          return new Response(JSON.stringify({ error: 'HaruDrive is currently in maintenance mode' }), {
+            status: 503,
+            headers: { 'Content-Type': 'application/json' }
           });
         }
+        // Web pages: render maintenance page (hide admin button for guests)
+        const mText = isGuestReq
+          ? 'Tautan berkas atau folder ini sedang dinonaktifkan sementara oleh pemilik sistem.'
+          : 'Layanan penyimpanan HaruDrive saat ini sedang dalam Mode Private / Pemeliharaan. Akses publik dan unduhan dinonaktifkan sementara oleh pemilik sistem.';
+        return new Response(htmlPage(privateModeUI(mText, isLoggedIn, isGuestReq), env, 'public'), {
+          status: 200,
+          headers: { 'Content-Type': 'text/html;charset=UTF-8' }
+        });
       }
 
       // 2. PUBLIC INDEX SWITCH: When off ('0'), shut down root index (/)
@@ -462,16 +458,42 @@ export default {
             } catch(e) {}
           }
           const gFiles = await listGDriveFolder(realGFolderId, env);
-          // Generate shortIds for GDrive files/folders to hide real Drive IDs (fallback to real ID if D1 write limit hit)
+          // Generate shortIds for GDrive files/folders (smart check to avoid redundant D1 writes)
           const gFormatted = [];
+          const toInsertG = [];
+          const existingGShorts = new Set();
+          if (env.harudrive_db && gFiles.length > 0) {
+            try {
+              const gShortList = await Promise.all(gFiles.map(async f => {
+                try { return await generateShortId('gdrive:' + f.id); } catch(e) { return f.id; }
+              }));
+              const placeholders = gShortList.map(() => '?').join(',');
+              if (placeholders) {
+                const foundRows = await env.harudrive_db.prepare(`SELECT short_id FROM shortlinks WHERE short_id IN (${placeholders})`).bind(...gShortList).all().catch(() => null);
+                if (foundRows && foundRows.results) {
+                  for (const r of foundRows.results) existingGShorts.add(r.short_id);
+                }
+              }
+            } catch(e) {}
+          }
           for (const f of gFiles) {
             let shortId;
             try { shortId = await generateShortId('gdrive:' + f.id); } catch(e) { shortId = f.id; }
             const fType = f.mimeType === 'application/vnd.google-apps.folder' ? 'folder' : 'file';
-            let useShortId = true;
-            try { await env.harudrive_db.prepare('INSERT OR REPLACE INTO shortlinks (short_id, file_path, name, type, size) VALUES (?, ?, ?, ?, ?)').bind(shortId, f.id, f.name, fType, f.size).run(); } catch(e) { useShortId = false; }
-            const finalId = useShortId ? shortId : f.id;
-            gFormatted.push({ id: finalId, path: finalId, name: f.name, mimeType: f.mimeType, size: f.size, modifiedTime: f.modifiedTime });
+            if (env.harudrive_db && !existingGShorts.has(shortId)) {
+              toInsertG.push({ shortId, id: f.id, name: f.name, fType, size: f.size });
+            }
+            gFormatted.push({ id: shortId, path: shortId, name: f.name, mimeType: f.mimeType, size: f.size, modifiedTime: f.modifiedTime });
+          }
+          if (env.harudrive_db && toInsertG.length > 0) {
+            try {
+              const gBatch = toInsertG.map(item =>
+                env.harudrive_db.prepare('INSERT OR REPLACE INTO shortlinks (short_id, file_path, name, type, size) VALUES (?, ?, ?, ?, ?)').bind(item.shortId, item.id, item.name, item.fType, item.size)
+              );
+              for (let i = 0; i < gBatch.length; i += 50) {
+                await env.harudrive_db.batch(gBatch.slice(i, i + 50));
+              }
+            } catch(e) {}
           }
           gFormatted.sort((a,b) => {
             const aIsDir = a.mimeType === 'application/vnd.google-apps.folder';
@@ -525,12 +547,6 @@ export default {
               recFiles += 1;
             }
           }
-          if (env.harudrive_db && recSize > 0) {
-            try {
-              await env.harudrive_db.prepare('CREATE TABLE IF NOT EXISTS folder_sizes (path TEXT PRIMARY KEY, size INTEGER, files INTEGER)').run();
-              await env.harudrive_db.prepare('INSERT OR REPLACE INTO folder_sizes (path, size, files) VALUES (?, ?, ?)').bind(reqPath, recSize, recFiles).run();
-            } catch(e) {}
-          }
           return new Response(JSON.stringify({ folderName, currentPath: reqPath, folderStats: { fileCount: recFiles, fileSize: recSize } }), {
             headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
           });
@@ -564,22 +580,6 @@ export default {
           if (!aIsDir && bIsDir) return 1;
           return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
         });
-
-        if (env.harudrive_db && formattedFiles.length > 0) {
-          try {
-            const stmt = env.harudrive_db.prepare(
-              'INSERT OR REPLACE INTO shortlinks (short_id, file_path, name, type, size) VALUES (?, ?, ?, ?, ?)'
-            );
-            const batch = formattedFiles.map(f =>
-              stmt.bind(f.id, f.path, f.name, f.mimeType === 'application/vnd.google-apps.folder' ? 'folder' : 'file', f.size)
-            );
-            for (let i = 0; i < batch.length; i += 100) {
-              await env.harudrive_db.batch(batch.slice(i, i + 100));
-            }
-          } catch (e) {
-            console.error('D1 Batch error:', e);
-          }
-        }
 
         let currentFolderId = '';
         if (reqPath) {
@@ -767,9 +767,6 @@ export default {
     // API: MediaInfo (4-layer cache)
     if (url.pathname === '/api/mediainfo') {
       try {
-        if (env.harudrive_db) {
-          await env.harudrive_db.prepare('CREATE TABLE IF NOT EXISTS mediainfo_cache (path TEXT PRIMARY KEY, raw TEXT, json TEXT, updated INTEGER)').run().catch(() => {});
-        }
         if (request.method === 'GET') {
           const qPath = (url.searchParams.get('path') || '').replace(/^\/+|\/+$/g, '');
           const qId = (url.searchParams.get('id') || '').replace(/^\/+|\/+$/g, '');
@@ -807,6 +804,7 @@ export default {
           const j = body.mediainfo_json || body.json || null;
           const jStr = j ? (typeof j === 'string' ? j : JSON.stringify(j)) : null;
           if (env.harudrive_db) {
+            await env.harudrive_db.prepare('CREATE TABLE IF NOT EXISTS mediainfo_cache (path TEXT PRIMARY KEY, raw TEXT, json TEXT, updated INTEGER)').run().catch(() => {});
             await env.harudrive_db.prepare('INSERT OR REPLACE INTO mediainfo_cache (path, raw, json, updated) VALUES (?, ?, ?, ?)').bind(p, raw, jStr, Date.now()).run().catch(() => {});
           }
           return new Response(JSON.stringify({ success: true }), { headers: { 'Content-Type': 'application/json' } });
@@ -2098,8 +2096,19 @@ export default {
         try {
           const metaRes = await fetch(`https://www.googleapis.com/drive/v3/files/${effectiveGDriveId}?fields=name,size&supportsAllDrives=true`, { headers: { 'Authorization': `Bearer ${gToken}` } });
           if (metaRes.ok) { const meta = await metaRes.json(); if (meta.name) gFileName = meta.name; 
-            // Track bandwidth for GDrive (best-effort)
-            try { const sz = parseInt(meta.size || '0', 10); if (sz > 0 && env.harudrive_db) { await env.harudrive_db.prepare('INSERT INTO bandwidth_stats (mode, bytes, requests, updated) VALUES (?, ?, 1, ?) ON CONFLICT(mode) DO UPDATE SET bytes = bytes + ?, requests = requests + 1, updated = ?').bind('gdrive', sz, Date.now(), sz, Date.now()).run().catch(()=>{}); } } catch(e) {}
+            // Track bandwidth for GDrive (only on download or initial stream start, non-blocking via ctx.waitUntil)
+            const gRange = request.headers.get('Range');
+            if (isDownload || !gRange || gRange.startsWith('bytes=0-')) {
+              try {
+                const sz = parseInt(meta.size || '0', 10);
+                if (sz > 0 && env.harudrive_db) {
+                  ctx.waitUntil(
+                    env.harudrive_db.prepare('INSERT INTO bandwidth_stats (mode, bytes, requests, updated) VALUES (?, ?, 1, ?) ON CONFLICT(mode) DO UPDATE SET bytes = bytes + ?, requests = requests + 1, updated = ?')
+                      .bind('gdrive', sz, Date.now(), sz, Date.now()).run().catch(() => {})
+                  );
+                }
+              } catch(e) {}
+            }
           }
         } catch(e) {}
         const gSafeName = encodeURIComponent(gFileName);
@@ -2141,8 +2150,18 @@ export default {
         return new Response(`File Not Found on Storage (${hfRes.status})`, { status: hfRes.status });
       }
 
-      // Track bandwidth for HF (best-effort, ignore if D1 limit hit)
-      try { const cLen = parseInt(hfRes.headers.get('Content-Length') || '0', 10) || parseInt(hfRes.headers.get('Content-Range')?.split('/')?.pop() || '0', 10) || 0; if (cLen > 0 && env.harudrive_db) { await env.harudrive_db.prepare('INSERT INTO bandwidth_stats (mode, bytes, requests, updated) VALUES (?, ?, 1, ?) ON CONFLICT(mode) DO UPDATE SET bytes = bytes + ?, requests = requests + 1, updated = ?').bind('hf', cLen, Date.now(), cLen, Date.now()).run().catch(()=>{}); } } catch(e) {}
+      // Track bandwidth for HF (only on download or initial stream start, non-blocking via ctx.waitUntil)
+      if (isDownload || !range || range.startsWith('bytes=0-')) {
+        try {
+          const cLen = parseInt(hfRes.headers.get('Content-Length') || '0', 10) || parseInt(hfRes.headers.get('Content-Range')?.split('/')?.pop() || '0', 10) || 0;
+          if (cLen > 0 && env.harudrive_db) {
+            ctx.waitUntil(
+              env.harudrive_db.prepare('INSERT INTO bandwidth_stats (mode, bytes, requests, updated) VALUES (?, ?, 1, ?) ON CONFLICT(mode) DO UPDATE SET bytes = bytes + ?, requests = requests + 1, updated = ?')
+                .bind('hf', cLen, Date.now(), cLen, Date.now()).run().catch(() => {})
+            );
+          }
+        } catch(e) {}
+      }
       const respHeaders = new Headers(hfRes.headers);
       const mime = getMimeType(fileName);
       respHeaders.set('Content-Type', mime);
@@ -2197,10 +2216,41 @@ async function syncIndex(env) {
   const hfHeaders = { 'User-Agent': 'HaruDrive/1.0' };
   if (token) hfHeaders['Authorization'] = `Bearer ${token}`;
 
+  // 1. Fetch existing shortlinks into memory for smart-diffing (guarantees permanent IDs and 0 writes on unchanged files)
+  const existingMap = new Map();
+  try {
+    const existingRes = await env.harudrive_db.prepare(
+      'SELECT short_id, file_path, name, size FROM shortlinks'
+    ).all();
+    if (existingRes && existingRes.results) {
+      for (const r of existingRes.results) {
+        if (r.file_path) {
+          existingMap.set(r.file_path, {
+            short_id: r.short_id,
+            name: r.name,
+            size: r.size || 0
+          });
+        }
+      }
+    }
+  } catch (e) {}
+
+  // 2. Fetch existing folder_sizes into memory
+  const existingFolderSizes = new Map();
+  try {
+    const fsRes = await env.harudrive_db.prepare('SELECT path, size, files FROM folder_sizes').all();
+    if (fsRes && fsRes.results) {
+      for (const r of fsRes.results) {
+        existingFolderSizes.set(r.path, { size: r.size || 0, files: r.files || 0 });
+      }
+    }
+  } catch (e) {}
+
   let items = 0;
   const MAX_ITEMS = 4000;
   const seen = new Set();
   const dirStats = new Map();
+  const toUpsertFiles = [];
   let nextUrl = `https://huggingface.co/api/datasets/${repoId}/tree/main?recursive=true`;
 
   while (nextUrl && items < MAX_ITEMS) {
@@ -2218,16 +2268,12 @@ async function syncIndex(env) {
       if (seen.has(path)) continue;
       seen.add(path);
 
-      const shortId = await generateShortId(path);
       const filename = path.split('/').pop();
       const fileSize = item.size || 0;
-      await env.harudrive_db.prepare(
-        'INSERT OR REPLACE INTO shortlinks (short_id, file_path, name, type, size) VALUES (?, ?, ?, ?, ?)'
-      ).bind(shortId, path, filename, 'file', fileSize).run();
       items++;
       if (items >= MAX_ITEMS) break;
 
-      // Accumulate recursive size / file count per ancestor folder.
+      // Accumulate recursive size / file count per ancestor folder
       const parts = path.split('/');
       for (let i = 1; i < parts.length; i++) {
         const dir = parts.slice(0, i).join('/');
@@ -2236,6 +2282,16 @@ async function syncIndex(env) {
         st.files += 1;
         dirStats.set(dir, st);
       }
+
+      // Smart Diff Check: If file exists and size & name match, KEEP original short_id and SKIP write!
+      const existing = existingMap.get(path);
+      if (existing && existing.size === fileSize && existing.name === filename) {
+        continue;
+      }
+
+      // New file or modified size/name: reuse existing short_id if available to guarantee permanent ID
+      const shortId = existing ? existing.short_id : await generateShortId(path);
+      toUpsertFiles.push({ shortId, path, filename, type: 'file', size: fileSize });
     }
 
     const linkHeader = hfRes.headers.get('Link') || '';
@@ -2243,19 +2299,78 @@ async function syncIndex(env) {
     nextUrl = m ? (m[1].startsWith('http') ? m[1] : 'https://huggingface.co' + m[1]) : '';
   }
 
-  if (dirStats.size > 0) {
-    await env.harudrive_db.prepare('CREATE TABLE IF NOT EXISTS folder_sizes (path TEXT PRIMARY KEY, size INTEGER, files INTEGER)').run();
-    const upsert = env.harudrive_db.prepare('INSERT OR REPLACE INTO folder_sizes (path, size, files) VALUES (?, ?, ?)');
-    for (const [dir, st] of dirStats) {
-      await upsert.bind(dir, st.size, st.files).run();
+  // Check for deleted HF files (files in D1 that no longer exist in HF)
+  const toDeleteShortIds = [];
+  for (const [existingPath, existing] of existingMap) {
+    // Only delete HF files (path has '/' and is not a pure Google Drive ID or gdrive: prefix)
+    if (!existingPath.startsWith('gdrive:') && !/^[a-zA-Z0-9_-]{25,50}$/.test(existingPath) && !seen.has(existingPath)) {
+      toDeleteShortIds.push(existing.short_id);
     }
   }
-  return { items, truncated: items >= MAX_ITEMS };
+
+  // Folder sizes smart diffing:
+  const toUpsertFolders = [];
+  for (const [dir, st] of dirStats) {
+    const existing = existingFolderSizes.get(dir);
+    if (!existing || existing.size !== st.size || existing.files !== st.files) {
+      toUpsertFolders.push({ path: dir, size: st.size, files: st.files });
+    }
+  }
+
+  const toDeleteFolders = [];
+  for (const [existingDir] of existingFolderSizes) {
+    if (!dirStats.has(existingDir)) {
+      toDeleteFolders.push(existingDir);
+    }
+  }
+
+  // Batch execute only if changes are detected (0 writes if dataset is identical!)
+  const hasChanges = toUpsertFiles.length > 0 || toDeleteShortIds.length > 0 || toUpsertFolders.length > 0 || toDeleteFolders.length > 0;
+  if (hasChanges) {
+    try {
+      await env.harudrive_db.prepare('CREATE TABLE IF NOT EXISTS shortlinks (short_id TEXT PRIMARY KEY, file_path TEXT, name TEXT, type TEXT, size INTEGER)').run().catch(() => {});
+      await env.harudrive_db.prepare('CREATE TABLE IF NOT EXISTS folder_sizes (path TEXT PRIMARY KEY, size INTEGER, files INTEGER)').run().catch(() => {});
+
+      const batch = [];
+      const upsertShortStmt = env.harudrive_db.prepare(
+        'INSERT OR REPLACE INTO shortlinks (short_id, file_path, name, type, size) VALUES (?, ?, ?, ?, ?)'
+      );
+      for (const f of toUpsertFiles) {
+        batch.push(upsertShortStmt.bind(f.shortId, f.path, f.filename, f.type, f.size));
+      }
+
+      const delShortStmt = env.harudrive_db.prepare('DELETE FROM shortlinks WHERE short_id = ?');
+      for (const sId of toDeleteShortIds) {
+        batch.push(delShortStmt.bind(sId));
+      }
+
+      const upsertFolderStmt = env.harudrive_db.prepare(
+        'INSERT OR REPLACE INTO folder_sizes (path, size, files) VALUES (?, ?, ?)'
+      );
+      for (const fld of toUpsertFolders) {
+        batch.push(upsertFolderStmt.bind(fld.path, fld.size, fld.files));
+      }
+
+      const delFolderStmt = env.harudrive_db.prepare('DELETE FROM folder_sizes WHERE path = ?');
+      for (const dDir of toDeleteFolders) {
+        batch.push(delFolderStmt.bind(dDir));
+      }
+
+      for (let i = 0; i < batch.length; i += 100) {
+        await env.harudrive_db.batch(batch.slice(i, i + 100));
+      }
+    } catch (e) {
+      console.error('syncIndex batch error:', e);
+    }
+  }
+
+  return { items, truncated: items >= MAX_ITEMS, changedFiles: toUpsertFiles.length, deletedFiles: toDeleteShortIds.length };
 }
 
 async function recordLastSync(env) {
   try {
-    await env.harudrive_db.prepare('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)').run();
+    if (!env.harudrive_db) return;
+    await env.harudrive_db.prepare('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)').run().catch(() => {});
     await env.harudrive_db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('last_sync', ?)").bind(String(Date.now())).run();
   } catch (e) {}
 }
@@ -2264,18 +2379,28 @@ async function maybeAutoSync(env) {
   try {
     if (!env.harudrive_db) return;
     const now = Date.now();
-    await env.harudrive_db.prepare('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)').run();
-    // Serialize: only one background sync at a time (prevents D1 write contention).
-    const lockRow = await env.harudrive_db.prepare("SELECT value FROM meta WHERE key = 'sync_lock'").first();
-    if (lockRow && (now - parseInt(lockRow.value || '0', 10) < 2 * 60 * 1000)) return;
-    const lastRow = await env.harudrive_db.prepare("SELECT value FROM meta WHERE key = 'last_sync'").first();
-    if (lastRow && (now - parseInt(lastRow.value || '0', 10) < 55 * 60 * 1000)) return;
+    // Pure SELECT read without writing CREATE TABLE on hot path
+    const rows = await env.harudrive_db.prepare("SELECT key, value FROM meta WHERE key IN ('sync_lock', 'last_sync')").all().catch(() => ({ results: [] }));
+    const metaMap = new Map();
+    if (rows && rows.results) {
+      for (const r of rows.results) metaMap.set(r.key, r.value);
+    }
+    const lockVal = metaMap.get('sync_lock');
+    // If sync is already currently running within the last 5 minutes, skip
+    if (lockVal && (now - parseInt(lockVal, 10) < 5 * 60 * 1000)) return;
+
+    const lastVal = metaMap.get('last_sync');
+    // Auto sync every 30 minutes (30 * 60 * 1000)
+    if (lastVal && (now - parseInt(lastVal, 10) < 30 * 60 * 1000)) return;
+
+    // Acquire lock (only 1 write every 30 minutes)
+    await env.harudrive_db.prepare('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)').run().catch(() => {});
     await env.harudrive_db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('sync_lock', ?)").bind(String(now)).run();
     try {
       await syncIndex(env);
       await env.harudrive_db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('last_sync', ?)").bind(String(Date.now())).run();
     } finally {
-      await env.harudrive_db.prepare("DELETE FROM meta WHERE key = 'sync_lock'").run();
+      await env.harudrive_db.prepare("DELETE FROM meta WHERE key = 'sync_lock'").run().catch(() => {});
     }
   } catch (e) {}
 }
@@ -2296,7 +2421,7 @@ async function getPublicAccessConfig(env) {
   const def = { public_access: 'open', public_index: '1', guest_access: '1' };
   if (!env || !env.harudrive_db) return def;
   try {
-    await env.harudrive_db.prepare('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)').run().catch(() => {});
+    // Pure SELECT read without executing CREATE TABLE on every HTTP request
     const rows = await env.harudrive_db.prepare("SELECT key, value FROM meta WHERE key IN ('public_access', 'public_index', 'guest_access')").all().catch(() => ({ results: [] }));
     if (rows && rows.results) {
       for (const r of rows.results) {
