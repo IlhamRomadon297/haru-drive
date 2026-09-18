@@ -2,6 +2,10 @@ function safeEscapeHtml(str) {
   return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
 }
 
+function isPureGDriveId(s) {
+  return typeof s === 'string' && /^[a-zA-Z0-9_-]{25,50}$/.test(s) && !/\.[a-zA-Z0-9]{2,5}$/i.test(s) && !s.includes('/') && !s.includes(' ');
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -227,7 +231,9 @@ export default {
           const updated = {
             public_access: body.public_access === 'closed' ? 'closed' : 'open',
             public_index: body.public_index === '0' ? '0' : '1',
-            guest_access: body.guest_access === '0' ? '0' : '1'
+            guest_access: body.guest_access === '0' ? '0' : '1',
+            storage_gdrive: body.storage_gdrive === '0' ? '0' : '1',
+            storage_hf: body.storage_hf === '0' ? '0' : '1'
           };
           await setPublicAccessConfig(env, updated);
           return new Response(JSON.stringify({ success: true, ...updated }), {
@@ -428,23 +434,65 @@ export default {
       try {
         const listMode = url.searchParams.get('mode') || request.headers.get('X-Storage-Mode') || '';
         const rawListId = url.searchParams.get('id') || '';
-        // Shared links carry no mode: resolve the id first, then route by content type.
-        // HF shortIds map to paths containing '/'; Drive shortIds map to Drive IDs (no slash).
+        const rawListPath = (url.searchParams.get('path') || '').replace(/^\/+|\/+$/g, '');
+        let reqPath = rawListPath;
         let listIdIsHf = false, listIdIsDrive = false, listResolvedDriveId = '';
+
         if (rawListId && env.harudrive_db) {
           try {
-            const chk = await env.harudrive_db.prepare('SELECT file_path FROM shortlinks WHERE short_id = ?').bind(rawListId).first();
+            const chk = await env.harudrive_db.prepare('SELECT file_path, name, type FROM shortlinks WHERE short_id = ?').bind(rawListId).first();
             if (chk && chk.file_path) {
-              if (chk.file_path.indexOf('/') !== -1) listIdIsHf = true;
-              else if (chk.file_path.length > 20) { listIdIsDrive = true; listResolvedDriveId = chk.file_path; }
-            } else if (rawListId.length > 20) { listIdIsDrive = true; listResolvedDriveId = rawListId; }
-          } catch(e) {
-            if (rawListId.length > 20) { listIdIsDrive = true; listResolvedDriveId = rawListId; }
-          }
-        } else if (rawListId && rawListId.length > 20) { listIdIsDrive = true; listResolvedDriveId = rawListId; }
+              if (isPureGDriveId(chk.file_path)) {
+                listIdIsDrive = true;
+                listResolvedDriveId = chk.file_path;
+              } else {
+                listIdIsHf = true;
+                reqPath = chk.file_path.replace(/^\/+|\/+$/g, '');
+              }
+            } else if (isPureGDriveId(rawListId)) {
+              listIdIsDrive = true;
+              listResolvedDriveId = rawListId;
+            }
+          } catch(e) {}
+        } else if (rawListId && isPureGDriveId(rawListId)) {
+          listIdIsDrive = true;
+          listResolvedDriveId = rawListId;
+        }
 
-        if ((listMode === 'gdrive' && !listIdIsHf) || (listIdIsDrive && listMode !== 'hf')) {
-          let realGFolderId = listResolvedDriveId || url.searchParams.get('path') || '';
+        // Zero-Leak Guard: If an explicit folder ID was requested but cannot be resolved, return 404 (NEVER leak root!)
+        if (rawListId && !listResolvedDriveId && !reqPath) {
+          return new Response(JSON.stringify({ error: 'Folder tidak ditemukan atau tautan telah kedaluwarsa.', files: [] }), {
+            status: 404,
+            headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+          });
+        }
+
+        // Determine effective storage mode with administrator restrictions
+        let effectiveMode = 'hf';
+        if (listIdIsDrive || (listMode === 'gdrive' && !listIdIsHf)) {
+          effectiveMode = 'gdrive';
+        } else if (listIdIsHf || listMode === 'hf') {
+          effectiveMode = 'hf';
+        } else {
+          if (accessConfig.storage_gdrive === '1' && accessConfig.storage_hf === '0') effectiveMode = 'gdrive';
+          else effectiveMode = 'hf';
+        }
+
+        if (effectiveMode === 'gdrive' && accessConfig.storage_gdrive === '0') {
+          return new Response(JSON.stringify({ error: 'Penyimpanan Google Drive dinonaktifkan oleh administrator.', files: [] }), {
+            status: 403,
+            headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+          });
+        }
+        if (effectiveMode === 'hf' && accessConfig.storage_hf === '0') {
+          return new Response(JSON.stringify({ error: 'Penyimpanan Hugging Face dinonaktifkan oleh administrator.', files: [] }), {
+            status: 403,
+            headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+          });
+        }
+
+        if (effectiveMode === 'gdrive') {
+          let realGFolderId = listResolvedDriveId || rawListPath || '';
           if (!realGFolderId) realGFolderId = GDRIVE_ROOT_ID;
           let folderDisplayName = 'GDrive';
           let displayPath = '';
@@ -503,16 +551,7 @@ export default {
             return a.name.localeCompare(b.name, undefined, { numeric: true });
           });
           // For folder sizes in GDrive, we can compute directly from the listed files (not recursive via D1)
-          return new Response(JSON.stringify({ folderName: folderDisplayName, currentPath: displayPath, folderId: realGFolderId, files: gFormatted, folderStats: { fileCount: gFiles.filter(f => f.mimeType !== 'application/vnd.google-apps.folder').length, fileSize: gFiles.filter(f => f.mimeType !== 'application/vnd.google-apps.folder').reduce((s,f)=>s+f.size,0) } }), { headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
-        }
-        let reqPath = url.searchParams.get('path') || '';
-        const folderId = url.searchParams.get('id') || '';
-
-        if (folderId && env.harudrive_db) {
-          const row = await env.harudrive_db.prepare('SELECT file_path FROM shortlinks WHERE short_id = ?').bind(folderId).first();
-          if (row && row.file_path) {
-            reqPath = row.file_path;
-          }
+          return new Response(JSON.stringify({ mode: 'gdrive', folderName: folderDisplayName, currentPath: displayPath, folderId: realGFolderId, files: gFormatted, folderStats: { fileCount: gFiles.filter(f => f.mimeType !== 'application/vnd.google-apps.folder').length, fileSize: gFiles.filter(f => f.mimeType !== 'application/vnd.google-apps.folder').reduce((s,f)=>s+f.size,0) } }), { headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
         }
 
         reqPath = reqPath.replace(/^\/+|\/+$/g, '');
@@ -2038,8 +2077,7 @@ export default {
 
       // Resolve shortId -> determine backend by content type (shared links carry no reliable mode).
       // A Google Drive ID is strictly alphanumeric with _ and - (length 25 to 50),
-      // and NEVER contains file extensions, slashes, spaces, or non-ASCII characters.
-      const isPureGDriveId = (s) => typeof s === 'string' && /^[a-zA-Z0-9_-]{25,50}$/.test(s) && !/\.[a-zA-Z0-9]{2,5}$/i.test(s) && !s.includes('/') && !s.includes(' ');
+      // and NEVER contains file extensions, slashes, spaces, or non-ASCII characters (see top-level isPureGDriveId).
       let dIsHf = false, dIsDrive = false, dDriveFileId = '';
       if (env.harudrive_db) {
         try {
@@ -2076,6 +2114,9 @@ export default {
       const gMode2 = url.searchParams.get('mode') || request.headers.get('X-Storage-Mode') || '';
       const effectiveGDriveId = dDriveFileId || shortId;
       if ((gMode2 === 'gdrive' && !dIsHf) || (dIsDrive && gMode2 !== 'hf')) {
+        if (accessConfig.storage_gdrive === '0') {
+          return new Response('Penyimpanan Google Drive dinonaktifkan oleh administrator.', { status: 403 });
+        }
         const gToken = await getGDriveAccessToken(env);
         if (!gToken) return new Response('GDrive not configured', { status: 500 });
         const gDriveUrl = `https://www.googleapis.com/drive/v3/files/${effectiveGDriveId}?alt=media&supportsAllDrives=true`;
@@ -2134,6 +2175,10 @@ export default {
       if (!filePath) {
         filePath = decodeURIComponent(pathAfterPrefix);
         fileName = filePath.split('/').pop() || 'file';
+      }
+
+      if (accessConfig.storage_hf === '0') {
+        return new Response('Penyimpanan Hugging Face dinonaktifkan oleh administrator.', { status: 403 });
       }
 
       const encodedHfPath = filePath.split('/').map(seg => encodeURIComponent(seg)).join('/');
@@ -2200,9 +2245,10 @@ export default {
       });
     }
 
-    // Public page: logged-in users get the full-width file-manager view,
-    // guests hitting a shared link get the centered folder card.
-    const publicView = isLoggedIn ? publicIndexUI() : publicUI();
+    // Public page: visitors hitting a shared link get the centered folder card (publicUI),
+    // visitors hitting the root or explorer get the full-width file-manager view (publicIndexUI).
+    const isSharedLink = url.pathname.startsWith('/folder/') || url.pathname.startsWith('/file/');
+    const publicView = isSharedLink ? publicUI() : publicIndexUI(isLoggedIn);
     return new Response(htmlPage(publicView, env, 'public'), {
       headers: { 'Content-Type': 'text/html;charset=UTF-8' }
     });
@@ -2216,11 +2262,11 @@ async function syncIndex(env) {
   const hfHeaders = { 'User-Agent': 'HaruDrive/1.0' };
   if (token) hfHeaders['Authorization'] = `Bearer ${token}`;
 
-  // 1. Fetch existing shortlinks into memory for smart-diffing (guarantees permanent IDs and 0 writes on unchanged files)
+  // 1. Fetch existing shortlinks into memory for smart-diffing (guarantees permanent IDs and 0 writes on unchanged files/folders)
   const existingMap = new Map();
   try {
     const existingRes = await env.harudrive_db.prepare(
-      'SELECT short_id, file_path, name, size FROM shortlinks'
+      'SELECT short_id, file_path, name, type, size FROM shortlinks'
     ).all();
     if (existingRes && existingRes.results) {
       for (const r of existingRes.results) {
@@ -2228,6 +2274,7 @@ async function syncIndex(env) {
           existingMap.set(r.file_path, {
             short_id: r.short_id,
             name: r.name,
+            type: r.type || 'file',
             size: r.size || 0
           });
         }
@@ -2264,7 +2311,16 @@ async function syncIndex(env) {
 
     for (const item of pageItems) {
       const path = item.path;
-      if (!path || path.startsWith('.') || path === 'README.md' || item.type === 'directory') continue;
+      if (!path || path.startsWith('.') || path === 'README.md') continue;
+      
+      // If HF reports an explicit directory
+      if (item.type === 'directory') {
+        if (!dirStats.has(path)) {
+          dirStats.set(path, { size: 0, files: 0 });
+        }
+        continue;
+      }
+
       if (seen.has(path)) continue;
       seen.add(path);
 
@@ -2283,9 +2339,9 @@ async function syncIndex(env) {
         dirStats.set(dir, st);
       }
 
-      // Smart Diff Check: If file exists and size & name match, KEEP original short_id and SKIP write!
+      // Smart Diff Check: If file exists and size, name & type match, KEEP original short_id and SKIP write!
       const existing = existingMap.get(path);
-      if (existing && existing.size === fileSize && existing.name === filename) {
+      if (existing && existing.size === fileSize && existing.name === filename && existing.type === 'file') {
         continue;
       }
 
@@ -2299,11 +2355,23 @@ async function syncIndex(env) {
     nextUrl = m ? (m[1].startsWith('http') ? m[1] : 'https://huggingface.co' + m[1]) : '';
   }
 
-  // Check for deleted HF files (files in D1 that no longer exist in HF)
+  // Also register all folders into shortlinks with type='folder' and permanent short_id
+  for (const [dir, st] of dirStats) {
+    seen.add(dir);
+    const existing = existingMap.get(dir);
+    const folderName = dir.split('/').pop() || dir;
+    if (existing && existing.name === folderName && existing.type === 'folder') {
+      continue;
+    }
+    const shortId = existing ? existing.short_id : await generateShortId(dir);
+    toUpsertFiles.push({ shortId, path: dir, filename: folderName, type: 'folder', size: st.size });
+  }
+
+  // Check for deleted HF files/folders (items in D1 that no longer exist in HF)
   const toDeleteShortIds = [];
   for (const [existingPath, existing] of existingMap) {
-    // Only delete HF files (path has '/' and is not a pure Google Drive ID or gdrive: prefix)
-    if (!existingPath.startsWith('gdrive:') && !/^[a-zA-Z0-9_-]{25,50}$/.test(existingPath) && !seen.has(existingPath)) {
+    // Only delete HF items (path is not a pure Google Drive ID or gdrive: prefix)
+    if (!existingPath.startsWith('gdrive:') && !isPureGDriveId(existingPath) && !seen.has(existingPath)) {
       toDeleteShortIds.push(existing.short_id);
     }
   }
@@ -2418,11 +2486,11 @@ async function generateShortId(path) {
 }
 
 async function getPublicAccessConfig(env) {
-  const def = { public_access: 'open', public_index: '1', guest_access: '1' };
+  const def = { public_access: 'open', public_index: '1', guest_access: '1', storage_gdrive: '1', storage_hf: '1' };
   if (!env || !env.harudrive_db) return def;
   try {
     // Pure SELECT read without executing CREATE TABLE on every HTTP request
-    const rows = await env.harudrive_db.prepare("SELECT key, value FROM meta WHERE key IN ('public_access', 'public_index', 'guest_access')").all().catch(() => ({ results: [] }));
+    const rows = await env.harudrive_db.prepare("SELECT key, value FROM meta WHERE key IN ('public_access', 'public_index', 'guest_access', 'storage_gdrive', 'storage_hf')").all().catch(() => ({ results: [] }));
     if (rows && rows.results) {
       for (const r of rows.results) {
         if (r.key in def && r.value !== null && r.value !== undefined) def[r.key] = String(r.value);
@@ -2438,7 +2506,7 @@ async function setPublicAccessConfig(env, cfg) {
   if (!env || !env.harudrive_db) return false;
   try {
     await env.harudrive_db.prepare('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)').run().catch(() => {});
-    const keys = ['public_access', 'public_index', 'guest_access'];
+    const keys = ['public_access', 'public_index', 'guest_access', 'storage_gdrive', 'storage_hf'];
     for (const k of keys) {
       if (k in cfg) {
         await env.harudrive_db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)").bind(k, String(cfg[k])).run();
@@ -4412,10 +4480,67 @@ let currentFolderStats = null;
 let _sortState = { col: null, dir: 1 };
 let availableFolders = [''];
 // Storage mode (hf | gdrive) - persisted
-function getStorageMode(){ try{ return localStorage.getItem('harudrive_storage_mode') || 'gdrive'; }catch(e){ return 'gdrive'; } }
-function setStorageMode(m){ try{ localStorage.setItem('harudrive_storage_mode', m); document.cookie='harudrive_mode='+m+'; Path=/; Max-Age=2592000; SameSite=Lax'; }catch(e){} updateStorageModeUI(); }
-function toggleStorageMode(){ const cur=getStorageMode(); const nxt=cur==='hf'?'gdrive':'hf'; setStorageMode(nxt); loadFolder('', ''); }
-function updateStorageModeUI(){ const m=getStorageMode(); const cur=m==='gdrive'?'GDrive':'HF'; const nxt=m==='gdrive'?'HF':'GDrive'; const l=document.getElementById('storageModeLabel'); if(l) l.textContent='Mode: '+cur; const l2=document.getElementById('storageModeLabelAdmin'); if(l2) l2.textContent='Mode: '+cur; const t1=document.getElementById('storageModeToggle'); if(t1) t1.title='Saat ini: '+cur+' \u2014 klik untuk ganti ke '+nxt; const t2=document.getElementById('storageModeToggleAdmin'); if(t2) t2.title='Saat ini: '+cur+' \u2014 klik untuk ganti ke '+nxt; const isGDrive=m==='gdrive'; const mb=document.getElementById('cloudMirrorBtn'); if(mb) mb.style.display=isGDrive?'none':''; const sb=document.getElementById('syncIndexBtn'); if(sb) sb.style.display=isGDrive?'none':''; const ub=document.getElementById('uploadBtn'); if(ub) ub.style.display=isGDrive?'none':''; const fb=document.getElementById('newFolderBtn'); if(fb) fb.style.display=isGDrive?'none':''; const sInp=document.getElementById('searchInput'); if(sInp){ sInp.placeholder = isGDrive ? 'Search Lokal (Ctrl+K)...' : 'Global Search (Ctrl+K)...'; } }
+function getStorageMode(){
+  try {
+    let m = localStorage.getItem('harudrive_storage_mode');
+    if (typeof currentAccessConfig !== 'undefined' && currentAccessConfig) {
+      if (currentAccessConfig.storage_gdrive === '0' && m === 'gdrive') m = 'hf';
+      if (currentAccessConfig.storage_hf === '0' && m === 'hf') m = 'gdrive';
+    }
+    return m || 'hf';
+  } catch(e) {
+    return 'hf';
+  }
+}
+function setStorageMode(m){
+  try {
+    localStorage.setItem('harudrive_storage_mode', m);
+    document.cookie = 'harudrive_mode=' + m + '; Path=/; Max-Age=2592000; SameSite=Lax';
+  } catch(e) {}
+  updateStorageModeUI();
+}
+function toggleStorageMode(){
+  const cur = getStorageMode();
+  const nxt = cur === 'hf' ? 'gdrive' : 'hf';
+  if (typeof currentAccessConfig !== 'undefined' && currentAccessConfig) {
+    if (nxt === 'gdrive' && currentAccessConfig.storage_gdrive === '0') {
+      alert('Penyimpanan Google Drive dinonaktifkan oleh administrator.');
+      return;
+    }
+    if (nxt === 'hf' && currentAccessConfig.storage_hf === '0') {
+      alert('Penyimpanan Hugging Face dinonaktifkan oleh administrator.');
+      return;
+    }
+  }
+  setStorageMode(nxt);
+  loadFolder('', '');
+}
+function updateStorageModeUI(){
+  const m = getStorageMode();
+  const cur = m === 'gdrive' ? 'GDrive' : 'HF';
+  const nxt = m === 'gdrive' ? 'HF' : 'GDrive';
+  const l = document.getElementById('storageModeLabel');
+  if (l) l.textContent = 'Mode: ' + cur;
+  const l2 = document.getElementById('storageModeLabelAdmin');
+  if (l2) l2.textContent = 'Mode: ' + cur;
+  const t1 = document.getElementById('storageModeToggle');
+  if (t1) t1.title = 'Saat ini: ' + cur + ' \u2014 klik untuk ganti ke ' + nxt;
+  const t2 = document.getElementById('storageModeToggleAdmin');
+  if (t2) t2.title = 'Saat ini: ' + cur + ' \u2014 klik untuk ganti ke ' + nxt;
+  const isGDrive = m === 'gdrive';
+  const mb = document.getElementById('cloudMirrorBtn');
+  if (mb) mb.style.display = isGDrive ? 'none' : '';
+  const sb = document.getElementById('syncIndexBtn');
+  if (sb) sb.style.display = isGDrive ? 'none' : '';
+  const ub = document.getElementById('uploadBtn');
+  if (ub) ub.style.display = isGDrive ? 'none' : '';
+  const fb = document.getElementById('newFolderBtn');
+  if (fb) fb.style.display = isGDrive ? 'none' : '';
+  const sInp = document.getElementById('searchInput');
+  if (sInp) {
+    sInp.placeholder = isGDrive ? 'Search Lokal (Ctrl+K)...' : 'Global Search (Ctrl+K)...';
+  }
+}
 async function updateBandwidthIndicator(){ try{ const res=await fetch('/api/bandwidth'); if(!res.ok) return; const data=await res.json(); const stats=data.stats||[]; const hf=stats.find(function(s){return s.mode==='hf';}); const gd=stats.find(function(s){return s.mode==='gdrive';}); const fmt=function(b){ if(!b) return '-'; const v=Number(b); if(v>=1099511627776) return (v/1099511627776).toFixed(2)+' TB'; if(v>=1073741824) return (v/1073741824).toFixed(2)+' GB'; if(v>=1048576) return (v/1048576).toFixed(2)+' MB'; if(v>=1024) return (v/1024).toFixed(2)+' KB'; return v+' B'; }; const elHf=document.getElementById('bwHf'); if(elHf) elHf.textContent='HF: ' + (hf? fmt(hf.bytes) + ' ('+hf.requests+' req)':'-'); const elGd=document.getElementById('bwGDrive'); if(elGd) elGd.textContent='GDrive: ' + (gd? fmt(gd.bytes) + ' ('+gd.requests+' req)':'-'); const elUp=document.getElementById('bwUpdated'); if(elUp && stats.length){ const maxUpdated=Math.max.apply(null, stats.map(function(s){return s.updated||0;})); if(maxUpdated) elUp.textContent='Updated: ' + new Date(maxUpdated).toLocaleString(); } }catch(e){} }
 let activeFilter = 'all';
 const selectedFiles = new Set();
@@ -4440,23 +4565,19 @@ document.addEventListener('DOMContentLoaded', () => {
     initAdminConsole();
     updateBandwidthIndicator();
     setInterval(updateBandwidthIndicator, 30000);
+  } else {
+    // Guest Mode / Shared Folder View vs Public Explorer
+    const pathName = window.location.pathname;
+    if (pathName.startsWith('/folder/')) {
+      const fId = pathName.replace('/folder/', '').split('/')[0];
+      if (document.getElementById('guestCardTitle')) { guestRootId = fId; guestRootPath = ''; }
+      loadFolder('', fId);
     } else {
-      // Guest Mode / Shared Folder View
-      const pathName = window.location.pathname;
-        if (pathName.startsWith('/folder/')) {
-          const fId = pathName.replace('/folder/', '').split('/')[0];
-          if (document.getElementById('guestCardTitle')) { guestRootId = fId; guestRootPath = ''; }
-          loadFolder('', fId);
-      } else {
-        const urlParams = new URLSearchParams(window.location.search);
-        const _m = getStorageMode();
-        if (_m === 'gdrive') {
-          loadFolder('', '');
-        } else {
-          loadFolder(urlParams.get('p') || '', '');
-        }
-      }
+      const urlParams = new URLSearchParams(window.location.search);
+      const p = urlParams.get('p') || '';
+      loadFolder(p, '');
     }
+  }
 
   document.getElementById('darkToggle')?.addEventListener('click', toggleTheme);
   document.getElementById('refreshBtn')?.addEventListener('click', () => loadFolder(currentPath, currentFolderId));
@@ -4764,7 +4885,7 @@ async function initAdminConsole() {
 }
 
 // Public & Guest System Access Management
-let currentAccessConfig = { public_access: 'open', public_index: '1', guest_access: '1' };
+let currentAccessConfig = { public_access: 'open', public_index: '1', guest_access: '1', storage_gdrive: '1', storage_hf: '1' };
 
 async function fetchPublicAccessStatus() {
   try {
@@ -4775,9 +4896,12 @@ async function fetchPublicAccessStatus() {
       currentAccessConfig = {
         public_access: data.public_access || 'open',
         public_index: data.public_index || '1',
-        guest_access: data.guest_access || '1'
+        guest_access: data.guest_access || '1',
+        storage_gdrive: data.storage_gdrive !== undefined ? String(data.storage_gdrive) : '1',
+        storage_hf: data.storage_hf !== undefined ? String(data.storage_hf) : '1'
       };
       updatePublicAccessNavbarUI();
+      updateStorageModeUI();
     }
   } catch (e) {}
 }
@@ -4805,10 +4929,14 @@ function openPublicAccessModal() {
   const mToggle = document.getElementById('toggleMasterAccess');
   const iToggle = document.getElementById('toggleIndexAccess');
   const gToggle = document.getElementById('toggleGuestAccess');
+  const gdToggle = document.getElementById('toggleStorageGDrive');
+  const hfToggle = document.getElementById('toggleStorageHF');
   
   if (mToggle) mToggle.checked = (currentAccessConfig.public_access === 'open');
   if (iToggle) iToggle.checked = (currentAccessConfig.public_index === '1');
   if (gToggle) gToggle.checked = (currentAccessConfig.guest_access === '1');
+  if (gdToggle) gdToggle.checked = (currentAccessConfig.storage_gdrive === '1');
+  if (hfToggle) hfToggle.checked = (currentAccessConfig.storage_hf === '1');
   
   handleMasterAccessChange();
   if (modal) modal.style.display = 'flex';
@@ -4839,6 +4967,8 @@ async function savePublicAccessConfig() {
   const mToggle = document.getElementById('toggleMasterAccess');
   const iToggle = document.getElementById('toggleIndexAccess');
   const gToggle = document.getElementById('toggleGuestAccess');
+  const gdToggle = document.getElementById('toggleStorageGDrive');
+  const hfToggle = document.getElementById('toggleStorageHF');
   const pin = localStorage.getItem('harudrive_admin_pin') || getCookie('harudrive_admin_pin') || '';
 
   if (btn) { btn.disabled = true; btn.textContent = '⏳ Menyimpan...'; }
@@ -4847,7 +4977,9 @@ async function savePublicAccessConfig() {
     admin_pin: pin,
     public_access: mToggle && mToggle.checked ? 'open' : 'closed',
     public_index: iToggle && iToggle.checked ? '1' : '0',
-    guest_access: gToggle && gToggle.checked ? '1' : '0'
+    guest_access: gToggle && gToggle.checked ? '1' : '0',
+    storage_gdrive: gdToggle && gdToggle.checked ? '1' : '0',
+    storage_hf: hfToggle && hfToggle.checked ? '1' : '0'
   };
 
   try {
@@ -4861,11 +4993,14 @@ async function savePublicAccessConfig() {
       currentAccessConfig = {
         public_access: payload.public_access,
         public_index: payload.public_index,
-        guest_access: payload.guest_access
+        guest_access: payload.guest_access,
+        storage_gdrive: payload.storage_gdrive,
+        storage_hf: payload.storage_hf
       };
       updatePublicAccessNavbarUI();
+      updateStorageModeUI();
       closePublicAccessModal();
-      showCopyToast('Status akses berhasil diperbarui: ' + (payload.public_access === 'open' ? 'Terbuka' : 'Mode Private / Maintenance'));
+      showCopyToast('Status akses dan storage berhasil diperbarui');
     } else {
       alert(data.error || 'Gagal menyimpan status akses.');
     }
@@ -4878,13 +5013,23 @@ async function savePublicAccessConfig() {
 
 // Navigation
 function navigateTo(path, id = '', pushHistory = true) {
+  const isGuestCard = !!document.getElementById('guestCardTitle');
   // Guest scoping: never navigate above/outside the shared root.
-  // HF shares have slash paths; in a definite-HF share clamp every outside target.
-  if (document.getElementById('guestCardTitle') && guestRootPath && path && !(path === guestRootPath || path.startsWith(guestRootPath + '/')) && (path.indexOf('/') !== -1 || guestRootPath.indexOf('/') !== -1)) {
+  if (isGuestCard && guestRootPath && path && !(path === guestRootPath || path.startsWith(guestRootPath + '/'))) {
     path = guestRootPath; id = guestRootId;
   }
   if (pushHistory) {
-    const targetUrl = id ? ('/folder/' + id) : (path ? ('/?p=' + encodeURIComponent(path)) : '/');
+    let targetUrl;
+    if (isGuestCard) {
+      targetUrl = id ? ('/folder/' + id) : (path ? ('/?p=' + encodeURIComponent(path)) : '/');
+    } else {
+      const _m = getStorageMode();
+      const params = new URLSearchParams();
+      if (path) params.set('p', path);
+      if (_m && _m !== 'hf') params.set('mode', _m);
+      const qs = params.toString();
+      targetUrl = qs ? ('/?' + qs) : '/';
+    }
     window.history.pushState({ path, id }, '', targetUrl);
   }
   loadFolder(path, id);
@@ -4898,9 +5043,10 @@ function goGuestHome() {
   loadFolder(rPath, rId);
 }
 
-function navigateToAdmin(path) {
+function navigateToAdmin(path, id = '') {
   currentPath = path;
-  loadFolder(path, '');
+  currentFolderId = id;
+  loadFolder(path, id);
 }
 
 function handlePopState(e) {
@@ -4913,7 +5059,7 @@ function handlePopState(e) {
   } else {
     const urlParams = new URLSearchParams(window.location.search);
     const p = urlParams.get('p') || '';
-    if (_isGuestPs && guestRootPath && p && !(p === guestRootPath || p.startsWith(guestRootPath + '/')) && (p.indexOf('/') !== -1 || guestRootPath.indexOf('/') !== -1)) {
+    if (_isGuestPs && guestRootPath && p && !(p === guestRootPath || p.startsWith(guestRootPath + '/'))) {
       goGuestHome();
     } else {
       loadFolder(p, '');
@@ -4949,7 +5095,6 @@ function renderFolderPickerUI(containerId, inputId, selectedValue = '') {
     html += '</div>';
   });
   container.innerHTML = html;
-  scheduleFolderSizeScan(allFiles);
 }
 
 function selectFolderPickerItem(containerId, inputId, folderPath) {
@@ -4972,18 +5117,16 @@ async function loadFolder(path = '', id = '') {
 
   try {
     const _mode = getStorageMode();
-    let fetchUrl = '/api/list';
-    if (_mode === 'gdrive') {
-      const gId = id || path || '';
-      if (gId) fetchUrl += '?id=' + encodeURIComponent(gId) + '&mode=gdrive';
-      else fetchUrl += '?mode=gdrive';
-    } else {
-      if (id) fetchUrl += '?id=' + encodeURIComponent(id);
-      else if (path) fetchUrl += '?path=' + encodeURIComponent(path);
-    }
+    const qParams = new URLSearchParams();
+    if (_mode) qParams.set('mode', _mode);
+    if (id) qParams.set('id', id);
+    if (path) qParams.set('path', path);
 
-    const res = await fetch(fetchUrl);
-    if (!res.ok) throw new Error('HTTP Error ' + res.status);
+    const res = await fetch('/api/list?' + qParams.toString());
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => ({}));
+      throw new Error(errJson.error || ('HTTP Error ' + res.status));
+    }
     const data = await res.json();
 
     currentPath = data.currentPath || '';
@@ -4995,7 +5138,6 @@ async function loadFolder(path = '', id = '') {
 
     updateBreadcrumbs();
     renderFileList();
-    scheduleFolderSizeScan(allFiles);
   } catch (err) {
     if (container) {
       container.innerHTML = '<div style="text-align: center; padding: 40px; color: #ef4444;"><p>Gagal memuat: ' + escapeHtml(err.message) + '</p><button class="nav-btn" style="margin-top: 12px;" onclick="loadFolder(currentPath, currentFolderId)">Coba Lagi</button></div>';
@@ -5272,7 +5414,7 @@ function renderFileList() {
 
     let clickAction = '';
     if (isDir) {
-      clickAction = isPageAdmin ? ('navigateToAdmin(' + JSON.stringify(file.path) + ')') : ('navigateTo(' + JSON.stringify(file.path) + ', ' + JSON.stringify(file.id) + ')');
+      clickAction = isPageAdmin ? ('navigateToAdmin(' + JSON.stringify(file.path) + ', ' + JSON.stringify(file.id) + ')') : ('navigateTo(' + JSON.stringify(file.path) + ', ' + JSON.stringify(file.id) + ')');
     } else if (isVideo) {
       clickAction = 'playVideo(' + JSON.stringify(file.id) + ', ' + JSON.stringify(file.name) + ')';
     } else {
@@ -9262,7 +9404,7 @@ function publicUI() {
   `;
 }
 
-function publicIndexUI() {
+function publicIndexUI(isLoggedIn = false) {
   return `
   <!-- PUBLIC FILE MANAGER TOPBAR -->
   <header class="navbar-cyber glass">
@@ -9279,9 +9421,9 @@ function publicIndexUI() {
         </a>
       </div>
       <div class="nav-right">
-        <button class="nav-btn" id="storageModeToggle" onclick="toggleStorageMode()" title="Saat ini: GDrive — klik untuk ganti ke HF" style="border-color: rgba(99,102,241,0.3);">
+        <button class="nav-btn" id="storageModeToggle" onclick="toggleStorageMode()" title="Saat ini: HF — klik untuk ganti ke GDrive" style="border-color: rgba(99,102,241,0.3);">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M12 2v8M12 14v8"/><path d="M4.93 10a5 5 0 0 1 6.07-6"/><path d="M19.07 14a5 5 0 0 1-6.07 6"/><circle cx="12" cy="12" r="3"/></svg>
-          <span id="storageModeLabel">Mode: GDrive</span>
+          <span id="storageModeLabel">Mode: HF</span>
         </button>
         <a href="/admin" class="nav-btn" title="Masuk ke Admin Console">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
@@ -9290,10 +9432,11 @@ function publicIndexUI() {
         <button class="nav-btn" id="darkToggle" title="Ganti Tema">
           <svg class="icon icon-sm" id="themeIcon" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
         </button>
+        ${isLoggedIn ? `
         <a href="/logout" class="nav-btn" title="Keluar" style="color: #ef4444;">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
           <span class="btn-text-label">Keluar</span>
-        </a>
+        </a>` : ''}
       </div>
     </div>
   </header>
@@ -10123,6 +10266,35 @@ function adminConsoleUI() {
             </div>
             <label class="switch-toggle" style="position: relative; display: inline-block; width: 42px; height: 22px; margin: 0;">
               <input type="checkbox" id="toggleGuestAccess" style="opacity: 0; width: 0; height: 0;">
+              <span class="slider-round round-sm" style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #374151; transition: .3s; border-radius: 22px;"></span>
+            </label>
+          </div>
+
+          <!-- Storage Controls Section -->
+          <div style="margin-top: 4px; padding-top: 8px; border-top: 1px dashed var(--border);">
+            <div style="font-size: 0.72rem; font-weight: 700; color: var(--text-dim); text-transform: uppercase; margin-bottom: 8px; letter-spacing: 0.5px;">Penyimpanan Aktif</div>
+          </div>
+
+          <!-- GDrive Storage Toggle -->
+          <div style="padding: 12px 14px; border-radius: 12px; background: rgba(255,255,255,0.02); border: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between;">
+            <div>
+              <div style="font-weight: 600; font-size: 0.84rem; color: var(--text);">⚡ Google Drive Storage</div>
+              <div style="font-size: 0.74rem; color: var(--text-muted);">Aktifkan akses folder & download dari Google Drive</div>
+            </div>
+            <label class="switch-toggle" style="position: relative; display: inline-block; width: 42px; height: 22px; margin: 0;">
+              <input type="checkbox" id="toggleStorageGDrive" style="opacity: 0; width: 0; height: 0;">
+              <span class="slider-round round-sm" style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #374151; transition: .3s; border-radius: 22px;"></span>
+            </label>
+          </div>
+
+          <!-- HF Storage Toggle -->
+          <div style="padding: 12px 14px; border-radius: 12px; background: rgba(255,255,255,0.02); border: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between;">
+            <div>
+              <div style="font-weight: 600; font-size: 0.84rem; color: var(--text);">🤗 Hugging Face Storage</div>
+              <div style="font-size: 0.74rem; color: var(--text-muted);">Aktifkan akses folder & streaming dari Hugging Face</div>
+            </div>
+            <label class="switch-toggle" style="position: relative; display: inline-block; width: 42px; height: 22px; margin: 0;">
+              <input type="checkbox" id="toggleStorageHF" style="opacity: 0; width: 0; height: 0;">
               <span class="slider-round round-sm" style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #374151; transition: .3s; border-radius: 22px;"></span>
             </label>
           </div>
