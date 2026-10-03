@@ -591,17 +591,54 @@ export default {
           });
         }
 
-        const formattedFiles = [];
+        const validHfItems = (hfItems || []).filter(item => {
+          if (!item.path) return false;
+          const itemName = item.path.split('/').pop();
+          return itemName !== '.gitattributes' && itemName !== 'README.md' && !itemName.startsWith('.git/');
+        });
 
-        for (const item of hfItems) {
+        const shortIdMap = await resolveShortIds(env, validHfItems.map(i => i.path));
+        
+        // Auto-persist newly discovered HF items into D1 shortlinks for permanent ID guarantee
+        if (env.harudrive_db && validHfItems.length > 0) {
+          try {
+            const pathsToCheck = validHfItems.map(i => i.path);
+            const placeholders = pathsToCheck.map(() => '?').join(',');
+            const existingRows = await env.harudrive_db.prepare(`SELECT file_path FROM shortlinks WHERE file_path IN (${placeholders})`).bind(...pathsToCheck).all().catch(() => null);
+            const existingSet = new Set((existingRows && existingRows.results ? existingRows.results : []).map(r => r.file_path));
+            const toInsertHf = [];
+            for (const item of validHfItems) {
+              if (!existingSet.has(item.path)) {
+                const sId = shortIdMap.get(item.path);
+                const isDir = item.type === 'directory';
+                toInsertHf.push({
+                  shortId: sId,
+                  path: item.path,
+                  name: item.path.split('/').pop(),
+                  type: isDir ? 'folder' : 'file',
+                  size: item.size || 0
+                });
+              }
+            }
+            if (toInsertHf.length > 0) {
+              const upsertStmt = env.harudrive_db.prepare(
+                'INSERT OR REPLACE INTO shortlinks (short_id, file_path, name, type, size) VALUES (?, ?, ?, ?, ?)'
+              );
+              const batch = toInsertHf.map(i => upsertStmt.bind(i.shortId, i.path, i.name, i.type, i.size));
+              for (let i = 0; i < batch.length; i += 50) {
+                await env.harudrive_db.batch(batch.slice(i, i + 50));
+              }
+            }
+          } catch (e) {
+            console.error('Auto-persist HF shortlinks warning:', e);
+          }
+        }
+
+        const formattedFiles = [];
+        for (const item of validHfItems) {
           const isDir = item.type === 'directory';
           const itemName = item.path.split('/').pop();
-          
-          if (itemName === '.gitattributes' || itemName === 'README.md' || itemName.startsWith('.git/')) {
-            continue;
-          }
-
-          const shortId = await generateShortId(item.path);
+          const shortId = shortIdMap.get(item.path) || (await generateShortId(item.path));
           formattedFiles.push({
             id: shortId,
             path: item.path,
@@ -620,9 +657,22 @@ export default {
           return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
         });
 
-        let currentFolderId = '';
+        let currentFolderId = rawListId || '';
         if (reqPath) {
-          currentFolderId = await generateShortId(reqPath);
+          if (!currentFolderId && env.harudrive_db) {
+            try {
+              const row = await env.harudrive_db.prepare('SELECT short_id FROM shortlinks WHERE file_path = ?').bind(reqPath).first();
+              if (row && row.short_id) currentFolderId = row.short_id;
+            } catch(e) {}
+          }
+          if (!currentFolderId) {
+            currentFolderId = await generateShortId(reqPath);
+            if (env.harudrive_db) {
+              try {
+                await env.harudrive_db.prepare('INSERT OR IGNORE INTO shortlinks (short_id, file_path, name, type, size) VALUES (?, ?, ?, ?, ?)').bind(currentFolderId, reqPath, reqPath.split('/').pop(), 'folder', 0).run();
+              } catch(e) {}
+            }
+          }
         }
 
         // Fill recursive folder sizes (from the D1 folder_sizes index) + current folder stats.
@@ -1727,258 +1777,123 @@ export default {
       }
     }
 
-        // API: Mkdir
+    // API: Mkdir (HF has no empty folders -> a hidden .gitkeep marks the folder)
     if (url.pathname === '/api/admin/mkdir' && request.method === 'POST') {
       try {
-        const body = await request.json();
+        const body = await request.json().catch(() => ({}));
         if (!verifyPin(body.admin_pin || body.pin)) {
-          return new Response(JSON.stringify({ error: 'PIN Admin Salah!' }), { status: 403 });
+          return new Response(JSON.stringify({ error: 'PIN Admin Salah!' }), { status: 403, headers: { 'Content-Type': 'application/json' } });
         }
 
-        const folderPath = (body.folder_path || '').replace(/^\/+|\/+$/g, '');
+        const folderPath = cleanRepoPath(body.folder_path || body.path || '');
         if (!folderPath) {
-          return new Response(JSON.stringify({ error: 'Path folder tidak boleh kosong.' }), { status: 400 });
+          return new Response(JSON.stringify({ error: 'Path folder tidak boleh kosong.' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+        }
+        if (!isSafeRepoPath(folderPath)) {
+          return new Response(JSON.stringify({ error: 'Nama folder tidak valid. Jangan memakai "." di awal nama, "..", atau karakter kosong.' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
         }
 
-        const commitUrl = `https://huggingface.co/api/datasets/${HF_REPO_ID}/commit/main`;
-        const lines = [
-          JSON.stringify({ key: 'header', value: { summary: `Create folder ${folderPath} via HaruDrive`, description: '' } }),
-          JSON.stringify({ key: 'file', value: { content: '', path: `${folderPath}/.gitkeep`, encoding: 'utf-8' } })
-        ];
-        const ndjsonBody = lines.join(String.fromCharCode(10)) + String.fromCharCode(10);
-        const hfRes = await fetch(commitUrl, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${HF_TOKEN}`,
-            'Content-Type': 'application/x-ndjson'
-          },
-          body: ndjsonBody
-        });
-
-        if (!hfRes.ok) {
-          const errText = await hfRes.text();
-          return new Response(JSON.stringify({ error: `Gagal membuat folder di HF: ${errText}` }), { status: hfRes.status });
+        // Refuse to create something that already exists (file or folder)
+        const parentList = await hfListTree(env, repoParentOf(folderPath), false);
+        if (!parentList.ok) {
+          return new Response(JSON.stringify({ error: parentList.error }), { status: parentList.status || 502, headers: { 'Content-Type': 'application/json' } });
+        }
+        if (parentList.items.some(i => i.path.toLowerCase() === folderPath.toLowerCase())) {
+          return new Response(JSON.stringify({ error: 'Folder/file dengan nama itu sudah ada di lokasi ini.' }), { status: 409, headers: { 'Content-Type': 'application/json' } });
         }
 
-        const shortId = await generateShortId(folderPath);
+        const c = await hfCommitOps(env, 'Create folder ' + folderPath + ' via HaruDrive', [
+          { key: 'file', value: { content: '', path: folderPath + '/.gitkeep', encoding: 'base64' } }
+        ]);
+        if (!c.ok) {
+          return new Response(JSON.stringify({ error: 'Gagal membuat folder di HF: ' + c.error }), { status: c.status || 502, headers: { 'Content-Type': 'application/json' } });
+        }
+
+        let shortId = '';
         if (env.harudrive_db) {
-          const folderName = folderPath.split('/').pop();
-          await env.harudrive_db.prepare(
-            'INSERT OR REPLACE INTO shortlinks (short_id, file_path, name, type, size) VALUES (?, ?, ?, ?, ?)'
-          ).bind(shortId, folderPath, folderName, 'folder', 0).run();
+          try {
+            await env.harudrive_db.prepare('CREATE TABLE IF NOT EXISTS shortlinks (short_id TEXT PRIMARY KEY, file_path TEXT, name TEXT, type TEXT, size INTEGER)').run().catch(() => {});
+            await env.harudrive_db.prepare('CREATE TABLE IF NOT EXISTS folder_sizes (path TEXT PRIMARY KEY, size INTEGER, files INTEGER)').run().catch(() => {});
+            const alloc = await allocateShortId(env, folderPath);
+            shortId = alloc.id;
+            await env.harudrive_db.prepare(
+              'INSERT OR REPLACE INTO shortlinks (short_id, file_path, name, type, size) VALUES (?, ?, ?, ?, ?)'
+            ).bind(shortId, folderPath, folderPath.split('/').pop(), 'folder', 0).run();
+            await env.harudrive_db.prepare(
+              'INSERT OR IGNORE INTO folder_sizes (path, size, files) VALUES (?, 0, 0)'
+            ).bind(folderPath).run().catch(() => {});
+          } catch (e) { console.error('mkdir D1 warning:', e); }
         }
 
         return new Response(JSON.stringify({ success: true, folderId: shortId, folderPath }), {
           headers: { 'Content-Type': 'application/json' }
         });
       } catch (err) {
-        return new Response(JSON.stringify({ error: err.message }), { status: 500 });
+        return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: { 'Content-Type': 'application/json' } });
       }
     }
 
-    // API: Rename (Atomic NDJSON Protocol)
+    // API: Rename (same safe relocation engine as Move; short_id is preserved)
     if (url.pathname === '/api/admin/rename' && request.method === 'POST') {
       try {
-        const body = await request.json();
+        const body = await request.json().catch(() => ({}));
         if (!verifyPin(body.admin_pin || body.pin)) {
-          return new Response(JSON.stringify({ error: 'PIN Admin Salah!' }), { status: 403 });
+          return new Response(JSON.stringify({ error: 'PIN Admin Salah!' }), { status: 403, headers: { 'Content-Type': 'application/json' } });
         }
 
-        const oldPath = (body.old_path || '').replace(/^\/+|\/+$/g, '');
-        const newPath = (body.new_path || '').replace(/^\/+|\/+$/g, '');
+        const oldPath = cleanRepoPath(body.old_path || '');
+        const newPath = cleanRepoPath(body.new_path || '');
         if (!oldPath || !newPath) {
-          return new Response(JSON.stringify({ error: 'Path lama dan baru wajib diisi.' }), { status: 400 });
+          return new Response(JSON.stringify({ error: 'Path lama dan baru wajib diisi.' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+        }
+        if (repoParentOf(oldPath) !== repoParentOf(newPath)) {
+          return new Response(JSON.stringify({ error: 'Rename hanya boleh mengganti nama, bukan memindahkan. Gunakan fitur Pindah.' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
         }
 
-        const treeRes = await fetch(`https://huggingface.co/api/datasets/${HF_REPO_ID}/tree/main?recursive=true`, {
-          headers: { 'Authorization': `Bearer ${HF_TOKEN}` }
-        });
-        const treeItems = treeRes.ok ? await treeRes.json() : [];
-
-        const lines = [
-          JSON.stringify({ key: 'header', value: { summary: `Rename ${oldPath} to ${newPath} via HaruDrive`, description: '' } })
-        ];
-
-        let matched = 0;
-        let isDirectory = false;
-
-        treeItems.forEach(item => {
-          if (item.type === 'file') {
-            if (item.path === oldPath) {
-              matched++;
-              lines.push(JSON.stringify({ key: 'deletedFile', value: { path: oldPath } }));
-              if (item.lfs && item.lfs.oid) {
-                lines.push(JSON.stringify({ key: 'lfsFile', value: { path: newPath, algo: 'sha256', oid: item.lfs.oid, size: item.lfs.size || item.size } }));
-              } else {
-                lines.push(JSON.stringify({ key: 'file', value: { path: newPath, content: '', encoding: 'utf-8' } }));
-              }
-            } else if (item.path.startsWith(oldPath + '/')) {
-              matched++;
-              isDirectory = true;
-              const subPath = item.path.substring(oldPath.length + 1);
-              const targetItemPath = `${newPath}/${subPath}`;
-              lines.push(JSON.stringify({ key: 'deletedFile', value: { path: item.path } }));
-              if (item.lfs && item.lfs.oid) {
-                lines.push(JSON.stringify({ key: 'lfsFile', value: { path: targetItemPath, algo: 'sha256', oid: item.lfs.oid, size: item.lfs.size || item.size } }));
-              } else {
-                lines.push(JSON.stringify({ key: 'file', value: { path: targetItemPath, content: '', encoding: 'utf-8' } }));
-              }
-            }
-          }
-        });
-
-        if (matched === 0) {
-          lines.push(JSON.stringify({ key: 'deletedFolder', value: { path: oldPath } }));
-          lines.push(JSON.stringify({ key: 'file', value: { path: `${newPath}/.gitkeep`, content: '', encoding: 'utf-8' } }));
+        const r = await hfRelocate(env, [{ from: oldPath, to: newPath }]);
+        if (!r.ok) {
+          return new Response(JSON.stringify({ error: r.error }), { status: r.status || 500, headers: { 'Content-Type': 'application/json' } });
         }
-
-        const commitUrl = `https://huggingface.co/api/datasets/${HF_REPO_ID}/commit/main`;
-        const ndjsonBody = lines.join(String.fromCharCode(10)) + String.fromCharCode(10);
-
-        const hfRes = await fetch(commitUrl, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${HF_TOKEN}`,
-            'Content-Type': 'application/x-ndjson'
-          },
-          body: ndjsonBody
-        });
-
-        if (!hfRes.ok) {
-          const errText = await hfRes.text();
-          return new Response(JSON.stringify({ error: `Gagal rename di HF: ${errText}` }), { status: hfRes.status });
-        }
-
-        if (env.harudrive_db) {
-          const newName = newPath.split('/').pop();
-          const newShortId = await generateShortId(newPath);
-          const oldPrefix = oldPath + '/';
-          try {
-            await env.harudrive_db.prepare('DELETE FROM shortlinks WHERE file_path = ? OR substr(file_path, 1, ?) = ?')
-              .bind(oldPath, oldPrefix.length, oldPrefix).run();
-            await env.harudrive_db.prepare(
-              'INSERT OR REPLACE INTO shortlinks (short_id, file_path, name, type, size) VALUES (?, ?, ?, ?, ?)'
-            ).bind(newShortId, newPath, newName, isDirectory ? 'folder' : 'file', 0).run();
-          } catch (e) {}
-        }
-
-        return new Response(JSON.stringify({ success: true, oldPath, newPath }), {
+        return new Response(JSON.stringify({ success: true, oldPath, newPath, d1: r.d1 || null }), {
           headers: { 'Content-Type': 'application/json' }
         });
       } catch (err) {
-        return new Response(JSON.stringify({ error: err.message }), { status: 500 });
+        return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: { 'Content-Type': 'application/json' } });
       }
     }
 
-    // API: Move (Atomic NDJSON Protocol)
+    // API: Move (single or bulk; one atomic commit, short_ids preserved)
     if (url.pathname === '/api/admin/move' && request.method === 'POST') {
       try {
-        const body = await request.json();
+        const body = await request.json().catch(() => ({}));
         if (!verifyPin(body.admin_pin || body.pin)) {
-          return new Response(JSON.stringify({ error: 'PIN Admin Salah!' }), { status: 403 });
+          return new Response(JSON.stringify({ error: 'PIN Admin Salah!' }), { status: 403, headers: { 'Content-Type': 'application/json' } });
         }
 
-        const paths = body.paths || (body.path ? [body.path] : []);
-        const targetFolder = (body.target_folder || '').replace(/^\/+|\/+$/g, '');
+        const paths = (body.paths || (body.path ? [body.path] : [])).map(cleanRepoPath).filter(Boolean);
+        // Client sends "destination"; legacy callers sent "target_folder". Accept both.
+        const hasDest = body.destination !== undefined || body.target_folder !== undefined;
+        if (!hasDest) {
+          return new Response(JSON.stringify({ error: 'Folder tujuan wajib dipilih.' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+        }
+        const targetFolder = cleanRepoPath(body.destination !== undefined ? body.destination : body.target_folder);
         if (!paths.length) {
-          return new Response(JSON.stringify({ error: 'Tidak ada file/folder yang dipilih.' }), { status: 400 });
+          return new Response(JSON.stringify({ error: 'Tidak ada file/folder yang dipilih.' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+        }
+        if (targetFolder && !isSafeRepoPath(targetFolder)) {
+          return new Response(JSON.stringify({ error: 'Folder tujuan tidak valid.' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
         }
 
-        const treeRes = await fetch(`https://huggingface.co/api/datasets/${HF_REPO_ID}/tree/main?recursive=true`, {
-          headers: { 'Authorization': `Bearer ${HF_TOKEN}` }
-        });
-        const treeItems = treeRes.ok ? await treeRes.json() : [];
-
-        const lines = [
-          JSON.stringify({ key: 'header', value: { summary: `Move ${paths.length} item(s) to /${targetFolder} via HaruDrive`, description: '' } })
-        ];
-
-        let opsCount = 0;
-        for (const p of paths) {
-          const cleanP = p.replace(/^\/+|\/+$/g, '');
-          const filename = cleanP.split('/').pop();
-
-          let matchedFiles = 0;
-          treeItems.forEach(item => {
-            if (item.type === 'file') {
-              if (item.path === cleanP) {
-                matchedFiles++;
-                const newPath = targetFolder ? `${targetFolder}/${filename}` : filename;
-                if (cleanP !== newPath) {
-                  opsCount++;
-                  lines.push(JSON.stringify({ key: 'deletedFile', value: { path: cleanP } }));
-                  if (item.lfs && item.lfs.oid) {
-                    lines.push(JSON.stringify({ key: 'lfsFile', value: { path: newPath, algo: 'sha256', oid: item.lfs.oid, size: item.lfs.size || item.size } }));
-                  } else {
-                    lines.push(JSON.stringify({ key: 'file', value: { path: newPath, content: '', encoding: 'utf-8' } }));
-                  }
-                }
-              } else if (item.path.startsWith(cleanP + '/')) {
-                matchedFiles++;
-                const relPath = item.path.substring(cleanP.length + 1);
-                const newPath = targetFolder ? `${targetFolder}/${filename}/${relPath}` : `${filename}/${relPath}`;
-                opsCount++;
-                lines.push(JSON.stringify({ key: 'deletedFile', value: { path: item.path } }));
-                if (item.lfs && item.lfs.oid) {
-                  lines.push(JSON.stringify({ key: 'lfsFile', value: { path: newPath, algo: 'sha256', oid: item.lfs.oid, size: item.lfs.size || item.size } }));
-                } else {
-                  lines.push(JSON.stringify({ key: 'file', value: { path: newPath, content: '', encoding: 'utf-8' } }));
-                }
-              }
-            }
-          });
-
-          if (matchedFiles === 0) {
-            const newPath = targetFolder ? `${targetFolder}/${filename}` : filename;
-            if (cleanP !== newPath) {
-              opsCount++;
-              lines.push(JSON.stringify({ key: 'deletedFolder', value: { path: cleanP } }));
-              lines.push(JSON.stringify({ key: 'file', value: { path: `${newPath}/.gitkeep`, content: '', encoding: 'utf-8' } }));
-            }
-          }
+        const moves = paths.map(p => ({ from: p, to: targetFolder ? targetFolder + '/' + p.split('/').pop() : p.split('/').pop() }));
+        const r = await hfRelocate(env, moves);
+        if (!r.ok) {
+          return new Response(JSON.stringify({ error: r.error }), { status: r.status || 500, headers: { 'Content-Type': 'application/json' } });
         }
-
-        if (opsCount > 0) {
-          const commitUrl = `https://huggingface.co/api/datasets/${HF_REPO_ID}/commit/main`;
-          const ndjsonBody = lines.join(String.fromCharCode(10)) + String.fromCharCode(10);
-
-          const hfRes = await fetch(commitUrl, {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${HF_TOKEN}`,
-              'Content-Type': 'application/x-ndjson'
-            },
-            body: ndjsonBody
-          });
-
-          if (!hfRes.ok) {
-            const errText = await hfRes.text();
-            return new Response(JSON.stringify({ error: `Gagal memindahkan di HF: ${errText}` }), { status: hfRes.status });
-          }
-
-          if (env.harudrive_db) {
-            for (const p of paths) {
-              const cleanP = p.replace(/^\/+|\/+$/g, '');
-              const filename = cleanP.split('/').pop();
-              const newPath = targetFolder ? `${targetFolder}/${filename}` : filename;
-              const newShortId = await generateShortId(newPath);
-              const cleanPrefix = cleanP + '/';
-              try {
-                await env.harudrive_db.prepare('DELETE FROM shortlinks WHERE file_path = ? OR substr(file_path, 1, ?) = ?')
-                  .bind(cleanP, cleanPrefix.length, cleanPrefix).run();
-                await env.harudrive_db.prepare(
-                  'INSERT OR REPLACE INTO shortlinks (short_id, file_path, name, type, size) VALUES (?, ?, ?, ?, ?)'
-                ).bind(newShortId, newPath, filename, 'file', 0).run();
-              } catch (e) {}
-            }
-          }
-        }
-
-        return new Response(JSON.stringify({ success: true, movedCount: paths.length }), {
+        return new Response(JSON.stringify({ success: true, movedCount: (r.moved || []).length, d1: r.d1 || null }), {
           headers: { 'Content-Type': 'application/json' }
         });
       } catch (err) {
-        return new Response(JSON.stringify({ error: err.message }), { status: 500 });
+        return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: { 'Content-Type': 'application/json' } });
       }
     }
 
@@ -2254,6 +2169,276 @@ export default {
     });
   }
 };
+
+// ===== HF repo helpers (pagination-safe) =====
+function hfHeadersFor(env) {
+  const h = { 'User-Agent': 'HaruDrive/1.0' };
+  if (env.HF_TOKEN) h['Authorization'] = 'Bearer ' + env.HF_TOKEN;
+  return h;
+}
+
+function hfEncPath(p) {
+  return p ? '/' + p.split('/').map(encodeURIComponent).join('/') : '';
+}
+
+// Lists a directory of the HF dataset following ALL pagination pages.
+// Returns { ok, status, items, missing?, error? }. NEVER returns a silently partial list.
+async function hfListTree(env, path, recursive) {
+  const repo = env.HF_REPO_ID || 'username/harudrive-data';
+  let next = `https://huggingface.co/api/datasets/${repo}/tree/main${hfEncPath(path)}${recursive ? '?recursive=true' : ''}`;
+  const items = [];
+  let pages = 0;
+  while (next) {
+    if (pages >= 40) return { ok: false, status: 508, error: 'Folder terlalu besar untuk diproses sekaligus (terlalu banyak halaman listing).', items };
+    const res = await fetch(next, { headers: hfHeadersFor(env) });
+    pages++;
+    if (res.status === 404) return { ok: true, status: 404, items: [], missing: true };
+    if (!res.ok) return { ok: false, status: res.status, error: 'Gagal membaca daftar HF (' + res.status + '): ' + (await res.text()), items };
+    const arr = await res.json();
+    if (Array.isArray(arr)) for (const it of arr) items.push(it);
+    const m = (res.headers.get('Link') || '').match(/<([^>]+)>\s*;\s*rel="next"/);
+    next = m ? (m[1].startsWith('http') ? m[1] : 'https://huggingface.co' + m[1]) : '';
+  }
+  return { ok: true, status: 200, items };
+}
+
+// Atomic commit to HF using the NDJSON commit protocol.
+async function hfCommitOps(env, summary, ops) {
+  const repo = env.HF_REPO_ID || 'username/harudrive-data';
+  const lines = [JSON.stringify({ key: 'header', value: { summary, description: '' } })];
+  for (const o of ops) lines.push(JSON.stringify(o));
+  const res = await fetch(`https://huggingface.co/api/datasets/${repo}/commit/main`, {
+    method: 'POST',
+    headers: Object.assign({}, hfHeadersFor(env), { 'Content-Type': 'application/x-ndjson' }),
+    body: lines.join(String.fromCharCode(10)) + String.fromCharCode(10)
+  });
+  if (!res.ok) return { ok: false, status: res.status, error: await res.text() };
+  return { ok: true };
+}
+
+function bytesToBase64(bytes) {
+  let bin = '';
+  const CH = 0x8000;
+  for (let i = 0; i < bytes.length; i += CH) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
+  }
+  return btoa(bin);
+}
+
+function cleanRepoPath(p) {
+  return String(p || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+}
+
+function repoParentOf(p) {
+  const i = p.lastIndexOf('/');
+  return i === -1 ? '' : p.slice(0, i);
+}
+
+function isSafeRepoPath(p) {
+  if (!p) return false;
+  return p.split('/').every(seg => seg && seg !== '.' && seg !== '..' && !seg.startsWith('.'));
+}
+
+// ===== Permanent short-id management =====
+// A short_id is created ONCE per file/folder and is kept for as long as the item exists
+// (move / rename only rewrite file_path in D1). IDs are only freed when the item is deleted.
+async function allocateShortId(env, path) {
+  const db = env.harudrive_db;
+  if (db) {
+    const row = await db.prepare('SELECT short_id FROM shortlinks WHERE file_path = ?').bind(path).first().catch(() => null);
+    if (row && row.short_id) return { id: row.short_id, existed: true };
+  }
+  for (let n = 0; n < 8; n++) {
+    const id = await generateShortId(n === 0 ? path : path + '#' + n);
+    if (!db) return { id, existed: false };
+    const clash = await db.prepare('SELECT file_path FROM shortlinks WHERE short_id = ?').bind(id).first().catch(() => null);
+    if (!clash) return { id, existed: false };
+    if (clash.file_path === path) return { id, existed: true };
+  }
+  return { id: await generateShortId(path + '#' + Date.now()), existed: false };
+}
+
+// Resolve the permanent short_id for many repo paths (falls back to the path hash for unindexed paths).
+async function resolveShortIds(env, paths) {
+  const map = new Map();
+  const db = env.harudrive_db;
+  const uniq = Array.from(new Set(paths.filter(p => p !== undefined && p !== null)));
+  if (db && uniq.length) {
+    try {
+      const stmts = [];
+      for (let i = 0; i < uniq.length; i += 90) {
+        const chunk = uniq.slice(i, i + 90);
+        stmts.push(db.prepare(`SELECT short_id, file_path FROM shortlinks WHERE file_path IN (${chunk.map(() => '?').join(',')})`).bind(...chunk));
+      }
+      const results = await db.batch(stmts);
+      for (const r of results) {
+        for (const row of (r.results || [])) map.set(row.file_path, row.short_id);
+      }
+    } catch (e) {}
+  }
+  for (const p of uniq) {
+    if (!map.has(p)) map.set(p, await generateShortId(p));
+  }
+  return map;
+}
+
+// Moves/renames items inside the HF dataset in ONE atomic commit.
+// moves: [{ from, to }]  (full repo paths). Never overwrites, never loses data:
+//  - validates source exists, destination does not exist, no move-into-itself
+//  - lists with full pagination
+//  - LFS files are re-pointed by oid, small (non-LFS) files are copied byte-for-byte
+async function hfRelocate(env, moves) {
+  const repo = env.HF_REPO_ID || 'username/harudrive-data';
+  const baseOf = p => p.split('/').pop();
+  const fail = (status, error) => ({ ok: false, status, error });
+
+  let plan = [];
+  const seenTargets = new Set();
+  for (const mv of moves) {
+    const from = cleanRepoPath(mv.from);
+    const to = cleanRepoPath(mv.to);
+    if (!from || !to) return fail(400, 'Path tidak valid.');
+    if (!isSafeRepoPath(to)) return fail(400, 'Nama tujuan tidak valid: "' + to + '"');
+    if (from === to) continue;
+    if (to === from || to.startsWith(from + '/')) return fail(400, 'Tidak bisa memindahkan "' + baseOf(from) + '" ke dalam dirinya sendiri.');
+    if (seenTargets.has(to)) return fail(409, 'Ada dua item dengan nama sama ("' + baseOf(to) + '") menuju folder tujuan yang sama.');
+    seenTargets.add(to);
+    plan.push({ from, to, isDir: false, files: [] });
+  }
+  // If a folder and one of its own children are both selected, the child travels with the folder.
+  plan = plan.filter(p => !plan.some(o => o !== p && p.from.startsWith(o.from + '/')));
+  if (!plan.length) return { ok: true, status: 200, moved: [] };
+
+  const listCache = new Map();
+  const listDir = async (dir) => {
+    if (!listCache.has(dir)) listCache.set(dir, await hfListTree(env, dir, false));
+    return listCache.get(dir);
+  };
+
+  // 1) validate source/destination
+  for (const p of plan) {
+    const src = await listDir(repoParentOf(p.from));
+    if (!src.ok) return fail(src.status || 502, src.error);
+    const entry = src.items.find(i => i.path === p.from);
+    if (!entry) return fail(404, '"' + baseOf(p.from) + '" tidak ditemukan di storage (mungkin sudah dipindah/dihapus). Muat ulang halaman.');
+    p.isDir = entry.type === 'directory';
+    p.entry = entry;
+    const dst = await listDir(repoParentOf(p.to));
+    if (!dst.ok) return fail(dst.status || 502, dst.error);
+    if (dst.items.some(i => i.path === p.to)) return fail(409, '"' + baseOf(p.to) + '" sudah ada di folder tujuan. Ganti nama dulu atau pilih folder lain.');
+  }
+
+  // 2) collect every file that has to move
+  for (const p of plan) {
+    if (p.isDir) {
+      const r = await hfListTree(env, p.from, true);
+      if (!r.ok) return fail(r.status || 502, r.error);
+      for (const it of r.items) {
+        if (it.type !== 'file') continue;
+        p.files.push({ from: it.path, to: p.to + it.path.slice(p.from.length), size: it.size || 0, lfs: it.lfs || null });
+      }
+      if (!p.files.length) return fail(404, 'Folder "' + baseOf(p.from) + '" kosong / tidak terbaca, dibatalkan demi keamanan.');
+    } else {
+      p.files.push({ from: p.from, to: p.to, size: p.entry.size || 0, lfs: p.entry.lfs || null });
+    }
+  }
+
+  // 3) build operations (small non-LFS files are copied inline as base64)
+  const ops = [];
+  const inline = [];
+  for (const p of plan) {
+    for (const f of p.files) {
+      ops.push({ key: 'deletedFile', value: { path: f.from } });
+      if (f.lfs && f.lfs.oid) {
+        ops.push({ key: 'lfsFile', value: { path: f.to, algo: 'sha256', oid: f.lfs.oid, size: f.lfs.size || f.size } });
+      } else {
+        inline.push(f);
+      }
+    }
+  }
+  const MAX_INLINE = 25;
+  if (inline.length > MAX_INLINE) {
+    return fail(413, 'Terlalu banyak file kecil non-LFS (' + inline.length + ') dalam satu proses. Pindahkan dalam beberapa tahap (maks ' + MAX_INLINE + ' file kecil sekali jalan).');
+  }
+  for (const f of inline) {
+    const r = await fetch(`https://huggingface.co/datasets/${repo}/resolve/main${hfEncPath(f.from)}`, { headers: hfHeadersFor(env) });
+    if (!r.ok) return fail(502, 'Gagal membaca isi file "' + f.from + '" (' + r.status + '). Tidak ada yang diubah.');
+    const bytes = new Uint8Array(await r.arrayBuffer());
+    ops.push({ key: 'file', value: { path: f.to, content: bytesToBase64(bytes), encoding: 'base64' } });
+  }
+
+  // 4) atomic commit
+  const summary = plan.length === 1
+    ? ('Move ' + plan[0].from + ' -> ' + plan[0].to + ' via HaruDrive')
+    : ('Move ' + plan.length + ' item(s) via HaruDrive');
+  const c = await hfCommitOps(env, summary, ops);
+  if (!c.ok) return fail(c.status || 502, 'Gagal commit ke HF: ' + c.error);
+
+  // 5) keep D1 in sync WITHOUT changing any short_id (only file_path / name are rewritten)
+  const d1 = await d1ApplyRelocation(env, plan);
+  return { ok: true, status: 200, moved: plan, d1 };
+}
+
+async function d1ApplyRelocation(env, plan) {
+  const db = env.harudrive_db;
+  if (!db) return { ok: true, skipped: true };
+  const parentsOf = (p) => {
+    const out = [];
+    let cur = p;
+    while (cur.indexOf('/') !== -1) { cur = cur.slice(0, cur.lastIndexOf('/')); out.push(cur); }
+    return out;
+  };
+  const build = async () => {
+    const stmts = [];
+    for (const p of plan) {
+      const pre = p.from + '/';
+      const size = p.files.reduce((s, f) => s + (f.size || 0), 0);
+      const count = p.files.length;
+      const toName = p.to.split('/').pop();
+      // Pin the CURRENT id of anything not yet indexed (id = what the listing showed), so it survives the move.
+      const pinStmt = db.prepare(
+        'INSERT OR IGNORE INTO shortlinks (short_id, file_path, name, type, size) SELECT ?, ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM shortlinks WHERE file_path = ?)'
+      );
+      if (p.isDir) {
+        stmts.push(pinStmt.bind(await generateShortId(p.from), p.from, p.from.split('/').pop(), 'folder', size, p.from));
+      }
+      for (const f of p.files) {
+        stmts.push(pinStmt.bind(await generateShortId(f.from), f.from, f.from.split('/').pop(), 'file', f.size || 0, f.from));
+      }
+      // shortlinks: same short_id, new path (+ new name for the item itself)
+      stmts.push(db.prepare(
+        'UPDATE shortlinks SET file_path = ? || substr(file_path, ?), name = CASE WHEN file_path = ? THEN ? ELSE name END WHERE file_path = ? OR substr(file_path, 1, ?) = ?'
+      ).bind(p.to, p.from.length + 1, p.from, toName, p.from, pre.length, pre));
+      // folder_sizes: move the subtree rows, then adjust old/new ancestor totals
+      if (p.isDir) {
+        stmts.push(db.prepare(
+          'UPDATE OR REPLACE folder_sizes SET path = ? || substr(path, ?) WHERE path = ? OR substr(path, 1, ?) = ?'
+        ).bind(p.to, p.from.length + 1, p.from, pre.length, pre));
+      }
+      for (const a of parentsOf(p.from)) {
+        stmts.push(db.prepare('UPDATE folder_sizes SET size = MAX(size - ?, 0), files = MAX(files - ?, 0) WHERE path = ?').bind(size, count, a));
+      }
+      for (const a of parentsOf(p.to)) {
+        stmts.push(db.prepare(
+          'INSERT INTO folder_sizes (path, size, files) VALUES (?, ?, ?) ON CONFLICT(path) DO UPDATE SET size = size + ?, files = files + ?'
+        ).bind(a, size, count, size, count));
+      }
+    }
+    return stmts;
+  };
+  try {
+    await db.prepare('CREATE TABLE IF NOT EXISTS folder_sizes (path TEXT PRIMARY KEY, size INTEGER, files INTEGER)').run().catch(() => {});
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_shortlinks_path ON shortlinks(file_path)').run().catch(() => {});
+    const stmts = await build();
+    for (let i = 0; i < stmts.length; i += 100) {
+      await db.batch(stmts.slice(i, i + 100));
+    }
+    return { ok: true };
+  } catch (e) {
+    console.error('d1ApplyRelocation error:', e);
+    return { ok: false, error: String(e && e.message || e) };
+  }
+}
 
 async function syncIndex(env) {
   if (!env.harudrive_db) return { items: 0, truncated: false };
@@ -3808,6 +3993,16 @@ function htmlPage(content, env, pageMode = 'public') {
     }
     .picker-item:hover { background: rgba(99, 102, 241, 0.1); color: var(--text); }
     .picker-item.active { background: rgba(236, 72, 153, 0.15); border: 1px solid rgba(236, 72, 153, 0.4); color: #ec4899; font-weight: 700; }
+    .picker-item.disabled { opacity: 0.4; cursor: not-allowed; }
+    .picker-item.disabled:hover { background: transparent; color: var(--text-muted); }
+    .picker-item .picker-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; min-width: 0; }
+    .picker-item .picker-sub { font-size: 0.72rem; font-weight: 500; opacity: 0.6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+    .modal-card.modal-card-lg { max-width: 680px; display: flex; flex-direction: column; max-height: 92vh; }
+    .modal-card.modal-card-lg .modal-body { overflow-y: auto; min-height: 0; }
+    .folder-tree-box.folder-tree-box-lg { max-height: min(46vh, 420px); min-height: 220px; }
+    .move-summary { font-size: 0.82rem; color: var(--text-muted); background: var(--bg-surface); border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; max-height: 130px; overflow-y: auto; }
+    .move-summary-row { padding: 2px 0; word-break: break-all; color: var(--text); }
+    .move-dest-label { font-size: 0.8rem; font-weight: 600; color: var(--text-muted); }
     .folder-tree-item.selected {
       background: rgba(236, 72, 153, 0.15);
       border: 1px solid rgba(236, 72, 153, 0.4);
@@ -5014,14 +5209,18 @@ async function savePublicAccessConfig() {
 // Navigation
 function navigateTo(path, id = '', pushHistory = true) {
   const isGuestCard = !!document.getElementById('guestCardTitle');
-  // Guest scoping: never navigate above/outside the shared root.
-  if (isGuestCard && guestRootPath && path && !(path === guestRootPath || path.startsWith(guestRootPath + '/'))) {
-    path = guestRootPath; id = guestRootId;
+  // Guest scoping: strict boundary enforcement. Never allow navigation above/outside the shared root.
+  if (isGuestCard) {
+    if (!path || (guestRootPath && !(path === guestRootPath || path.startsWith(guestRootPath + '/')))) {
+      path = guestRootPath;
+      id = guestRootId;
+    }
   }
   if (pushHistory) {
     let targetUrl;
     if (isGuestCard) {
-      targetUrl = id ? ('/folder/' + id) : (path ? ('/?p=' + encodeURIComponent(path)) : '/');
+      const effId = id || guestRootId;
+      targetUrl = effId ? ('/folder/' + effId) : (path ? ('/?p=' + encodeURIComponent(path)) : '/folder/' + (guestRootId || ''));
     } else {
       const _m = getStorageMode();
       const params = new URLSearchParams();
@@ -5038,9 +5237,12 @@ function navigateTo(path, id = '', pushHistory = true) {
 function goGuestHome() {
   const rPath = guestRootPath || '';
   const rId = guestRootId || '';
-  if (rId) { window.history.pushState({ path: rPath, id: rId }, '', '/folder/' + rId); }
-  else if (rPath) { window.history.pushState({ path: rPath, id: '' }, '', '/?p=' + encodeURIComponent(rPath)); }
-  loadFolder(rPath, rId);
+  if (rId) {
+    window.history.pushState({ path: rPath, id: rId }, '', '/folder/' + rId);
+    loadFolder(rPath, rId);
+  } else if (rPath) {
+    loadFolder(rPath, '');
+  }
 }
 
 function navigateToAdmin(path, id = '') {
@@ -5054,12 +5256,11 @@ function handlePopState(e) {
   const _isGuestPs = !!document.getElementById('guestCardTitle');
   if (pathName.startsWith('/folder/')) {
     const fId = pathName.replace('/folder/', '').split('/')[0];
-    if (_isGuestPs && fId !== guestRootId) { guestRootId = fId; guestRootPath = ''; }
     loadFolder('', fId);
   } else {
     const urlParams = new URLSearchParams(window.location.search);
     const p = urlParams.get('p') || '';
-    if (_isGuestPs && guestRootPath && p && !(p === guestRootPath || p.startsWith(guestRootPath + '/'))) {
+    if (_isGuestPs) {
       goGuestHome();
     } else {
       loadFolder(p, '');
@@ -5132,8 +5333,11 @@ async function loadFolder(path = '', id = '') {
     currentPath = data.currentPath || '';
     currentFolderId = data.folderId || '';
     currentFolderStats = data.folderStats || null;
-    if (document.getElementById('guestCardTitle') && !guestRootPath && currentPath) { guestRootPath = currentPath; }
     allFiles = data.files || [];
+    if (document.getElementById('guestCardTitle')) {
+      if (!guestRootPath && currentPath) guestRootPath = currentPath;
+      if (!guestRootId && currentFolderId) guestRootId = currentFolderId;
+    }
     window._fullFolderFiles = null;
 
     updateBreadcrumbs();
@@ -5228,7 +5432,8 @@ function updateBreadcrumbs() {
   
   const isGuestCard = !!document.getElementById('guestCardTitle');
   const homeClick = isPageAdmin ? "navigateToAdmin('')" : (isGuestCard ? "goGuestHome()" : "navigateTo('', '')");
-  let html = '<a href="/" class="crumb" onclick="' + homeClick + '; return false;"><svg class="icon icon-xs" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg><span>Home</span></a>';
+  const homeLabel = isGuestCard ? (guestRootPath ? (guestRootPath.split('/').pop() || 'Home') : 'Home') : 'Home';
+  let html = '<a href="javascript:void(0)" class="crumb" onclick="' + homeClick + '; return false;"><svg class="icon icon-xs" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg><span>' + escapeHtml(homeLabel) + '</span></a>';
 
   if (currentPath) {
     // Guest scoping: only show the trail relative to the shared root.
@@ -5699,53 +5904,150 @@ async function submitRename() {
   }
 }
 
-function openMoveModalSingle(filePath) {
-  const m = document.getElementById('moveModal');
-  const desc = document.getElementById('moveTargetDesc');
-  if (!m) return;
+// ===== MOVE (single + bulk) =====
+let moveItems = [];
+let moveDest = null;
 
-  selectedFiles.clear();
-  selectedFiles.add(filePath);
-  desc.textContent = 'Memindahkan: ' + filePath;
-  renderFolderPickerUI('moveFolderPicker', 'moveDestinationInput', currentPath);
-  m.style.display = 'flex';
+function getAdminPin() {
+  return localStorage.getItem('harudrive_admin_pin') || getCookie('harudrive_admin_pin') || '290722';
 }
+
+function parentOfPath(p) {
+  const i = String(p || '').lastIndexOf('/');
+  return i === -1 ? '' : p.slice(0, i);
+}
+
+function openMoveModalSingle(filePath) {
+  openMoveModalFor([filePath]);
+}
+
+function openBulkMoveModal() {
+  const arr = Array.from(selectedFiles);
+  if (!arr.length) return alert('Pilih minimal satu file/folder terlebih dahulu.');
+  openMoveModalFor(arr);
+}
+
+async function openMoveModalFor(paths) {
+  const m = document.getElementById('moveModal');
+  if (!m) return;
+  moveItems = paths.slice();
+  moveDest = null;
+
+  const title = document.getElementById('moveModalTitle');
+  if (title) title.textContent = moveItems.length > 1 ? ('Pindahkan ' + moveItems.length + ' Item') : 'Pindahkan Item';
+
+  const desc = document.getElementById('moveTargetDesc');
+  if (desc) {
+    const names = moveItems.slice(0, 6).map(function(p) { return '<div class="move-summary-row">' + escapeHtml(p) + '</div>'; }).join('');
+    const more = moveItems.length > 6 ? ('<div class="move-summary-row" style="opacity:.7">+ ' + (moveItems.length - 6) + ' item lainnya</div>') : '';
+    desc.innerHTML = '<div style="font-weight:700;margin-bottom:4px;">Memindahkan ' + moveItems.length + ' item:</div>' + names + more;
+  }
+
+  const search = document.getElementById('moveFolderSearch');
+  if (search) search.value = '';
+  updateMoveDestUI();
+  const picker = document.getElementById('moveFolderPicker');
+  if (picker) picker.innerHTML = '<div style="padding:18px;text-align:center;color:var(--text-muted);">Memuat daftar folder...</div>';
+  m.style.display = 'flex';
+
+  await fetchFolderTree();
+  renderMovePicker('');
+}
+
+function renderMovePicker(filter) {
+  const picker = document.getElementById('moveFolderPicker');
+  if (!picker) return;
+  const q = String(filter || '').trim().toLowerCase();
+  const parents = moveItems.map(parentOfPath);
+  const allSameParent = parents.every(function(p) { return p === parents[0]; });
+  let html = '';
+  let shown = 0;
+  availableFolders.forEach(function(f) {
+    // Hide invalid destinations: the item itself or anything inside it.
+    const invalid = moveItems.some(function(p) { return f === p || f.indexOf(p + '/') === 0; });
+    if (invalid) return;
+    if (q && f.toLowerCase().indexOf(q) === -1) return;
+    const isCurrentParent = allSameParent && f === parents[0];
+    const depth = f ? f.split('/').length : 0;
+    const label = f ? f.split('/').pop() : 'Root (/)';
+    const isSel = moveDest !== null && f === moveDest;
+    html += '<div class="picker-item' + (isSel ? ' active' : '') + (isCurrentParent ? ' disabled' : '') + '" style="padding-left:' + (12 + (q ? 0 : Math.min(depth, 8) * 16)) + 'px" data-path="' + escapeHtml(f) + '"' + (isCurrentParent ? '' : ' onclick="pickMoveDest(this.dataset.path)"') + ' title="' + escapeHtml(f || '/') + '">';
+    html += '<svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>';
+    html += '<span class="picker-name">' + escapeHtml(label) + '</span>';
+    if (q && f) html += '<span class="picker-sub">' + escapeHtml(f) + '</span>';
+    if (isCurrentParent) html += '<span class="picker-sub">(lokasi saat ini)</span>';
+    html += '</div>';
+    shown++;
+  });
+  if (!shown) html = '<div style="padding:18px;text-align:center;color:var(--text-muted);">Folder tidak ditemukan.</div>';
+  picker.innerHTML = html;
+}
+
+function pickMoveDest(path) {
+  moveDest = String(path || '');
+  const q = (document.getElementById('moveFolderSearch') || {}).value || '';
+  renderMovePicker(q);
+  updateMoveDestUI();
+}
+
+function updateMoveDestUI() {
+  const label = document.getElementById('moveDestLabel');
+  const btn = document.getElementById('btnSubmitMove');
+  const input = document.getElementById('moveDestinationInput');
+  if (label) label.textContent = moveDest === null ? 'Belum ada folder tujuan dipilih' : ('Tujuan: ' + (moveDest ? ('/' + moveDest) : 'Root (/)'));
+  if (btn) btn.disabled = moveDest === null;
+  if (input) input.value = moveDest === null ? '' : moveDest;
+}
+
 function closeMoveModal() {
   const m = document.getElementById('moveModal');
   if (m) m.style.display = 'none';
+  moveItems = [];
+  moveDest = null;
 }
+
 async function submitMove() {
-  const dest = (document.getElementById('moveDestinationInput').value || '').trim();
-  const pin = localStorage.getItem('harudrive_admin_pin') || '290722';
-  const paths = Array.from(selectedFiles);
+  if (moveDest === null) return alert('Pilih folder tujuan terlebih dahulu.');
+  if (!moveItems.length) return;
+  const btn = document.getElementById('btnSubmitMove');
+  const oldLabel = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Memindahkan...'; }
 
   try {
     const res = await fetch('/api/admin/move', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ paths: paths, destination: dest, admin_pin: pin })
+      body: JSON.stringify({ paths: moveItems, destination: moveDest, admin_pin: getAdminPin() })
     });
-    const data = await res.json();
+    const data = await res.json().catch(function() { return {}; });
     if (res.ok && data.success) {
+      const n = data.movedCount || 0;
       closeMoveModal();
-      clearBulkSelection();
-      loadFolder(currentPath, currentFolderId);
+      selectedFiles.clear();
+      await loadFolder(currentPath, currentFolderId);
+      updateBulkToolbar();
       fetchFolderTree();
+      showCopyToast(n ? (n + ' item berhasil dipindahkan') : 'Tidak ada perubahan (item sudah di folder tujuan)');
     } else {
-      alert('Gagal memindahkan: ' + (data.error || 'Error'));
+      alert('Gagal memindahkan: ' + (data.error || ('HTTP ' + res.status)));
     }
   } catch (e) {
     alert('Error: ' + e.message);
+  } finally {
+    if (btn) { btn.disabled = moveDest === null; btn.textContent = oldLabel || 'Pindahkan Sekarang'; }
   }
 }
 
+// ===== NEW FOLDER =====
 function openNewFolderModal() {
   const m = document.getElementById('newFolderModal');
   const input = document.getElementById('newFolderNameInput');
+  const lbl = document.getElementById('newFolderParentLabel');
   if (!m) return;
   if (input) input.value = '';
+  if (lbl) lbl.textContent = 'Lokasi: ' + (currentPath ? ('/' + currentPath) : 'Root (/)');
   m.style.display = 'flex';
-  input?.focus();
+  if (input) input.focus();
 }
 function closeNewFolderModal() {
   const m = document.getElementById('newFolderModal');
@@ -5754,26 +6056,33 @@ function closeNewFolderModal() {
 async function submitNewFolder() {
   const folderName = (document.getElementById('newFolderNameInput').value || '').trim();
   if (!folderName) return alert('Masukkan nama folder!');
+  if (/[\\/]/.test(folderName) || folderName === '.' || folderName === '..' || folderName.charAt(0) === '.') {
+    return alert('Nama folder tidak valid. Jangan memakai "/", "\\" atau diawali titik.');
+  }
 
   const fullPath = currentPath ? (currentPath + '/' + folderName) : folderName;
-  const pin = localStorage.getItem('harudrive_admin_pin') || '290722';
+  const btn = document.getElementById('btnSubmitNewFolder');
+  if (btn) btn.disabled = true;
 
   try {
-    const res = await fetch('/api/admin/folder', {
+    const res = await fetch('/api/admin/mkdir', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: fullPath, admin_pin: pin })
+      body: JSON.stringify({ folder_path: fullPath, admin_pin: getAdminPin() })
     });
-    const data = await res.json();
+    const data = await res.json().catch(function() { return {}; });
     if (res.ok && data.success) {
       closeNewFolderModal();
-      loadFolder(currentPath, currentFolderId);
+      await loadFolder(currentPath, currentFolderId);
       fetchFolderTree();
+      showCopyToast('Folder "' + folderName + '" berhasil dibuat');
     } else {
-      alert('Gagal membuat folder: ' + (data.error || 'Error'));
+      alert('Gagal membuat folder: ' + (data.error || ('HTTP ' + res.status)));
     }
   } catch (e) {
     alert('Error: ' + e.message);
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 
@@ -9798,29 +10107,31 @@ function adminConsoleUI() {
   </div>
 
   <!-- MOVE MODAL -->
-  <div id="moveModal" class="modal-backdrop" style="display: none;">
-    <div class="modal-card">
+  <div id="moveModal" class="modal-backdrop" style="display: none;" onclick="if(event.target===this)closeMoveModal()">
+    <div class="modal-card modal-card-lg">
       <div class="modal-header">
-        <span class="modal-title">Pindahkan File</span>
+        <span class="modal-title" id="moveModalTitle">Pindahkan</span>
         <button class="btn-close-circle" onclick="closeMoveModal()">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
       </div>
       <div class="modal-body">
-        <p id="moveTargetDesc" style="font-size: 0.85rem; color: var(--text-muted);"></p>
+        <div id="moveTargetDesc" class="move-summary"></div>
         <label style="font-size: 0.85rem; font-weight: 600;">Pilih Folder Tujuan:</label>
-        <div id="moveFolderPicker" class="folder-tree-box"></div>
+        <input type="text" id="moveFolderSearch" class="form-input-pro" placeholder="Cari folder tujuan..." oninput="renderMovePicker(this.value)" autocomplete="off">
+        <div id="moveFolderPicker" class="folder-tree-box folder-tree-box-lg"></div>
+        <div id="moveDestLabel" class="move-dest-label">Belum ada folder tujuan dipilih</div>
         <input type="hidden" id="moveDestinationInput">
       </div>
       <div class="modal-footer">
         <button class="nav-btn" onclick="closeMoveModal()">Batal</button>
-        <button class="nav-btn" style="background: var(--accent-gradient); color: white; border: none;" onclick="submitMove()">Pindahkan Sekarang</button>
+        <button class="nav-btn" id="btnSubmitMove" style="background: var(--accent-gradient); color: white; border: none;" onclick="submitMove()" disabled>Pindahkan Sekarang</button>
       </div>
     </div>
   </div>
 
   <!-- NEW FOLDER MODAL -->
-  <div id="newFolderModal" class="modal-backdrop" style="display: none;">
+  <div id="newFolderModal" class="modal-backdrop" style="display: none;" onclick="if(event.target===this)closeNewFolderModal()">
     <div class="modal-card">
       <div class="modal-header">
         <span class="modal-title">Buat Folder Baru</span>
@@ -9829,12 +10140,13 @@ function adminConsoleUI() {
         </button>
       </div>
       <div class="modal-body">
+        <div id="newFolderParentLabel" class="move-dest-label"></div>
         <label style="font-size: 0.85rem; font-weight: 600;">Nama Folder:</label>
-        <input type="text" id="newFolderNameInput" class="form-input-pro" placeholder="Nama folder...">
+        <input type="text" id="newFolderNameInput" class="form-input-pro" placeholder="Nama folder..." autocomplete="off" onkeydown="if(event.key==='Enter'){event.preventDefault();submitNewFolder();}">
       </div>
       <div class="modal-footer">
         <button class="nav-btn" onclick="closeNewFolderModal()">Batal</button>
-        <button class="nav-btn" style="background: var(--primary); color: white; border: none;" onclick="submitNewFolder()">Buat Folder</button>
+        <button class="nav-btn" id="btnSubmitNewFolder" style="background: var(--primary); color: white; border: none;" onclick="submitNewFolder()">Buat Folder</button>
       </div>
     </div>
   </div>

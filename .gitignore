@@ -147,3 +147,4 @@ bower_components/
 *.env
 .env.deploy
 .vercel
+scratch/
