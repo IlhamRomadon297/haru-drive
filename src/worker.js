@@ -1798,11 +1798,26 @@ export default {
           return await performTranslate(text, 'id', 'auto', env);
         }
 
+        // Pilih backdrop landscape: utamakan yang berteks Inggris, lalu tanpa teks, lalu backdrop utama.
+        function pickBackdropUrl(detail) {
+          try {
+            const bds = (detail && detail.images && detail.images.backdrops) || [];
+            if (bds.length) {
+              const en = bds.find(b => b.iso_639_1 === 'en');
+              const bebas = bds.find(b => !b.iso_639_1);
+              const chosen = en || bebas || bds[0];
+              if (chosen && chosen.file_path) return 'https://image.tmdb.org/t/p/w1280' + chosen.file_path;
+            }
+          } catch (e) {}
+          if (detail && detail.backdrop_path) return 'https://image.tmdb.org/t/p/w1280' + detail.backdrop_path;
+          return null;
+        }
+
         // 1. Direct ID lookup if query is numeric (e.g. 667520)
         if (/^\d+$/.test(query)) {
           const endpointsToTry = (type === 'series' || type === 'tv') ? ['tv', 'movie'] : ['movie', 'tv'];
           for (const ep of endpointsToTry) {
-            const detailRes = await fetch(`https://api.themoviedb.org/3/${ep}/${query}?api_key=${tmdbKey}&language=id-ID`);
+            const detailRes = await fetch(`https://api.themoviedb.org/3/${ep}/${query}?api_key=${tmdbKey}&language=id-ID&append_to_response=images&include_image_language=en,null,id`);
             if (detailRes.ok) {
               const r = await detailRes.json();
               let overview = r.overview;
@@ -1829,6 +1844,7 @@ export default {
                 title: title || '',
                 year: (r.release_date || r.first_air_date || '').slice(0, 4),
                 poster: r.poster_path ? `https://image.tmdb.org/t/p/w500${r.poster_path}` : null,
+                backdrop: pickBackdropUrl(r),
                 rating: r.vote_average ? r.vote_average.toFixed(1) : null,
                 overview: overview || '',
                 media_type: ep,
@@ -1863,6 +1879,7 @@ export default {
         const results = await Promise.all(rawList.map(async (r) => {
           let ov = r.overview || '';
           let dur = '';
+          let bd = r.backdrop_path ? 'https://image.tmdb.org/t/p/w1280' + r.backdrop_path : null;
           let ctry = (r.origin_country || []).join(', ');
           if (ov && /\b(the|and|after|with|his|her|who|this|from|about|when|their|they|have|has|for|is|was)\b/i.test(ov)) {
             ov = await autoTranslateToIndonesian(ov);
@@ -1871,7 +1888,7 @@ export default {
           // If overview or country is missing, fetch English movie details
           try {
             const ep = (r.media_type === 'tv' || searchType === 'tv') ? 'tv' : 'movie';
-            const dRes = await fetch(`https://api.themoviedb.org/3/${ep}/${r.id}?api_key=${tmdbKey}&language=en-US`);
+            const dRes = await fetch(`https://api.themoviedb.org/3/${ep}/${r.id}?api_key=${tmdbKey}&language=en-US&append_to_response=images&include_image_language=en,null,id`);
             if (dRes.ok) {
               const dData = await dRes.json();
               if (!ov && dData.overview) {
@@ -1881,6 +1898,8 @@ export default {
                 ctry = dData.production_countries.map(c => c.name).join(', ');
               }
               if (dData.runtime) dur = dData.runtime + ' menit';
+              const pickedBd = pickBackdropUrl(dData);
+              if (pickedBd) bd = pickedBd;
             }
           } catch(e) {
             console.warn('Detail fetch error:', e);
@@ -1891,6 +1910,7 @@ export default {
             title: r.title || r.name || '',
             year: (r.release_date || r.first_air_date || '').slice(0, 4),
             poster: r.poster_path ? `https://image.tmdb.org/t/p/w500${r.poster_path}` : null,
+            backdrop: bd,
             rating: r.vote_average ? r.vote_average.toFixed(1) : null,
             overview: ov,
             media_type: r.media_type || searchType,
@@ -7367,7 +7387,7 @@ function applyRichTmdb(idx) {
   var synEl = document.getElementById('richSynopsis');
   if (synEl && r.overview) synEl.value = r.overview;
   var headEl = document.getElementById('richHeaderUrl');
-  if (headEl && r.poster) { headEl.value = r.poster; if (typeof updateRichHeaderPreview === 'function') updateRichHeaderPreview(); }
+  if (headEl && (r.backdrop || r.poster)) { headEl.value = r.backdrop || r.poster; if (typeof updateRichHeaderPreview === 'function') updateRichHeaderPreview(); }
   var tagEl = document.getElementById('richHashtags');
   if (tagEl && !tagEl.value.trim()) {
     var tag = '#' + String(r.title || '').split(' ').filter(Boolean).join('_').replace(/[^A-Za-z0-9_]/g, '');
