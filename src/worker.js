@@ -6744,36 +6744,23 @@ function detectHDR(fn) {
 }
 
 function detectAudioTech(fn) {
-  if (!fn) return { codec: 'AAC', channel: '2.0', atmos: false };
+  if (!fn) return { codec: 'AAC', channel: '', atmos: false };
   const atmos = /atmos/i.test(fn);
   let codec = 'AAC';
-  let channel = '2.0';
-
-  if (/DDP?\s*5\.1/i.test(fn) || /EAC3\s*5\.1/i.test(fn) || /E-AC-3.*5\.1/i.test(fn)) {
-    codec = 'DDP'; channel = '5.1';
-  } else if (/DDP?\s*2\.0/i.test(fn) || /EAC3\s*2\.0/i.test(fn)) {
-    codec = 'DDP'; channel = '2.0';
-  } else if (/DDP|EAC3|E-AC-3/i.test(fn)) {
-    codec = 'DDP'; channel = '5.1';
-  } else if (/AAC\s*5\.1/i.test(fn) || /AAC5\.1/i.test(fn)) {
-    codec = 'AAC'; channel = '5.1';
-  } else if (/AAC\s*2\.0/i.test(fn) || /AAC2\.0/i.test(fn) || /AAC/i.test(fn)) {
-    codec = 'AAC'; channel = '2.0';
-  } else if (/AC3\s*5\.1/i.test(fn) || /DD\s*5\.1/i.test(fn) || /AC-?3/i.test(fn)) {
-    codec = 'AC3'; channel = '5.1';
-  } else if (/FLAC/i.test(fn)) {
-    codec = 'FLAC'; channel = '2.0';
-  } else if (/Opus/i.test(fn)) {
-    codec = 'Opus'; channel = '2.0';
-  } else if (/DTS-HD/i.test(fn)) {
-    codec = 'DTS-HD MA'; channel = '5.1';
-  } else if (/DTS/i.test(fn)) {
-    codec = 'DTS'; channel = '5.1';
-  } else if (/TrueHD/i.test(fn)) {
-    codec = 'TrueHD'; channel = '7.1';
-  }
-
-  return { codec, channel, atmos };
+  if (/DTS-HD/i.test(fn)) codec = 'DTS-HD MA';
+  else if (/DTS/i.test(fn)) codec = 'DTS';
+  else if (/TrueHD/i.test(fn)) codec = 'TrueHD';
+  else if (/DDP|EAC3|E-AC-3/i.test(fn)) codec = 'DDP';
+  else if (/AC-?3/i.test(fn)) codec = 'AC3';
+  else if (/FLAC/i.test(fn)) codec = 'FLAC';
+  else if (/Opus/i.test(fn)) codec = 'Opus';
+  else if (/AAC/i.test(fn)) codec = 'AAC';
+  // Channel HANYA dari token eksplisit di nama file (5.1/7.1/2.0/1.0).
+  // Dulu: codec DDP/AC3/DTS otomatis dianggap 5.1 -> SALAH untuk rilis stereo.
+  let channel = '';
+  const chMatch = fn.match(/(?:^|[^0-9])(7\.1|5\.1|2\.0|1\.0)(?:[^0-9]|$)/);
+  if (chMatch) channel = chMatch[1];
+  return { codec: codec, channel: channel, atmos: atmos };
 }
 
 function detectPlatformTag(str) {
@@ -7319,6 +7306,79 @@ function closeRichReleaseModal() {
   if (pill) pill.style.display = 'none';
 }
 
+var _richTmdbTimer = null;
+function richTmdbDebounce() {
+  if (_richTmdbTimer) clearTimeout(_richTmdbTimer);
+  _richTmdbTimer = setTimeout(searchRichTmdb, 450);
+}
+
+function saveRichTmdbKey() {
+  var input = document.getElementById('richTmdbKeyInput');
+  if (!input || !input.value.trim()) return alert('Masukkan TMDB API Key dulu.');
+  localStorage.setItem('harudrive_tmdb_api_key', input.value.trim());
+  searchRichTmdb();
+}
+
+async function searchRichTmdb() {
+  var qEl = document.getElementById('richTmdbQuery');
+  var box = document.getElementById('richTmdbResults');
+  if (!qEl || !box) return;
+  var q = qEl.value.trim();
+  if (q.length < 2) { box.innerHTML = ''; return; }
+  var typeEl = document.querySelector('input[name="richTmdbType"]:checked');
+  var type = typeEl ? typeEl.value : 'multi';
+  box.innerHTML = '<span style="color: #7dd3fc; font-size: 0.78rem;">Mencari di TMDB...</span>';
+  try {
+    var url = '/api/admin/tmdb-search?q=' + encodeURIComponent(q) + '&type=' + type;
+    var userKey = localStorage.getItem('harudrive_tmdb_api_key') || '';
+    if (userKey) url += '&api_key=' + encodeURIComponent(userKey);
+    var res = await fetch(url);
+    var data = await res.json();
+    if (data.needs_key || (data.error && data.error.indexOf('API key') !== -1)) {
+      box.innerHTML = '<div style="background: rgba(239,68,68,0.12); border: 1px solid rgba(239,68,68,0.35); border-radius: 8px; padding: 8px 10px;">' +
+        '<div style="color: #f87171; font-weight: 600; font-size: 0.76rem; margin-bottom: 5px;">TMDB API Key belum diset di server. Masukkan key-mu sekali saja (tersimpan di browser ini):</div>' +
+        '<div style="display: flex; gap: 6px;"><input type="text" id="richTmdbKeyInput" class="form-input-pro" placeholder="TMDB v3 API Key..." style="flex: 1; padding: 5px 8px; font-size: 0.74rem;">' +
+        '<button type="button" class="nav-btn" style="padding: 4px 12px; font-size: 0.74rem;" onclick="saveRichTmdbKey()">Simpan &amp; Cari</button></div></div>';
+      return;
+    }
+    if (data.error) { box.innerHTML = '<span style="color: #f87171; font-size: 0.78rem;">' + escapeHtml(data.error) + '</span>'; return; }
+    if (!data.results || !data.results.length) { box.innerHTML = '<span style="color: #f87171; font-size: 0.78rem;">Tidak ditemukan di TMDB.</span>'; return; }
+    window._richTmdbResults = data.results;
+    var h = '<div style="display: flex; flex-direction: column; gap: 6px;">';
+    data.results.forEach(function(r, idx) {
+      h += '<div style="display: flex; align-items: center; gap: 10px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; background: rgba(255,255,255,0.02);" onclick="applyRichTmdb(' + idx + ')">';
+      if (r.poster) h += '<img src="' + r.poster + '" style="width: 34px; height: 50px; border-radius: 4px; object-fit: cover;" loading="lazy">';
+      h += '<div style="flex: 1; min-width: 0;"><div style="font-weight: 600; font-size: 0.82rem; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">' + escapeHtml(r.title) + ' (' + (r.year || '?') + ')</div>';
+      h += '<div style="font-size: 0.7rem; color: var(--text-dim);">' + (r.media_type === 'tv' ? 'Series' : 'Film') + ' • ID ' + r.id + (r.rating ? ' • ★ ' + r.rating : '') + (r.genres ? ' • ' + escapeHtml(r.genres) : '') + '</div></div>';
+      h += '<button type="button" class="nav-btn" style="font-size: 0.7rem; padding: 3px 10px;">Pilih</button></div>';
+    });
+    h += '</div>';
+    box.innerHTML = h;
+  } catch (e) {
+    box.innerHTML = '<span style="color: #f87171; font-size: 0.78rem;">Error: ' + escapeHtml(e.message) + '</span>';
+  }
+}
+
+function applyRichTmdb(idx) {
+  var r = (window._richTmdbResults || [])[idx];
+  if (!r) return;
+  var titleEl = document.getElementById('richTitle');
+  if (titleEl) titleEl.value = r.title + (r.year ? ' (' + r.year + ')' : '');
+  var synEl = document.getElementById('richSynopsis');
+  if (synEl && r.overview) synEl.value = r.overview;
+  var headEl = document.getElementById('richHeaderUrl');
+  if (headEl && r.poster) { headEl.value = r.poster; if (typeof updateRichHeaderPreview === 'function') updateRichHeaderPreview(); }
+  var tagEl = document.getElementById('richHashtags');
+  if (tagEl && !tagEl.value.trim()) {
+    var tag = '#' + String(r.title || '').split(' ').filter(Boolean).join('_').replace(/[^A-Za-z0-9_]/g, '');
+    if (r.media_type === 'tv') tag += ' #Series'; else tag += ' #Movie';
+    tagEl.value = tag;
+  }
+  var box = document.getElementById('richTmdbResults');
+  if (box) box.innerHTML = '<span style="color: #38bdf8; font-size: 0.78rem;">✓ Metadata terimpor dari TMDB: ' + escapeHtml(r.title) + (r.year ? ' (' + r.year + ')' : '') + ' — judul/sinopsis/foto header sudah terisi, silakan cek &amp; edit bila perlu.</span>';
+  updateRichPreview();
+}
+
 function minimizeRichRelease() {
   var m = document.getElementById('richReleaseModal');
   if (m) m.style.display = 'none';
@@ -7835,7 +7895,7 @@ function generateTGCaption() {
           const p = parseFileName(f0.name || f0.path || '');
           const c = formatCodec(p.codec || 'AV1');
           const aTech = detectAudioTech(f0.name || f0.path || '');
-          const aLabel = (aTech.codec + ' ' + aTech.channel + (aTech.atmos ? ' Atmos' : '')).trim();
+          const aLabel = [aTech.codec, aTech.channel, aTech.atmos ? 'Atmos' : ''].filter(Boolean).join(' ');
 
           let totalBytes = 0;
           vFiles.forEach(f => { totalBytes += (f.size || 0); });
@@ -7878,7 +7938,7 @@ function generateTGCaption() {
       const hdr = detectHDR(fn);
       const c = formatCodec(parsed.codec || 'AV1');
       const aTech = detectAudioTech(fn);
-      const aLabel = (aTech.codec + ' ' + aTech.channel + (aTech.atmos ? ' Atmos' : '')).trim();
+      const aLabel = [aTech.codec, aTech.channel, aTech.atmos ? 'Atmos' : ''].filter(Boolean).join(' ');
       let bit = '';
       if (/(10bit|10-bit|10\s*bit|hi10p)/i.test(fn)) bit = '10-bit';
 
@@ -7900,7 +7960,7 @@ function generateTGCaption() {
     const hdr = detectHDR(fn);
     const c = formatCodec(parsed.codec || 'AV1');
     const aTech = detectAudioTech(fn);
-    const aLabel = (aTech.codec + ' ' + aTech.channel + (aTech.atmos ? ' Atmos' : '')).trim();
+    const aLabel = [aTech.codec, aTech.channel, aTech.atmos ? 'Atmos' : ''].filter(Boolean).join(' ');
     let bit = '';
     if (/(10bit|10-bit|10\s*bit|hi10p)/i.test(fn)) bit = '10-bit';
 
@@ -8047,7 +8107,7 @@ async function getOrScanMediaInfoForFile(fileOrUrl) {
       const _smode = (typeof getStorageMode === 'function') ? getStorageMode() : 'hf';
       streamUrl = window.location.origin + '/d/' + (fileObj.id || encodeURIComponent(fileObj.path)) + (_smode === 'gdrive' ? '?mode=gdrive' : '');
     }
-    const rangeRes = await fetch(streamUrl, { headers: { 'Range': 'bytes=0-262143' } });
+    const rangeRes = await fetch(streamUrl, { headers: { 'Range': 'bytes=0-2097151' } });
     if (rangeRes.ok || rangeRes.status === 206) {
       const buffer = await rangeRes.arrayBuffer();
       const bytes = new Uint8Array(buffer);
@@ -8826,7 +8886,7 @@ async function sendToTelegram() {
         const p = parseFileName(f0.name || f0.path || '');
         const c = formatCodec(p.codec || 'HEVC');
         const aTech = detectAudioTech(f0.name || f0.path || '');
-        const aLabel = (aTech.codec + ' ' + aTech.channel + (aTech.atmos ? ' Atmos' : '')).trim();
+        const aLabel = [aTech.codec, aTech.channel, aTech.atmos ? 'Atmos' : ''].filter(Boolean).join(' ');
 
         let totalBytes = 0;
         vFiles.forEach(f => { totalBytes += (f.size || 0); });
@@ -8866,7 +8926,7 @@ async function sendToTelegram() {
       const hdr = detectHDR(fn);
       const c = formatCodec(parsed.codec || 'AV1');
       const aTech = detectAudioTech(fn);
-      const aLabel = (aTech.codec + ' ' + aTech.channel + (aTech.atmos ? ' Atmos' : '')).trim();
+      const aLabel = [aTech.codec, aTech.channel, aTech.atmos ? 'Atmos' : ''].filter(Boolean).join(' ');
       let bit = '';
       if (/(10bit|10-bit|10\s*bit|hi10p)/i.test(fn)) bit = '10-bit';
       const vLabel = [q, hdr, c, bit].filter(Boolean).join(' ');
@@ -9719,7 +9779,7 @@ function renderMediaInfoCards(data) {
     else {
       let h = '';
       data.audio.forEach(function(a, i) {
-        h += '<div class="p-3.5 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3" style="background:rgba(20,20,40,0.6);border:1px solid var(--border)"><div class="flex items-center gap-3"><div class="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0" style="background:rgba(244,63,94,0.15);color:#f43f5e">♫</div><div><div class="text-xs font-bold flex items-center gap-2" style="color:#fff"><span>Audio #' + (i+1) + ': ' + escapeHtml(a.title || a.language || 'Main Audio') + '</span>' + (a.isDefault ? '<span class="badge" style="background:rgba(16,185,129,0.15);color:#6ee7b7;border:1px solid rgba(16,185,129,0.3);font-size:9px;padding:0 6px;border-radius:6px">DEFAULT</span>' : '') + '</div><div class="text-[11px] font-mono mt-0.5" style="color:var(--text-muted)">' + escapeHtml(a.format || 'AAC') + ' \u00b7 ' + escapeHtml(a.channels || '2 channels') + ' \u00b7 ' + escapeHtml(a.samplingRate || '48.0 kHz') + '</div></div></div><div class="flex items-center gap-2 font-mono text-xs" style="color:#f43f5e"><span class="px-2.5 py-1 rounded-md" style="background:rgba(12,12,30,0.8);border:1px solid var(--border)">' + escapeHtml(a.bitRate || '192 kb/s') + '</span></div></div>';
+        h += '<div class="p-3.5 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3" style="background:rgba(20,20,40,0.6);border:1px solid var(--border)"><div class="flex items-center gap-3"><div class="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0" style="background:rgba(244,63,94,0.15);color:#f43f5e">♫</div><div><div class="text-xs font-bold flex items-center gap-2" style="color:#fff"><span>Audio #' + (i+1) + ': ' + escapeHtml(a.title || a.language || 'Main Audio') + '</span>' + (a.isDefault ? '<span class="badge" style="background:rgba(16,185,129,0.15);color:#6ee7b7;border:1px solid rgba(16,185,129,0.3);font-size:9px;padding:0 6px;border-radius:6px">DEFAULT</span>' : '') + '</div><div class="text-[11px] font-mono mt-0.5" style="color:var(--text-muted)">' + escapeHtml(a.format || 'AAC') + ' \u00b7 ' + escapeHtml(a.channels || '-') + ' \u00b7 ' + escapeHtml(a.samplingRate || '48.0 kHz') + '</div></div></div><div class="flex items-center gap-2 font-mono text-xs" style="color:#f43f5e"><span class="px-2.5 py-1 rounded-md" style="background:rgba(12,12,30,0.8);border:1px solid var(--border)">' + escapeHtml(a.bitRate || '-') + '</span></div></div>';
       });
       aList.innerHTML = h;
     }
@@ -9786,12 +9846,11 @@ function generateSmartInitialMediaInfo(file) {
   const audioTracks = [];
   const aFormat = title.includes('flac') ? 'FLAC' : title.includes('opus') ? 'Opus' : title.includes('ac3') || title.includes('ddp') ? 'E-AC-3' : 'AAC LC';
   const aCodecID = isMkv ? (title.includes('flac') ? 'A_FLAC' : title.includes('opus') ? 'A_OPUS' : aFormat.includes('E-AC-3') ? 'A_EAC3' : 'A_AAC-2') : 'mp4a-40-2';
-  const aChannels = title.includes('5.1') ? '6 channels (5.1 Surround)' : '2 channels (Stereo)';
-  const aBitrate = title.includes('5.1') ? '384 kb/s' : '192 kb/s';
-  audioTracks.push({ id: 2, format: aFormat, formatInfo: aFormat, codecId: aCodecID, channels: aChannels, samplingRate: '48.0 kHz', bitRate: aBitrate, title: 'Original Audio', language: 'Japanese', isDefault: true });
-  const subTracks = [];
-  if (isMkv && !title.includes('hardsub')) { subTracks.push({ id: 3, format: 'ASS', codecId: 'S_TEXT/ASS', title: 'Indonesian', language: 'Indonesian', isDefault: true }); }
-  return { general: { fileName: rawTitle, format: format, formatVersion: isMkv ? 'Version 4' : 'Base Media / Version 2', fileSize: sizeFormatted, fileSizeBytes: sizeBytes, overallBitRate: sizeBytes > 0 ? Math.round((sizeBytes * 8) / (24 * 60 * 1000)) + ' kb/s' : '1 500 kb/s', writingApp: isMkv ? 'mkvmerge 98.0 / Lavf' : 'Lavf58.76.100 / ISOM', writingLib: isMkv ? 'libebml v1.4.5 + libmatroska v1.7.1' : 'isom / mp42' }, video: [{ id: 1, format: vFormat, formatInfo: vFormatInfo, profile: vProfile, codecId: vCodecID, width: width, height: height, aspect: '16:9', frameRate: '23.976 FPS', colorSpace: 'YUV', chroma: '4:2:0', bitDepth: bitDepth, writingLib: writingLib, isDefault: true }], audio: audioTracks, text: subTracks, menus: [] };
+  const aChannels = title.includes('7.1') ? '8 channels (7.1 Surround)' : title.includes('5.1') ? '6 channels (5.1 Surround)' : title.includes('2.0') ? '2 channels (Stereo)' : '';
+  const aBitrate = '';
+  audioTracks.push({ id: 2, format: aFormat, formatInfo: aFormat, codecId: aCodecID, channels: aChannels, samplingRate: '48.0 kHz', bitRate: aBitrate, title: '', language: 'Undetermined', isDefault: true });
+  const subTracks = []; // jangan mengarang track subtitle — tampilkan hanya hasil scan/paste yang nyata
+  return { general: { fileName: rawTitle, format: format, formatVersion: isMkv ? 'Version 4' : 'Base Media / Version 2', fileSize: sizeFormatted, fileSizeBytes: sizeBytes, overallBitRate: '', writingApp: isMkv ? 'mkvmerge 98.0 / Lavf' : 'Lavf58.76.100 / ISOM', writingLib: isMkv ? 'libebml v1.4.5 + libmatroska v1.7.1' : 'isom / mp42' }, video: [{ id: 1, format: vFormat, formatInfo: vFormatInfo, profile: vProfile, codecId: vCodecID, width: width, height: height, aspect: '16:9', frameRate: '23.976 FPS', colorSpace: 'YUV', chroma: '4:2:0', bitDepth: bitDepth, writingLib: writingLib, isDefault: true }], audio: audioTracks, text: subTracks, menus: [] };
 }
 async function startBinaryMediaInfoScan(force) {
   if (!currentMediaInfoFile) return;
@@ -9829,7 +9888,7 @@ async function startBinaryMediaInfoScan(force) {
   try {
     const _smode = getStorageMode();
     const streamUrl = window.location.origin + '/d/' + file.id + (_smode === 'gdrive' ? '?mode=gdrive' : '');
-    const res = await fetch(streamUrl, { headers: { 'Range': 'bytes=0-262143' } });
+    const res = await fetch(streamUrl, { headers: { 'Range': 'bytes=0-2097151' } });
     if (res.ok || res.status === 206) {
       const buffer = await res.arrayBuffer();
       const bytes = new Uint8Array(buffer);
@@ -9960,7 +10019,7 @@ function loginUI(errorMsg = '', redirect = '') {
   <div style="min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px;">
     <div class="glass" style="max-width: 400px; width: 100%; padding: 32px; border-radius: 24px; text-align: center; box-shadow: 0 20px 50px rgba(0,0,0,0.3);">
       <div class="logo-glow-wrap" style="margin: 0 auto 16px; width: 56px; height: 56px;">
-        <svg class="sakura-icon-svg" style="width: 32px; height: 32px;" viewBox="0 0 24 24"><path d="M12 2a4 4 0 0 0-3.5 6 4 4 0 0 0-6 3.5 4 4 0 0 0 3.5 6 4 4 0 0 0 6 3.5 4 4 0 0 0 3.5-6 4 4 0 0 0-3.5-6 4 4 0 0 0-6-3.5z"/><circle cx="12" cy="12" r="2.5" fill="#ffffff"/></svg>
+        <svg class="sakura-icon-svg" style="width: 32px; height: 32px;" viewBox="0 0 24 24"><path d="M12 2a4 4 0 0 0-3.5 6 4 4 0 0 0-6 3.5 4 4 0 0 0 3.5 6 4 4 0 0 0 6 3.5 4 4 0 0 0 6-3.5 4 4 0 0 0 3.5-6 4 4 0 0 0-3.5-6 4 4 0 0 0-6-3.5z"/><circle cx="12" cy="12" r="2.5" fill="#ffffff"/></svg>
       </div>
       <h2 style="font-size: 1.6rem; font-weight: 800; margin-bottom: 6px; background: var(--accent-gradient); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">HaruDrive</h2>
       <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 24px;">Masukkan password untuk mengakses storage cloud.</p>
@@ -10201,7 +10260,7 @@ function adminConsoleUI() {
       <div class="nav-left">
         <a href="javascript:void(0)" class="brand-logo" onclick="navigateToAdmin('')">
           <div class="logo-glow-wrap">
-            <svg class="sakura-icon-svg" viewBox="0 0 24 24"><path d="M12 2a4 4 0 0 0-3.5 6 4 4 0 0 0-6 3.5 4 4 0 0 0 3.5 6 4 4 0 0 0 6 3.5 4 4 0 0 0 3.5-6 4 4 0 0 0-3.5-6 4 4 0 0 0-6-3.5z"/><circle cx="12" cy="12" r="2.5" fill="#ffffff"/></svg>
+            <svg class="sakura-icon-svg" viewBox="0 0 24 24"><path d="M12 2a4 4 0 0 0-3.5 6 4 4 0 0 0-6 3.5 4 4 0 0 0 3.5 6 4 4 0 0 0 6 3.5 4 4 0 0 0 6-3.5 4 4 0 0 0 3.5-6 4 4 0 0 0-3.5-6 4 4 0 0 0-6-3.5z"/><circle cx="12" cy="12" r="2.5" fill="#ffffff"/></svg>
           </div>
           <div class="brand-info">
             <span class="brand-title">HaruDrive</span>
@@ -10893,6 +10952,20 @@ function adminConsoleUI() {
       </div>
       <div class="modal-body" id="richReleaseBody" style="max-height: 76vh; overflow-y: auto; padding: 20px;">
         <p style="font-size: 0.78rem; color: var(--text-muted); margin-bottom: 14px;">Susun rilisanmu sendiri, tanpa deteksi file. Hasilnya <b>satu pesan rich text</b> ke channel khusus: foto header, judul, sinopsis, lalu tiap file punya bagian <b>SHOTS</b> &amp; <b>MEDIAINFO</b> yang bisa dibuka-tutup.</p>
+
+        <div style="margin-bottom: 14px; border: 1px solid rgba(56,189,248,0.35); border-radius: 12px; padding: 12px; background: rgba(56,189,248,0.05);">
+          <label style="font-size: 0.78rem; font-weight: 700; color: #7dd3fc;">🎬 Ambil Metadata dari TMDB</label>
+          <div style="display: flex; gap: 8px; margin-top: 6px; flex-wrap: wrap;">
+            <input type="text" id="richTmdbQuery" class="form-input-pro" placeholder="Ketik judul film/series… hasil muncul otomatis (atau tempel ID TMDB)" style="flex: 1; min-width: 200px;" oninput="richTmdbDebounce()">
+            <div style="display: flex; gap: 10px; align-items: center; font-size: 0.76rem; color: var(--text-muted);">
+              <label style="display: flex; gap: 4px; align-items: center; cursor: pointer;"><input type="radio" name="richTmdbType" value="multi" checked style="accent-color: #38bdf8;" onchange="richTmdbDebounce()"> Semua</label>
+              <label style="display: flex; gap: 4px; align-items: center; cursor: pointer;"><input type="radio" name="richTmdbType" value="movie" style="accent-color: #38bdf8;" onchange="richTmdbDebounce()"> Film</label>
+              <label style="display: flex; gap: 4px; align-items: center; cursor: pointer;"><input type="radio" name="richTmdbType" value="tv" style="accent-color: #38bdf8;" onchange="richTmdbDebounce()"> Series</label>
+            </div>
+          </div>
+          <div id="richTmdbResults" style="margin-top: 8px;"></div>
+          <div style="font-size: 0.7rem; color: var(--text-dim); margin-top: 6px;">Klik salah satu hasil: judul, sinopsis &amp; foto header langsung terisi otomatis. Masih bisa kamu edit lagi sesukamu.</div>
+        </div>
 
         <div style="margin-bottom: 12px;">
           <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Judul Rilisan *</label>
