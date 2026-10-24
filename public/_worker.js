@@ -7315,6 +7315,50 @@ function openRichReleaseModal() {
 function closeRichReleaseModal() {
   var m = document.getElementById('richReleaseModal');
   if (m) m.style.display = 'none';
+  var pill = document.getElementById('richMinimizedPill');
+  if (pill) pill.style.display = 'none';
+}
+
+function minimizeRichRelease() {
+  var m = document.getElementById('richReleaseModal');
+  if (m) m.style.display = 'none';
+  var pill = document.getElementById('richMinimizedPill');
+  if (pill) pill.style.display = 'block';
+}
+
+function restoreRichRelease() {
+  var pill = document.getElementById('richMinimizedPill');
+  if (pill) pill.style.display = 'none';
+  var m = document.getElementById('richReleaseModal');
+  if (m) m.style.display = 'flex';
+}
+
+function toggleRichFullscreen() {
+  var backdrop = document.getElementById('richReleaseModal');
+  var card = document.getElementById('richReleaseCard');
+  var body = document.getElementById('richReleaseBody');
+  var btn = document.getElementById('richFsBtn');
+  if (!card) return;
+  window._richFullscreen = !window._richFullscreen;
+  if (window._richFullscreen) {
+    if (backdrop) backdrop.style.padding = '0';
+    card.style.maxWidth = '100%';
+    card.style.width = '100%';
+    card.style.height = '100vh';
+    card.style.maxHeight = '100vh';
+    card.style.borderRadius = '0';
+    if (body) body.style.maxHeight = 'calc(100vh - 130px)';
+    if (btn) btn.textContent = '🗗';
+  } else {
+    if (backdrop) backdrop.style.padding = '';
+    card.style.maxWidth = '720px';
+    card.style.width = '100%';
+    card.style.height = '';
+    card.style.maxHeight = '';
+    card.style.borderRadius = '';
+    if (body) body.style.maxHeight = '76vh';
+    if (btn) btn.textContent = '⛶';
+  }
 }
 
 function addRichFileRow() {
@@ -7329,8 +7373,9 @@ function removeRichFileRow(i) {
   updateRichPreview();
 }
 
-function setRichField(i, field, value) {
-  if (window._richFiles[i]) window._richFiles[i][field] = value;
+var RICH_FIELD_NAMES = ['name', 'size', 'links', 'shots', 'mediainfo'];
+function setRichField(i, fidx, value) {
+  if (window._richFiles[i]) window._richFiles[i][RICH_FIELD_NAMES[fidx]] = value;
   updateRichPreview();
 }
 
@@ -7342,18 +7387,18 @@ function renderRichFileRows() {
     html += '<div style="border: 1px solid var(--border); border-radius: 12px; padding: 12px; margin-bottom: 10px; background: rgba(255,255,255,0.02);">';
     html += '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;"><b style="font-size: 0.8rem; color: var(--text);">File ' + (i + 1) + '</b>';
     html += '<button type="button" class="nav-btn" style="font-size: 0.7rem; padding: 2px 10px; color: #f87171; border-color: rgba(248,113,113,0.4);" onclick="removeRichFileRow(' + i + ')">Hapus</button></div>';
-    html += '<input type="text" class="form-input-pro" placeholder="Nama file, mis. Avatar.Seven.Havens.2026.S01E07.1080p.ATV.WEB-DL.mkv" value="' + richEsc(f.name) + '" oninput="setRichField(' + i + ', \'name\', this.value)" style="margin-bottom: 8px;">';
-    html += '<input type="text" class="form-input-pro" placeholder="Ukuran, mis. 1.11 GB" value="' + richEsc(f.size) + '" oninput="setRichField(' + i + ', \'size\', this.value)" style="margin-bottom: 8px;">';
-    html += '<textarea class="form-input-pro" rows="2" placeholder="Link download, satu per baris: Label | URL" oninput="setRichField(' + i + ', \'links\', this.value)" style="margin-bottom: 8px; resize: vertical;">' + richEsc(f.links) + '</textarea>';
-    html += '<textarea class="form-input-pro" rows="2" placeholder="SHOTS: URL gambar screenshot, satu per baris" oninput="setRichField(' + i + ', \'shots\', this.value)" style="margin-bottom: 8px; resize: vertical;">' + richEsc(f.shots) + '</textarea>';
-    html += '<textarea class="form-input-pro" rows="3" placeholder="MEDIAINFO: tempel teks MediaInfo file ini" oninput="setRichField(' + i + ', \'mediainfo\', this.value)" style="resize: vertical; font-family: monospace; font-size: 0.74rem;">' + richEsc(f.mediainfo) + '</textarea>';
+    html += '<input type="text" class="form-input-pro" placeholder="Nama file, mis. Avatar.Seven.Havens.2026.S01E07.1080p.ATV.WEB-DL.mkv" value="' + richEsc(f.name) + '" oninput="setRichField(' + i + ', 0, this.value)" style="margin-bottom: 8px;">';
+    html += '<input type="text" class="form-input-pro" placeholder="Ukuran, mis. 1.11 GB" value="' + richEsc(f.size) + '" oninput="setRichField(' + i + ', 1, this.value)" style="margin-bottom: 8px;">';
+    html += '<textarea class="form-input-pro" rows="2" placeholder="Link download, satu per baris: Label | URL" oninput="setRichField(' + i + ', 2, this.value)" style="margin-bottom: 8px; resize: vertical;">' + richEsc(f.links) + '</textarea>';
+    html += '<textarea class="form-input-pro" rows="2" placeholder="SHOTS: URL gambar screenshot, satu per baris" oninput="setRichField(' + i + ', 3, this.value)" style="margin-bottom: 8px; resize: vertical;">' + richEsc(f.shots) + '</textarea>';
+    html += '<textarea class="form-input-pro" rows="3" placeholder="MEDIAINFO: tempel teks MediaInfo file ini" oninput="setRichField(' + i + ', 4, this.value)" style="resize: vertical; font-family: monospace; font-size: 0.74rem;">' + richEsc(f.mediainfo) + '</textarea>';
     html += '</div>';
   });
   c.innerHTML = html;
 }
 
 function parseRichLines(text) {
-  return String(text || '').split('\n').map(function(x) { return x.trim(); }).filter(Boolean);
+  return String(text || '').split('\\n').map(function(x) { return x.trim(); }).filter(Boolean);
 }
 
 function parseRichLinks(text) {
@@ -7362,8 +7407,8 @@ function parseRichLinks(text) {
     var parts = line.split('|');
     if (parts.length >= 2) {
       var url = parts.slice(1).join('|').trim();
-      if (/^https?:\/\//i.test(url)) out.push({ label: parts[0].trim() || 'Download', url: url });
-    } else if (/^https?:\/\//i.test(line)) {
+      if (/^https?:\\/\\//i.test(url)) out.push({ label: parts[0].trim() || 'Download', url: url });
+    } else if (/^https?:\\/\\//i.test(line)) {
       out.push({ label: 'Download', url: line });
     }
   });
@@ -7376,7 +7421,7 @@ function collectRichPayload() {
       name: (f.name || '').trim(),
       size: (f.size || '').trim(),
       links: parseRichLinks(f.links),
-      shots: parseRichLines(f.shots).filter(function(u) { return /^https?:\/\//i.test(u); }),
+      shots: parseRichLines(f.shots).filter(function(u) { return /^https?:\\/\\//i.test(u); }),
       mediainfo: (f.mediainfo || '').trim()
     };
   }).filter(function(f) { return f.name; });
@@ -10835,14 +10880,18 @@ function adminConsoleUI() {
 
   <!-- RICH RELEASE BUILDER MODAL (Fase 1 — 2026-10-24) -->
   <div id="richReleaseModal" class="modal-backdrop" style="display: none;">
-    <div class="modal-card glass" style="max-width: 720px; width: 100%; border: 1px solid rgba(56,189,248,0.35);">
+    <div id="richReleaseCard" class="modal-card glass" style="max-width: 720px; width: 100%; border: 1px solid rgba(56,189,248,0.35);">
       <div class="modal-header">
         <span class="modal-title">🚀 Rilisan Rich Text — Custom Sendiri</span>
+        <div style="display: flex; gap: 6px; align-items: center;">
+        <button class="btn-bulk-close" id="richMinBtn" title="Minimize — sembunyikan sementara, draf tetap aman" onclick="minimizeRichRelease()" style="font-size: 1rem; line-height: 1;">—</button>
+        <button class="btn-bulk-close" id="richFsBtn" title="Fullscreen / ukuran normal" onclick="toggleRichFullscreen()" style="font-size: 0.85rem; line-height: 1;">⛶</button>
         <button class="btn-bulk-close" onclick="closeRichReleaseModal()">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
+        </div>
       </div>
-      <div class="modal-body" style="max-height: 76vh; overflow-y: auto; padding: 20px;">
+      <div class="modal-body" id="richReleaseBody" style="max-height: 76vh; overflow-y: auto; padding: 20px;">
         <p style="font-size: 0.78rem; color: var(--text-muted); margin-bottom: 14px;">Susun rilisanmu sendiri, tanpa deteksi file. Hasilnya <b>satu pesan rich text</b> ke channel khusus: foto header, judul, sinopsis, lalu tiap file punya bagian <b>SHOTS</b> &amp; <b>MEDIAINFO</b> yang bisa dibuka-tutup.</p>
 
         <div style="margin-bottom: 12px;">
@@ -10925,6 +10974,9 @@ function adminConsoleUI() {
       </div>
     </div>
   </div>
+
+  <!-- PILL RESTORE: muncul saat Rich Release di-minimize -->
+  <button id="richMinimizedPill" onclick="restoreRichRelease()" style="display: none; position: fixed; right: 18px; bottom: 18px; z-index: 10006; background: #0ea5e9; color: #fff; border: 1px solid rgba(255,255,255,0.35); border-radius: 999px; padding: 10px 18px; font-size: 0.84rem; font-weight: 700; cursor: pointer; box-shadow: 0 12px 30px rgba(0,0,0,0.55);">🚀 Rilisan Rich — lanjutkan menyusun</button>
 
   <!-- MODAL: PENGATURAN AKSES PUBLIK & MAINTENANCE -->
   <div class="modal-backdrop" id="publicAccessModal" style="display: none;" onclick="if(event.target===this)closePublicAccessModal()">
