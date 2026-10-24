@@ -1553,7 +1553,7 @@ export default {
       if (isHttp(headerUrl)) blocks.push(photoBlock(headerUrl));
       blocks.push({ type: 'heading', text: title, size: 2 });
       const synopsis = String(body.synopsis || '').trim();
-      if (synopsis) blocks.push(para(synopsis));
+      if (synopsis) blocks.push({ type: 'blockquote', blocks: [para(synopsis)] });
       const note = String(body.note || '').trim();
       if (note) blocks.push(para(note));
       const audio = String(body.audio || '').trim();
@@ -1564,11 +1564,12 @@ export default {
         if (idx > 0) blocks.push({ type: 'divider' });
         const fname = String((f && f.name) || '').trim() || ('File ' + (idx + 1));
         const fsize = String((f && f.size) || '').trim();
-        blocks.push(para([bold(fname + (fsize ? ' [' + fsize + ']' : ''))]));
+        blocks.push(para([bold(fname)]));
+        if (fsize) blocks.push(para('💾 Ukuran: ' + fsize));
         const links = Array.isArray(f && f.links) ? f.links.filter(l => l && isHttp(l.url)) : [];
         links.forEach(l => {
           const label = String(l.label || '').trim() || 'Download';
-          blocks.push(para([urlT(label.toUpperCase(), String(l.url).trim())]));
+          blocks.push(para([urlT(label, String(l.url).trim())]));
         });
         const shots = Array.isArray(f && f.shots) ? f.shots.map(x => String(x || '').trim()).filter(isHttp) : [];
         if (shots.length === 1) {
@@ -7870,7 +7871,7 @@ function updateRichPreview() {
   if (d.header_url) { img.src = d.header_url; img.style.display = 'block'; } else { img.style.display = 'none'; }
   var html = '';
   if (d.title) html += '<div style="font-size: 1.02rem; font-weight: 800; margin-bottom: 6px;">' + richEsc(d.title) + '</div>';
-  if (d.synopsis) html += '<div style="margin-bottom: 8px; white-space: pre-wrap;">' + richEsc(d.synopsis) + '</div>';
+  if (d.synopsis) html += '<blockquote style="border-left: 3px solid #38bdf8; margin: 0 0 8px 0; padding: 5px 10px; background: rgba(56,189,248,0.07); border-radius: 0 8px 8px 0; white-space: pre-wrap;">' + richEsc(d.synopsis) + '</blockquote>';
   if (d.note) html += '<div style="margin-bottom: 8px; white-space: pre-wrap;">' + richEsc(d.note) + '</div>';
   if (d.audio) html += '<div>🔊 Audio: ' + richEsc(d.audio) + '</div>';
   if (d.subs) html += '<div style="margin-bottom: 6px;">💬 Subtitle: ' + richEsc(d.subs) + '</div>';
@@ -7878,9 +7879,10 @@ function updateRichPreview() {
   var blocks = (d.header_url ? 1 : 0) + 1 + (d.synopsis ? 1 : 0) + (d.note ? 1 : 0) + (d.audio ? 1 : 0) + (d.subs ? 1 : 0) + (d.hashtags ? 1 : 0);
   d.files.forEach(function(f, i) {
     if (i > 0) { html += '<hr style="border: none; border-top: 1px solid rgba(255,255,255,0.15); margin: 10px 0;">'; blocks += 1; }
-    html += '<div style="font-weight: 700; margin-top: 8px;">' + richEsc(f.name) + (f.size ? ' [' + richEsc(f.size) + ']' : '') + '</div>';
+    html += '<div style="font-weight: 700; margin-top: 8px;">' + richEsc(f.name) + '</div>';
     blocks += 1;
-    f.links.forEach(function(l) { html += '<div><a href="' + richEsc(l.url) + '" target="_blank" style="color: #6ab3f3;">' + richEsc(l.label.toUpperCase()) + '</a></div>'; blocks += 1; });
+    if (f.size) { html += '<div>💾 Ukuran: ' + richEsc(f.size) + '</div>'; blocks += 1; }
+    f.links.forEach(function(l) { html += '<div><a href="' + richEsc(l.url) + '" target="_blank" style="color: #6ab3f3;">' + richEsc(l.label) + '</a></div>'; blocks += 1; });
     chars += f.name.length + f.size.length + f.mediainfo.length;
     if (f.shots.length) {
       html += '<details style="margin-top: 6px;"><summary style="cursor: pointer; color: #aebbc7; font-size: 0.8rem; letter-spacing: 0.05em;">SHOTS</summary>';
