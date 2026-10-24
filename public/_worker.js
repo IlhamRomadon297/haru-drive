@@ -1654,8 +1654,9 @@ export default {
       const subs = String(body.subs || '').trim();
       if (subs) blocks.push(para('💬 Subtitle: ' + subs));
       if (audio || subs) blocks.push({ type: 'divider' });
+      let prevFileDetails = false;
       files.forEach((f, idx) => {
-        if (idx > 0) blocks.push({ type: 'divider' });
+        if (idx > 0 && !prevFileDetails) blocks.push({ type: 'divider' });
         const fname = String((f && f.name) || '').trim() || ('File ' + (idx + 1));
         const fsize = String((f && f.size) || '').trim();
         blocks.push(para([bold(fname)]));
@@ -1681,6 +1682,7 @@ export default {
           const miShort = summarizeMediaInfoText(mi.slice(0, 24000), fname);
           blocks.push({ type: 'details', summary: 'MEDIAINFO', is_open: false, blocks: [{ type: 'pre', text: miShort || mi.slice(0, 20000) }] });
         }
+        prevFileDetails = shots.length > 0 || !!mi;
       });
       const footerText = String(body.footer_text || '').trim();
       if (footerText) blocks.push({ type: 'footer', text: footerText });
@@ -8074,7 +8076,8 @@ function updateRichPreview() {
   var chars = (d.title + d.synopsis + d.note + d.audio + d.subs).length;
   var blocks = (d.header_url ? 1 : 0) + 1 + (d.synopsis ? 2 : 0) + (d.note ? 1 : 0) + (d.audio ? 1 : 0) + (d.subs ? 1 : 0) + ((d.audio || d.subs) ? 1 : 0) + (d.hashtags ? 1 : 0);
   d.files.forEach(function(f, i) {
-    if (i > 0) { html += '<hr style="border: none; border-top: 1px solid rgba(255,255,255,0.15); margin: 10px 0;">'; blocks += 1; }
+    var prevF = i > 0 ? d.files[i - 1] : null;
+    if (prevF && !(prevF.shots.length || prevF.mediainfo)) { html += '<hr style="border: none; border-top: 1px solid rgba(255,255,255,0.15); margin: 10px 0;">'; blocks += 1; }
     html += '<div style="font-weight: 700; margin-top: 8px;">' + richEsc(f.name) + '</div>';
     blocks += 1;
     if (f.size) { html += '<div>💾 Ukuran: ' + richEsc(f.size) + '</div>'; blocks += 1; }
