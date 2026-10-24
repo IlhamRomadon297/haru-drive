@@ -1537,6 +1537,104 @@ export default {
       }
     }
 
+    // ===== RICH RELEASE: builder blok bersama + draft/riwayat (2026-10-24) =====
+    function buildRichBlocks(body) {
+      const title = String(body.title || '').trim();
+      if (!title) return { error: 'Judul wajib diisi.', status: 400 };
+      const files = Array.isArray(body.files) ? body.files : [];
+      if (files.length === 0) return { error: 'Minimal 1 file dalam rilisan.', status: 400 };
+      const isHttp = (u) => /^https?:\/\//i.test(String(u || '').trim());
+      const para = (text) => ({ type: 'paragraph', text });
+      const bold = (text) => ({ type: 'bold', text: String(text) });
+      const urlT = (text, u) => ({ type: 'url', text: String(text), url: String(u) });
+      const photoBlock = (u) => ({ type: 'photo', photo: { type: 'photo', media: String(u).trim() } });
+      const blocks = [];
+      const headerUrl = String(body.header_url || '').trim();
+      if (isHttp(headerUrl)) blocks.push(photoBlock(headerUrl));
+      blocks.push({ type: 'heading', text: title, size: 2 });
+      const synopsis = String(body.synopsis || '').trim();
+      if (synopsis) blocks.push(para(synopsis));
+      const note = String(body.note || '').trim();
+      if (note) blocks.push(para(note));
+      const audio = String(body.audio || '').trim();
+      if (audio) blocks.push(para('🔊 Audio: ' + audio));
+      const subs = String(body.subs || '').trim();
+      if (subs) blocks.push(para('💬 Subtitle: ' + subs));
+      files.forEach((f, idx) => {
+        if (idx > 0) blocks.push({ type: 'divider' });
+        const fname = String((f && f.name) || '').trim() || ('File ' + (idx + 1));
+        const fsize = String((f && f.size) || '').trim();
+        blocks.push(para([bold(fname + (fsize ? ' [' + fsize + ']' : ''))]));
+        const links = Array.isArray(f && f.links) ? f.links.filter(l => l && isHttp(l.url)) : [];
+        links.forEach(l => {
+          const label = String(l.label || '').trim() || 'Download';
+          blocks.push(para([urlT(label.toUpperCase(), String(l.url).trim())]));
+        });
+        const shots = Array.isArray(f && f.shots) ? f.shots.map(x => String(x || '').trim()).filter(isHttp) : [];
+        if (shots.length === 1) {
+          blocks.push({ type: 'details', summary: 'SHOTS', blocks: [photoBlock(shots[0])] });
+        } else if (shots.length > 1) {
+          blocks.push({ type: 'details', summary: 'SHOTS', blocks: [{ type: 'collage', blocks: shots.slice(0, 10).map(photoBlock) }] });
+        }
+        const mi = String((f && f.mediainfo) || '').trim();
+        if (mi) {
+          blocks.push({ type: 'details', summary: 'MEDIAINFO', blocks: [{ type: 'pre', text: mi.slice(0, 8000) }] });
+        }
+      });
+      const footerText = String(body.footer_text || '').trim();
+      if (footerText) blocks.push({ type: 'footer', text: footerText });
+      const hashtags = String(body.hashtags || '').trim();
+      if (hashtags) blocks.push(para(hashtags));
+      if (blocks.length > 500) {
+        return { error: 'Terlalu banyak blok (' + blocks.length + ' > 500). Kurangi jumlah file/gambar.', status: 400 };
+      }
+      let totalChars = 0;
+      (function walk(x) {
+        if (typeof x === 'string') totalChars += x.length;
+        else if (Array.isArray(x)) x.forEach(walk);
+        else if (x && typeof x === 'object') Object.values(x).forEach(walk);
+      })(blocks);
+      if (totalChars > 31000) {
+        return { error: 'Isi rilisan terlalu panjang (±' + totalChars + ' karakter, batas Telegram 32768). Persingkat MediaInfo-nya.', status: 400 };
+      }
+      return { blocks };
+    }
+
+    async function richDraftsTable() {
+      const db = env.harudrive_db || env.DB;
+      if (!db) return null;
+      try {
+        await db.prepare('CREATE TABLE IF NOT EXISTS rich_drafts (id TEXT PRIMARY KEY, title TEXT, payload TEXT, status TEXT, sent_targets TEXT, created_at INTEGER, updated_at INTEGER)').run();
+      } catch (e) {}
+      return db;
+    }
+
+    async function richDraftGet(db, id) {
+      if (!id) return null;
+      const row = await db.prepare('SELECT * FROM rich_drafts WHERE id = ?').bind(id).first();
+      if (!row) return null;
+      let payload = {}; let sent = [];
+      try { payload = JSON.parse(row.payload || '{}'); } catch (e) {}
+      try { sent = JSON.parse(row.sent_targets || '[]'); } catch (e) {}
+      return { id: row.id, title: row.title, status: row.status, payload: payload, sent_targets: sent, created_at: row.created_at, updated_at: row.updated_at };
+    }
+
+    async function richDraftUpsert(db, rec) {
+      const now = Date.now();
+      const id = rec.id || ('d' + now.toString(36) + Math.random().toString(36).slice(2, 7));
+      const existing = rec.id ? await richDraftGet(db, rec.id) : null;
+      const payloadStr = JSON.stringify(rec.payload || {});
+      const targetsStr = JSON.stringify(rec.sentTargets || []);
+      if (existing) {
+        await db.prepare('UPDATE rich_drafts SET title = ?, payload = ?, status = ?, sent_targets = ?, updated_at = ? WHERE id = ?')
+          .bind(rec.title || '', payloadStr, rec.status || existing.status || 'draft', targetsStr, now, id).run();
+      } else {
+        await db.prepare('INSERT INTO rich_drafts (id, title, payload, status, sent_targets, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+          .bind(id, rec.title || '', payloadStr, rec.status || 'draft', targetsStr, now, now).run();
+      }
+      return id;
+    }
+
     // API: Telegram Rich Release (Fase 1 — 2026-10-24)
     // Rilisan custom ala "Sharing is Caring": SATU pesan sendRichMessage (blocks).
     // Struktur: foto header -> judul -> sinopsis -> caption custom -> audio/subs ->
@@ -1552,74 +1650,11 @@ export default {
         if (!TELEGRAM_BOT_TOKEN) {
           return new Response(JSON.stringify({ error: 'Telegram bot belum dikonfigurasi di server.' }), { status: 500 });
         }
-        const title = String(body.title || '').trim();
-        if (!title) {
-          return new Response(JSON.stringify({ error: 'Judul wajib diisi.' }), { status: 400 });
+        const built = buildRichBlocks(body);
+        if (built.error) {
+          return new Response(JSON.stringify({ error: built.error }), { status: built.status || 400 });
         }
-        const files = Array.isArray(body.files) ? body.files : [];
-        if (files.length === 0) {
-          return new Response(JSON.stringify({ error: 'Minimal 1 file dalam rilisan.' }), { status: 400 });
-        }
-
-        const isHttp = (u) => /^https?:\/\//i.test(String(u || '').trim());
-        const para = (text) => ({ type: 'paragraph', text });
-        const bold = (text) => ({ type: 'bold', text: String(text) });
-        const urlT = (text, u) => ({ type: 'url', text: String(text), url: String(u) });
-        const photoBlock = (u) => ({ type: 'photo', photo: { type: 'photo', media: String(u).trim() } });
-
-        const blocks = [];
-        const headerUrl = String(body.header_url || '').trim();
-        if (isHttp(headerUrl)) blocks.push(photoBlock(headerUrl));
-        blocks.push({ type: 'heading', text: title, size: 2 });
-
-        const synopsis = String(body.synopsis || '').trim();
-        if (synopsis) blocks.push(para(synopsis));
-        const note = String(body.note || '').trim();
-        if (note) blocks.push(para(note));
-        const audio = String(body.audio || '').trim();
-        if (audio) blocks.push(para('🔊 Audio: ' + audio));
-        const subs = String(body.subs || '').trim();
-        if (subs) blocks.push(para('💬 Subtitle: ' + subs));
-
-        files.forEach((f, idx) => {
-          if (idx > 0) blocks.push({ type: 'divider' });
-          const fname = String((f && f.name) || '').trim() || ('File ' + (idx + 1));
-          const fsize = String((f && f.size) || '').trim();
-          blocks.push(para([bold(fname + (fsize ? ' [' + fsize + ']' : ''))]));
-          const links = Array.isArray(f && f.links) ? f.links.filter(l => l && isHttp(l.url)) : [];
-          links.forEach(l => {
-            const label = String(l.label || '').trim() || 'Download';
-            blocks.push(para([urlT(label.toUpperCase(), String(l.url).trim())]));
-          });
-          const shots = Array.isArray(f && f.shots) ? f.shots.map(x => String(x || '').trim()).filter(isHttp) : [];
-          if (shots.length === 1) {
-            blocks.push({ type: 'details', summary: 'SHOTS', blocks: [photoBlock(shots[0])] });
-          } else if (shots.length > 1) {
-            blocks.push({ type: 'details', summary: 'SHOTS', blocks: [{ type: 'collage', blocks: shots.slice(0, 10).map(photoBlock) }] });
-          }
-          const mi = String((f && f.mediainfo) || '').trim();
-          if (mi) {
-            blocks.push({ type: 'details', summary: 'MEDIAINFO', blocks: [{ type: 'pre', text: mi.slice(0, 8000) }] });
-          }
-        });
-
-        const footerText = String(body.footer_text || '').trim();
-        if (footerText) blocks.push({ type: 'footer', text: footerText });
-        const hashtags = String(body.hashtags || '').trim();
-        if (hashtags) blocks.push(para(hashtags));
-
-        if (blocks.length > 500) {
-          return new Response(JSON.stringify({ error: 'Terlalu banyak blok (' + blocks.length + ' > 500). Kurangi jumlah file/gambar.' }), { status: 400 });
-        }
-        let totalChars = 0;
-        (function walk(x) {
-          if (typeof x === 'string') totalChars += x.length;
-          else if (Array.isArray(x)) x.forEach(walk);
-          else if (x && typeof x === 'object') Object.values(x).forEach(walk);
-        })(blocks);
-        if (totalChars > 31000) {
-          return new Response(JSON.stringify({ error: 'Isi rilisan terlalu panjang (±' + totalChars + ' karakter, batas Telegram 32768). Persingkat MediaInfo-nya.' }), { status: 400 });
-        }
+        const blocks = built.blocks;
 
         const targets = [];
         const rawTargets = String(body.channel_id || '').trim();
@@ -1634,6 +1669,7 @@ export default {
 
         let lastMessageId = null;
         let sentCount = 0;
+        const sentTargets = [];
         for (const target of targets) {
           const payload = { chat_id: target.chat_id, rich_message: { blocks } };
           const tid = parseInt(target.topic_id, 10);
@@ -1647,6 +1683,7 @@ export default {
           if (tgRes.ok && tgData.ok) {
             lastMessageId = tgData.result && tgData.result.message_id;
             sentCount++;
+            sentTargets.push({ chat_id: target.chat_id, message_id: lastMessageId, topic_id: target.topic_id || '' });
           } else {
             console.error('Telegram rich error for ' + target.chat_id + ':', tgData);
             if (target === targets[0]) {
@@ -1655,13 +1692,139 @@ export default {
           }
         }
 
+        // Catat sebagai riwayat rilisan supaya bisa dibuka & diperbarui lagi nanti.
+        let draftId = String(body.draft_id || '').trim() || null;
+        try {
+          const db = await richDraftsTable();
+          if (db) {
+            const form = { title: String(body.title || ''), header_url: String(body.header_url || ''), synopsis: String(body.synopsis || ''), note: String(body.note || ''), audio: String(body.audio || ''), subs: String(body.subs || ''), hashtags: String(body.hashtags || ''), footer_text: String(body.footer_text || ''), channel_id: String(body.channel_id || ''), topic_id: String(body.topic_id || ''), files: Array.isArray(body.files) ? body.files : [] };
+            const existing = draftId ? await richDraftGet(db, draftId) : null;
+            const mergedTargets = (existing && Array.isArray(existing.sent_targets) ? existing.sent_targets : []).concat(sentTargets);
+            draftId = await richDraftUpsert(db, { id: draftId, title: form.title, payload: { form: form, blocks: blocks }, status: 'sent', sentTargets: mergedTargets });
+          }
+        } catch (e) { console.error('rich draft record failed:', e); }
+
         return new Response(JSON.stringify({
           success: true,
           message: 'Rilisan rich berhasil dikirim!',
           message_id: lastMessageId,
           blocks: blocks.length,
-          targets: sentCount
+          targets: sentCount,
+          draft_id: draftId
         }), { headers: { 'Content-Type': 'application/json' } });
+      } catch (err) {
+        return new Response(JSON.stringify({ error: err.message }), { status: 500 });
+      }
+    }
+
+    // API: Rich Drafts — daftar & ambil satu (cookie admin)
+    if (url.pathname === '/api/admin/rich-drafts' && request.method === 'GET') {
+      try {
+        const db = await richDraftsTable();
+        if (!db) return new Response(JSON.stringify({ drafts: [] }), { headers: { 'Content-Type': 'application/json' } });
+        const oneId = (url.searchParams.get('id') || '').trim();
+        if (oneId) {
+          const d = await richDraftGet(db, oneId);
+          if (!d) return new Response(JSON.stringify({ error: 'Draft tidak ditemukan.' }), { status: 404 });
+          return new Response(JSON.stringify({ draft: d }), { headers: { 'Content-Type': 'application/json' } });
+        }
+        const res = await db.prepare('SELECT id, title, status, sent_targets, created_at, updated_at FROM rich_drafts ORDER BY updated_at DESC LIMIT 100').all();
+        const drafts = (res.results || []).map(r => {
+          let n = 0;
+          try { n = JSON.parse(r.sent_targets || '[]').length; } catch (e) {}
+          return { id: r.id, title: r.title, status: r.status, sent_count: n, created_at: r.created_at, updated_at: r.updated_at };
+        });
+        return new Response(JSON.stringify({ drafts }), { headers: { 'Content-Type': 'application/json' } });
+      } catch (err) {
+        return new Response(JSON.stringify({ error: err.message }), { status: 500 });
+      }
+    }
+
+    // API: Rich Drafts — simpan draft (buat baru / ubah)
+    if (url.pathname === '/api/admin/rich-drafts' && request.method === 'POST') {
+      try {
+        const body = await request.json();
+        if (!verifyPin(body.admin_pin || '')) {
+          return new Response(JSON.stringify({ error: 'PIN Admin Salah!' }), { status: 403 });
+        }
+        const form = body.form || {};
+        const built = buildRichBlocks(form);
+        if (built.error) {
+          return new Response(JSON.stringify({ error: built.error }), { status: built.status || 400 });
+        }
+        const db = await richDraftsTable();
+        if (!db) return new Response(JSON.stringify({ error: 'Database tidak tersedia.' }), { status: 500 });
+        const id = String(body.id || '').trim() || null;
+        const existing = id ? await richDraftGet(db, id) : null;
+        const newId = await richDraftUpsert(db, {
+          id: id,
+          title: String(form.title || ''),
+          payload: { form: form, blocks: built.blocks },
+          status: existing ? existing.status : 'draft',
+          sentTargets: existing ? existing.sent_targets : []
+        });
+        return new Response(JSON.stringify({ success: true, id: newId }), { headers: { 'Content-Type': 'application/json' } });
+      } catch (err) {
+        return new Response(JSON.stringify({ error: err.message }), { status: 500 });
+      }
+    }
+
+    // API: Rich Drafts — hapus
+    if (url.pathname === '/api/admin/rich-drafts-delete' && request.method === 'POST') {
+      try {
+        const body = await request.json();
+        if (!verifyPin(body.admin_pin || '')) {
+          return new Response(JSON.stringify({ error: 'PIN Admin Salah!' }), { status: 403 });
+        }
+        const db = await richDraftsTable();
+        if (!db) return new Response(JSON.stringify({ error: 'Database tidak tersedia.' }), { status: 500 });
+        await db.prepare('DELETE FROM rich_drafts WHERE id = ?').bind(String(body.id || '')).run();
+        return new Response(JSON.stringify({ success: true }), { headers: { 'Content-Type': 'application/json' } });
+      } catch (err) {
+        return new Response(JSON.stringify({ error: err.message }), { status: 500 });
+      }
+    }
+
+    // API: Telegram Rich Edit — perbarui pesan channel yang sudah terkirim dari draft/riwayat
+    if (url.pathname === '/api/admin/telegram-rich-edit' && request.method === 'POST') {
+      try {
+        const body = await request.json();
+        if (!verifyPin(body.admin_pin || '')) {
+          return new Response(JSON.stringify({ error: 'PIN Admin Salah!' }), { status: 403 });
+        }
+        if (!TELEGRAM_BOT_TOKEN) {
+          return new Response(JSON.stringify({ error: 'Telegram bot belum dikonfigurasi di server.' }), { status: 500 });
+        }
+        const db = await richDraftsTable();
+        if (!db) return new Response(JSON.stringify({ error: 'Database tidak tersedia.' }), { status: 500 });
+        const d = await richDraftGet(db, String(body.draft_id || ''));
+        if (!d) return new Response(JSON.stringify({ error: 'Draft/riwayat tidak ditemukan.' }), { status: 404 });
+        if (!d.sent_targets || !d.sent_targets.length) {
+          return new Response(JSON.stringify({ error: 'Rilisan ini belum pernah terkirim — tidak ada pesan yang bisa diperbarui.' }), { status: 400 });
+        }
+        const form = (d.payload && d.payload.form) || {};
+        const built = buildRichBlocks(form);
+        if (built.error) {
+          return new Response(JSON.stringify({ error: built.error }), { status: built.status || 400 });
+        }
+        let edited = 0;
+        const errors = [];
+        for (const t of d.sent_targets) {
+          const tgRes = await fetch('https://api.telegram.org/bot' + TELEGRAM_BOT_TOKEN + '/editMessageText', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: t.chat_id, message_id: t.message_id, rich_message: { blocks: built.blocks } })
+          });
+          const tgData = await tgRes.json().catch(() => ({}));
+          if (tgRes.ok && tgData.ok) edited++;
+          else if (tgData && /message is not modified/i.test(tgData.description || '')) edited++;
+          else errors.push(String(t.chat_id) + ': ' + ((tgData && tgData.description) || 'gagal'));
+        }
+        if (edited === 0) {
+          return new Response(JSON.stringify({ error: 'Gagal memperbarui pesan: ' + errors.join('; ') }), { status: 500 });
+        }
+        await richDraftUpsert(db, { id: d.id, title: d.title, payload: { form: form, blocks: built.blocks }, status: 'sent', sentTargets: d.sent_targets });
+        return new Response(JSON.stringify({ success: true, edited: edited, warnings: errors }), { headers: { 'Content-Type': 'application/json' } });
       } catch (err) {
         return new Response(JSON.stringify({ error: err.message }), { status: 500 });
       }
@@ -7314,6 +7477,7 @@ function openRichReleaseModal() {
   var pin = document.getElementById('richAdminPin');
   if (pin && !pin.value) pin.value = localStorage.getItem('harudrive_admin_pin') || '';
   if (!window._richFiles.length) addRichFileRow();
+  refreshRichDraftUi();
   m.style.display = 'flex';
   updateRichHeaderPreview();
   updateRichPreview();
@@ -7397,6 +7561,176 @@ function applyRichTmdb(idx) {
   var box = document.getElementById('richTmdbResults');
   if (box) box.innerHTML = '<span style="color: #38bdf8; font-size: 0.78rem;">✓ Metadata terimpor dari TMDB: ' + escapeHtml(r.title) + (r.year ? ' (' + r.year + ')' : '') + ' — judul/sinopsis/foto header sudah terisi, silakan cek &amp; edit bila perlu.</span>';
   updateRichPreview();
+}
+
+window._richDraftId = null;
+window._richDraftSentCount = 0;
+
+function richDraftPin() {
+  var el = document.getElementById('richAdminPin');
+  return ((el && el.value) || localStorage.getItem('harudrive_admin_pin') || '').trim();
+}
+
+function setRichDraftState(text) {
+  var el = document.getElementById('richDraftState');
+  if (el) el.textContent = text;
+}
+
+function refreshRichDraftUi() {
+  var upd = document.getElementById('richUpdateBtn');
+  if (upd) upd.style.display = (window._richDraftId && window._richDraftSentCount > 0) ? '' : 'none';
+}
+
+async function saveRichDraft() {
+  var d = collectRichPayload();
+  if (!d.title) return alert('Isi judul dulu sebelum simpan draft.');
+  if (!d.files.length) return alert('Minimal 1 file (isi nama filenya) untuk simpan draft.');
+  var pin = richDraftPin();
+  if (!pin) return alert('Isi PIN Admin dulu (kolom PIN di bawah) untuk simpan draft.');
+  delete d.admin_pin;
+  try {
+    var res = await fetch('/api/admin/rich-drafts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ admin_pin: pin, id: window._richDraftId || '', form: d }) });
+    var data = await res.json().catch(function() { return {}; });
+    if (!res.ok || !data.success) throw new Error(data.error || ('HTTP ' + res.status));
+    window._richDraftId = data.id;
+    setRichDraftState('✓ Draft tersimpan: ' + d.title + ' — tersimpan selamanya di server, bisa dibuka lagi kapan saja.');
+    if (typeof showCopyToast === 'function') showCopyToast('Draft tersimpan 💾');
+    loadRichDraftList();
+  } catch (e) { alert('Gagal simpan draft: ' + e.message); }
+}
+
+function toggleRichDraftPanel() {
+  var panel = document.getElementById('richDraftPanel');
+  if (!panel) return;
+  var show = panel.style.display === 'none';
+  panel.style.display = show ? 'block' : 'none';
+  if (show) loadRichDraftList();
+}
+
+async function loadRichDraftList() {
+  var box = document.getElementById('richDraftList');
+  if (!box) return;
+  box.innerHTML = '<span style="color: var(--text-dim); font-size: 0.76rem;">Memuat daftar...</span>';
+  try {
+    var res = await fetch('/api/admin/rich-drafts');
+    var data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Gagal memuat daftar');
+    if (!data.drafts || !data.drafts.length) {
+      box.innerHTML = '<span style="color: var(--text-dim); font-size: 0.76rem;">Belum ada draft/riwayat tersimpan.</span>';
+      return;
+    }
+    var h = '';
+    data.drafts.forEach(function(r) {
+      var when = r.updated_at ? new Date(r.updated_at).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+      var badge = r.status === 'sent' ? '<span style="color: #6ee7b7; font-weight: 700;">TERKIRIM</span>' : '<span style="color: #fcd34d; font-weight: 700;">DRAFT</span>';
+      h += '<div style="display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; background: rgba(255,255,255,0.02);">';
+      h += '<div style="flex: 1; min-width: 0;"><div style="font-weight: 600; font-size: 0.8rem; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">' + escapeHtml(r.title || '(tanpa judul)') + '</div>';
+      h += '<div style="font-size: 0.68rem; color: var(--text-dim);">' + badge + ' • ' + when + (r.sent_count ? ' • ' + r.sent_count + ' pesan di channel' : '') + '</div></div>';
+      h += '<button type="button" class="nav-btn" style="font-size: 0.7rem; padding: 3px 10px;" onclick="openRichDraft(' + "'" + r.id + "'" + ')">Buka</button>';
+      h += '<button type="button" class="nav-btn" style="font-size: 0.7rem; padding: 3px 10px; color: #f87171;" onclick="deleteRichDraft(' + "'" + r.id + "'" + ')">Hapus</button>';
+      h += '</div>';
+    });
+    box.innerHTML = h;
+  } catch (e) {
+    box.innerHTML = '<span style="color: #f87171; font-size: 0.76rem;">' + escapeHtml(e.message) + '</span>';
+  }
+}
+
+function applyRichDraftForm(form) {
+  var set = function(id, v) { var el = document.getElementById(id); if (el) el.value = v || ''; };
+  set('richTitle', form.title);
+  set('richHeaderUrl', form.header_url);
+  set('richSynopsis', form.synopsis);
+  set('richNote', form.note);
+  set('richAudio', form.audio);
+  set('richSubs', form.subs);
+  set('richHashtags', form.hashtags);
+  set('richChannelId', form.channel_id);
+  set('richTopicId', form.topic_id);
+  var nl = String.fromCharCode(10);
+  var srcFiles = (form.files && form.files.length) ? form.files : [{ name: '', size: '', links: [], shots: [], mediainfo: '' }];
+  window._richFiles = srcFiles.map(function(f) {
+    return {
+      name: f.name || '',
+      size: f.size || '',
+      links: (f.links || []).map(function(l) { return (l.label || 'Download') + ' | ' + (l.url || ''); }).join(nl),
+      shots: (f.shots || []).join(nl),
+      mediainfo: f.mediainfo || ''
+    };
+  });
+  renderRichFileRows();
+  if (typeof updateRichHeaderPreview === 'function') updateRichHeaderPreview();
+  updateRichPreview();
+}
+
+async function openRichDraft(id) {
+  try {
+    var res = await fetch('/api/admin/rich-drafts?id=' + encodeURIComponent(id));
+    var data = await res.json();
+    if (!res.ok || !data.draft) throw new Error(data.error || 'Gagal memuat draft');
+    var dr = data.draft;
+    applyRichDraftForm((dr.payload && dr.payload.form) || {});
+    window._richDraftId = dr.id;
+    window._richDraftSentCount = (dr.sent_targets || []).length;
+    if (dr.status === 'sent') {
+      setRichDraftState('📨 Riwayat terkirim: ' + dr.title + ' — sudah tayang di ' + window._richDraftSentCount + ' target. Edit isiannya lalu tekan 🔄 Perbarui Pesan Terkirim untuk mengubah postingan di channel, atau 🚀 Kirim untuk posting baru.');
+    } else {
+      setRichDraftState('💾 Draft dibuka: ' + dr.title + ' — lanjutkan menyusun, simpan lagi, atau langsung kirim.');
+    }
+    refreshRichDraftUi();
+    var panel = document.getElementById('richDraftPanel');
+    if (panel) panel.style.display = 'none';
+  } catch (e) { alert('Gagal membuka: ' + e.message); }
+}
+
+async function deleteRichDraft(id) {
+  if (!confirm('Hapus draft/riwayat ini dari server? Pesan yang sudah terkirim di Telegram TIDAK ikut terhapus.')) return;
+  var pin = richDraftPin();
+  if (!pin) return alert('Isi PIN Admin dulu untuk menghapus.');
+  try {
+    var res = await fetch('/api/admin/rich-drafts-delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ admin_pin: pin, id: id }) });
+    var data = await res.json().catch(function() { return {}; });
+    if (!res.ok || !data.success) throw new Error(data.error || 'Gagal menghapus');
+    if (window._richDraftId === id) {
+      window._richDraftId = null;
+      window._richDraftSentCount = 0;
+      refreshRichDraftUi();
+      setRichDraftState('Draft baru — belum disimpan.');
+    }
+    loadRichDraftList();
+  } catch (e) { alert('Gagal hapus: ' + e.message); }
+}
+
+function newRichDraft() {
+  window._richDraftId = null;
+  window._richDraftSentCount = 0;
+  applyRichDraftForm({});
+  setRichDraftState('Draft baru — belum disimpan.');
+  refreshRichDraftUi();
+}
+
+async function updateRichRelease() {
+  if (!window._richDraftId) return;
+  var pin = richDraftPin();
+  if (!pin) return alert('Isi PIN Admin dulu.');
+  var d = collectRichPayload();
+  if (!d.title) return alert('Judul wajib diisi!');
+  if (!d.files.length) return alert('Minimal 1 file!');
+  delete d.admin_pin;
+  var btn = document.getElementById('richUpdateBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Memperbarui...'; }
+  try {
+    var sres = await fetch('/api/admin/rich-drafts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ admin_pin: pin, id: window._richDraftId, form: d }) });
+    var sdata = await sres.json().catch(function() { return {}; });
+    if (!sres.ok || !sdata.success) throw new Error(sdata.error || 'Gagal menyimpan perubahan');
+    var res = await fetch('/api/admin/telegram-rich-edit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ admin_pin: pin, draft_id: window._richDraftId }) });
+    var data = await res.json().catch(function() { return {}; });
+    if (!res.ok || !data.success) throw new Error(data.error || 'Gagal memperbarui');
+    if (typeof showCopyToast === 'function') showCopyToast('Pesan di channel diperbarui! 🔄 (' + data.edited + ' pesan)');
+    else alert('Pesan di channel berhasil diperbarui (' + data.edited + ' pesan).');
+    setRichDraftState('✓ Postingan di channel barusan diperbarui: ' + d.title);
+  } catch (e) { alert('Gagal memperbarui pesan: ' + e.message); }
+  finally { if (btn) { btn.disabled = false; btn.textContent = '🔄 Perbarui Pesan Terkirim'; } }
 }
 
 function minimizeRichRelease() {
@@ -7573,6 +7907,7 @@ async function sendRichRelease() {
   localStorage.setItem('harudrive_admin_pin', d.admin_pin);
   if (d.channel_id) localStorage.setItem('harudrive_rich_channel', d.channel_id);
   if (d.topic_id) localStorage.setItem('harudrive_rich_topic', d.topic_id);
+  d.draft_id = window._richDraftId || '';
   var btn = document.getElementById('richSendBtn');
   if (btn) { btn.disabled = true; btn.textContent = 'Mengirim...'; }
   try {
@@ -7583,6 +7918,7 @@ async function sendRichRelease() {
     });
     var data = await res.json().catch(function() { return {}; });
     if (!res.ok || !data.success) throw new Error(data.error || ('HTTP ' + res.status));
+    if (data.draft_id) { window._richDraftId = data.draft_id; window._richDraftSentCount = (window._richDraftSentCount || 0) + (data.targets || 1); }
     if (typeof showCopyToast === 'function') showCopyToast('Rilisan rich terkirim! 🚀 (' + data.blocks + ' blok, message_id ' + data.message_id + ')');
     else alert('Rilisan rich terkirim! message_id ' + data.message_id);
     closeRichReleaseModal();
@@ -10973,6 +11309,20 @@ function adminConsoleUI() {
       <div class="modal-body" id="richReleaseBody" style="max-height: 76vh; overflow-y: auto; padding: 20px;">
         <p style="font-size: 0.78rem; color: var(--text-muted); margin-bottom: 14px;">Susun rilisanmu sendiri, tanpa deteksi file. Hasilnya <b>satu pesan rich text</b> ke channel khusus: foto header, judul, sinopsis, lalu tiap file punya bagian <b>SHOTS</b> &amp; <b>MEDIAINFO</b> yang bisa dibuka-tutup.</p>
 
+        <div style="margin-bottom: 14px; border: 1px solid rgba(168,85,247,0.35); border-radius: 12px; padding: 12px; background: rgba(168,85,247,0.05);">
+          <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap;">
+            <label style="font-size: 0.78rem; font-weight: 700; color: #d8b4fe;">💾 Draft &amp; Riwayat Rilisan</label>
+            <div style="display: flex; gap: 6px;">
+              <button type="button" class="nav-btn" style="font-size: 0.72rem; padding: 4px 10px;" onclick="toggleRichDraftPanel()">📂 Daftar Draft/Riwayat</button>
+              <button type="button" class="nav-btn" style="font-size: 0.72rem; padding: 4px 10px;" onclick="newRichDraft()">➕ Baru</button>
+            </div>
+          </div>
+          <div id="richDraftState" style="font-size: 0.72rem; color: var(--text-dim); margin-top: 5px;">Draft baru — belum disimpan. Rilisan yang terkirim otomatis tercatat di sini dan bisa dibuka lagi untuk diperbarui.</div>
+          <div id="richDraftPanel" style="display: none; margin-top: 10px;">
+            <div id="richDraftList" style="display: flex; flex-direction: column; gap: 6px;"></div>
+          </div>
+        </div>
+
         <div style="margin-bottom: 14px; border: 1px solid rgba(56,189,248,0.35); border-radius: 12px; padding: 12px; background: rgba(56,189,248,0.05);">
           <label style="font-size: 0.78rem; font-weight: 700; color: #7dd3fc;">🎬 Ambil Metadata dari TMDB</label>
           <div style="display: flex; gap: 8px; margin-top: 6px; flex-wrap: wrap;">
@@ -11063,6 +11413,8 @@ function adminConsoleUI() {
       </div>
       <div class="modal-footer" style="justify-content: flex-end; gap: 8px;">
         <button class="nav-btn" onclick="closeRichReleaseModal()">Batal</button>
+        <button class="nav-btn" id="richSaveDraftBtn" style="font-weight: 600;" onclick="saveRichDraft()">💾 Simpan Draft</button>
+        <button class="nav-btn" id="richUpdateBtn" style="display: none; background: #a855f7; color: white; border: none; font-weight: 600;" onclick="updateRichRelease()">🔄 Perbarui Pesan Terkirim</button>
         <button class="nav-btn" id="richSendBtn" style="background: #38bdf8; color: white; border: none; font-weight: 600;" onclick="sendRichRelease()">🚀 Kirim Rich ke Channel</button>
       </div>
     </div>
