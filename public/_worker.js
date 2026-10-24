@@ -1537,6 +1537,136 @@ export default {
       }
     }
 
+    // API: Telegram Rich Release (Fase 1 — 2026-10-24)
+    // Rilisan custom ala "Sharing is Caring": SATU pesan sendRichMessage (blocks).
+    // Struktur: foto header -> judul -> sinopsis -> caption custom -> audio/subs ->
+    // per file: nama+ukuran, link download, details SHOTS (foto/kolase), details
+    // MEDIAINFO (pre) -> footer/hashtag. Target = channel khusus dari form
+    // (channel_id), fallback TELEGRAM_CHAT_ID secret. Tanpa deteksi file sama sekali.
+    if (url.pathname === '/api/admin/telegram-rich-post' && request.method === 'POST') {
+      try {
+        const body = await request.json();
+        if (!verifyPin(body.admin_pin || '')) {
+          return new Response(JSON.stringify({ error: 'PIN Admin Salah!' }), { status: 403 });
+        }
+        if (!TELEGRAM_BOT_TOKEN) {
+          return new Response(JSON.stringify({ error: 'Telegram bot belum dikonfigurasi di server.' }), { status: 500 });
+        }
+        const title = String(body.title || '').trim();
+        if (!title) {
+          return new Response(JSON.stringify({ error: 'Judul wajib diisi.' }), { status: 400 });
+        }
+        const files = Array.isArray(body.files) ? body.files : [];
+        if (files.length === 0) {
+          return new Response(JSON.stringify({ error: 'Minimal 1 file dalam rilisan.' }), { status: 400 });
+        }
+
+        const isHttp = (u) => /^https?:\/\//i.test(String(u || '').trim());
+        const para = (text) => ({ type: 'paragraph', text });
+        const bold = (text) => ({ type: 'bold', text: String(text) });
+        const urlT = (text, u) => ({ type: 'url', text: String(text), url: String(u) });
+        const photoBlock = (u) => ({ type: 'photo', photo: { type: 'photo', media: String(u).trim() } });
+
+        const blocks = [];
+        const headerUrl = String(body.header_url || '').trim();
+        if (isHttp(headerUrl)) blocks.push(photoBlock(headerUrl));
+        blocks.push({ type: 'heading', text: title, size: 2 });
+
+        const synopsis = String(body.synopsis || '').trim();
+        if (synopsis) blocks.push(para(synopsis));
+        const note = String(body.note || '').trim();
+        if (note) blocks.push(para(note));
+        const audio = String(body.audio || '').trim();
+        if (audio) blocks.push(para('🔊 Audio: ' + audio));
+        const subs = String(body.subs || '').trim();
+        if (subs) blocks.push(para('💬 Subtitle: ' + subs));
+
+        files.forEach((f, idx) => {
+          if (idx > 0) blocks.push({ type: 'divider' });
+          const fname = String((f && f.name) || '').trim() || ('File ' + (idx + 1));
+          const fsize = String((f && f.size) || '').trim();
+          blocks.push(para([bold(fname + (fsize ? ' [' + fsize + ']' : ''))]));
+          const links = Array.isArray(f && f.links) ? f.links.filter(l => l && isHttp(l.url)) : [];
+          links.forEach(l => {
+            const label = String(l.label || '').trim() || 'Download';
+            blocks.push(para([urlT(label.toUpperCase(), String(l.url).trim())]));
+          });
+          const shots = Array.isArray(f && f.shots) ? f.shots.map(x => String(x || '').trim()).filter(isHttp) : [];
+          if (shots.length === 1) {
+            blocks.push({ type: 'details', summary: 'SHOTS', blocks: [photoBlock(shots[0])] });
+          } else if (shots.length > 1) {
+            blocks.push({ type: 'details', summary: 'SHOTS', blocks: [{ type: 'collage', blocks: shots.slice(0, 10).map(photoBlock) }] });
+          }
+          const mi = String((f && f.mediainfo) || '').trim();
+          if (mi) {
+            blocks.push({ type: 'details', summary: 'MEDIAINFO', blocks: [{ type: 'pre', text: mi.slice(0, 8000) }] });
+          }
+        });
+
+        const footerText = String(body.footer_text || '').trim();
+        if (footerText) blocks.push({ type: 'footer', text: footerText });
+        const hashtags = String(body.hashtags || '').trim();
+        if (hashtags) blocks.push(para(hashtags));
+
+        if (blocks.length > 500) {
+          return new Response(JSON.stringify({ error: 'Terlalu banyak blok (' + blocks.length + ' > 500). Kurangi jumlah file/gambar.' }), { status: 400 });
+        }
+        let totalChars = 0;
+        (function walk(x) {
+          if (typeof x === 'string') totalChars += x.length;
+          else if (Array.isArray(x)) x.forEach(walk);
+          else if (x && typeof x === 'object') Object.values(x).forEach(walk);
+        })(blocks);
+        if (totalChars > 31000) {
+          return new Response(JSON.stringify({ error: 'Isi rilisan terlalu panjang (±' + totalChars + ' karakter, batas Telegram 32768). Persingkat MediaInfo-nya.' }), { status: 400 });
+        }
+
+        const targets = [];
+        const rawTargets = String(body.channel_id || '').trim();
+        if (rawTargets) {
+          rawTargets.split(',').map(x => x.trim()).filter(Boolean).forEach(c => targets.push({ chat_id: c, topic_id: String(body.topic_id || '').trim() }));
+        } else if (TELEGRAM_CHAT_ID) {
+          targets.push({ chat_id: TELEGRAM_CHAT_ID, topic_id: String(body.topic_id || '').trim() || TELEGRAM_TOPIC_ID });
+        }
+        if (targets.length === 0) {
+          return new Response(JSON.stringify({ error: 'Channel tujuan kosong: isi Channel ID di form atau set TELEGRAM_CHAT_ID di secrets.' }), { status: 400 });
+        }
+
+        let lastMessageId = null;
+        let sentCount = 0;
+        for (const target of targets) {
+          const payload = { chat_id: target.chat_id, rich_message: { blocks } };
+          const tid = parseInt(target.topic_id, 10);
+          if (!isNaN(tid) && tid > 0) payload.message_thread_id = tid;
+          const tgRes = await fetch('https://api.telegram.org/bot' + TELEGRAM_BOT_TOKEN + '/sendRichMessage', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          const tgData = await tgRes.json().catch(() => ({}));
+          if (tgRes.ok && tgData.ok) {
+            lastMessageId = tgData.result && tgData.result.message_id;
+            sentCount++;
+          } else {
+            console.error('Telegram rich error for ' + target.chat_id + ':', tgData);
+            if (target === targets[0]) {
+              return new Response(JSON.stringify({ error: 'Telegram error (' + target.chat_id + '): ' + ((tgData && tgData.description) || 'Unknown error') }), { status: 500 });
+            }
+          }
+        }
+
+        return new Response(JSON.stringify({
+          success: true,
+          message: 'Rilisan rich berhasil dikirim!',
+          message_id: lastMessageId,
+          blocks: blocks.length,
+          targets: sentCount
+        }), { headers: { 'Content-Type': 'application/json' } });
+      } catch (err) {
+        return new Response(JSON.stringify({ error: err.message }), { status: 500 });
+      }
+    }
+
         // API: TMDB Search (Supports Title Search & Direct Numeric TMDB ID)
     
     // Helper: Decode HTML Entities for translation
@@ -3354,6 +3484,7 @@ function htmlPage(content, env, pageMode = 'public') {
         padding: 6px !important;
       }
       #telegramModal .modal-card,
+      #richReleaseModal .modal-card,
       #tgVisualPreviewModal .modal-card {
         max-width: 100% !important;
         width: 100% !important;
@@ -7158,6 +7289,185 @@ function closeTelegramModal() {
   if (m) m.style.display = 'none';
 }
 
+// ===== RICH RELEASE BUILDER (Fase 1 — 2026-10-24) =====
+// Builder rilisan rich text custom: TIDAK membaca seleksi/ceklis file sama sekali.
+window._richFiles = [];
+
+function richEsc(t) {
+  return String(t || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function openRichReleaseModal() {
+  var m = document.getElementById('richReleaseModal');
+  if (!m) return;
+  var ch = document.getElementById('richChannelId');
+  if (ch && !ch.value) ch.value = localStorage.getItem('harudrive_rich_channel') || '';
+  var tp = document.getElementById('richTopicId');
+  if (tp && !tp.value) tp.value = localStorage.getItem('harudrive_rich_topic') || '';
+  var pin = document.getElementById('richAdminPin');
+  if (pin && !pin.value) pin.value = localStorage.getItem('harudrive_admin_pin') || '';
+  if (!window._richFiles.length) addRichFileRow();
+  m.style.display = 'flex';
+  updateRichHeaderPreview();
+  updateRichPreview();
+}
+
+function closeRichReleaseModal() {
+  var m = document.getElementById('richReleaseModal');
+  if (m) m.style.display = 'none';
+}
+
+function addRichFileRow() {
+  window._richFiles.push({ name: '', size: '', links: '', shots: '', mediainfo: '' });
+  renderRichFileRows();
+  updateRichPreview();
+}
+
+function removeRichFileRow(i) {
+  window._richFiles.splice(i, 1);
+  renderRichFileRows();
+  updateRichPreview();
+}
+
+function setRichField(i, field, value) {
+  if (window._richFiles[i]) window._richFiles[i][field] = value;
+  updateRichPreview();
+}
+
+function renderRichFileRows() {
+  var c = document.getElementById('richFilesContainer');
+  if (!c) return;
+  var html = '';
+  window._richFiles.forEach(function(f, i) {
+    html += '<div style="border: 1px solid var(--border); border-radius: 12px; padding: 12px; margin-bottom: 10px; background: rgba(255,255,255,0.02);">';
+    html += '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;"><b style="font-size: 0.8rem; color: var(--text);">File ' + (i + 1) + '</b>';
+    html += '<button type="button" class="nav-btn" style="font-size: 0.7rem; padding: 2px 10px; color: #f87171; border-color: rgba(248,113,113,0.4);" onclick="removeRichFileRow(' + i + ')">Hapus</button></div>';
+    html += '<input type="text" class="form-input-pro" placeholder="Nama file, mis. Avatar.Seven.Havens.2026.S01E07.1080p.ATV.WEB-DL.mkv" value="' + richEsc(f.name) + '" oninput="setRichField(' + i + ', \'name\', this.value)" style="margin-bottom: 8px;">';
+    html += '<input type="text" class="form-input-pro" placeholder="Ukuran, mis. 1.11 GB" value="' + richEsc(f.size) + '" oninput="setRichField(' + i + ', \'size\', this.value)" style="margin-bottom: 8px;">';
+    html += '<textarea class="form-input-pro" rows="2" placeholder="Link download, satu per baris: Label | URL" oninput="setRichField(' + i + ', \'links\', this.value)" style="margin-bottom: 8px; resize: vertical;">' + richEsc(f.links) + '</textarea>';
+    html += '<textarea class="form-input-pro" rows="2" placeholder="SHOTS: URL gambar screenshot, satu per baris" oninput="setRichField(' + i + ', \'shots\', this.value)" style="margin-bottom: 8px; resize: vertical;">' + richEsc(f.shots) + '</textarea>';
+    html += '<textarea class="form-input-pro" rows="3" placeholder="MEDIAINFO: tempel teks MediaInfo file ini" oninput="setRichField(' + i + ', \'mediainfo\', this.value)" style="resize: vertical; font-family: monospace; font-size: 0.74rem;">' + richEsc(f.mediainfo) + '</textarea>';
+    html += '</div>';
+  });
+  c.innerHTML = html;
+}
+
+function parseRichLines(text) {
+  return String(text || '').split('\n').map(function(x) { return x.trim(); }).filter(Boolean);
+}
+
+function parseRichLinks(text) {
+  var out = [];
+  parseRichLines(text).forEach(function(line) {
+    var parts = line.split('|');
+    if (parts.length >= 2) {
+      var url = parts.slice(1).join('|').trim();
+      if (/^https?:\/\//i.test(url)) out.push({ label: parts[0].trim() || 'Download', url: url });
+    } else if (/^https?:\/\//i.test(line)) {
+      out.push({ label: 'Download', url: line });
+    }
+  });
+  return out;
+}
+
+function collectRichPayload() {
+  var files = window._richFiles.map(function(f) {
+    return {
+      name: (f.name || '').trim(),
+      size: (f.size || '').trim(),
+      links: parseRichLinks(f.links),
+      shots: parseRichLines(f.shots).filter(function(u) { return /^https?:\/\//i.test(u); }),
+      mediainfo: (f.mediainfo || '').trim()
+    };
+  }).filter(function(f) { return f.name; });
+  return {
+    title: (document.getElementById('richTitle').value || '').trim(),
+    header_url: (document.getElementById('richHeaderUrl').value || '').trim(),
+    synopsis: (document.getElementById('richSynopsis').value || '').trim(),
+    note: (document.getElementById('richNote').value || '').trim(),
+    audio: (document.getElementById('richAudio').value || '').trim(),
+    subs: (document.getElementById('richSubs').value || '').trim(),
+    hashtags: (document.getElementById('richHashtags').value || '').trim(),
+    channel_id: (document.getElementById('richChannelId').value || '').trim(),
+    topic_id: (document.getElementById('richTopicId').value || '').trim(),
+    admin_pin: (document.getElementById('richAdminPin').value || '').trim(),
+    files: files
+  };
+}
+
+function updateRichHeaderPreview() {
+  var u = (document.getElementById('richHeaderUrl').value || '').trim();
+  var img = document.getElementById('richHeaderPreview');
+  var ph = document.getElementById('richHeaderPlaceholder');
+  if (u) { img.src = u; img.style.display = 'block'; ph.style.display = 'none'; }
+  else { img.style.display = 'none'; ph.style.display = 'block'; }
+}
+
+function updateRichPreview() {
+  var body = document.getElementById('richPreviewBody');
+  if (!body) return;
+  var d = collectRichPayload();
+  var img = document.getElementById('richPreviewImg');
+  if (d.header_url) { img.src = d.header_url; img.style.display = 'block'; } else { img.style.display = 'none'; }
+  var html = '';
+  if (d.title) html += '<div style="font-size: 1.02rem; font-weight: 800; margin-bottom: 6px;">' + richEsc(d.title) + '</div>';
+  if (d.synopsis) html += '<div style="margin-bottom: 8px; white-space: pre-wrap;">' + richEsc(d.synopsis) + '</div>';
+  if (d.note) html += '<div style="margin-bottom: 8px; white-space: pre-wrap;">' + richEsc(d.note) + '</div>';
+  if (d.audio) html += '<div>🔊 Audio: ' + richEsc(d.audio) + '</div>';
+  if (d.subs) html += '<div style="margin-bottom: 6px;">💬 Subtitle: ' + richEsc(d.subs) + '</div>';
+  var chars = (d.title + d.synopsis + d.note + d.audio + d.subs).length;
+  var blocks = (d.header_url ? 1 : 0) + 1 + (d.synopsis ? 1 : 0) + (d.note ? 1 : 0) + (d.audio ? 1 : 0) + (d.subs ? 1 : 0) + (d.hashtags ? 1 : 0);
+  d.files.forEach(function(f, i) {
+    if (i > 0) { html += '<hr style="border: none; border-top: 1px solid rgba(255,255,255,0.15); margin: 10px 0;">'; blocks += 1; }
+    html += '<div style="font-weight: 700; margin-top: 8px;">' + richEsc(f.name) + (f.size ? ' [' + richEsc(f.size) + ']' : '') + '</div>';
+    blocks += 1;
+    f.links.forEach(function(l) { html += '<div><a href="' + richEsc(l.url) + '" target="_blank" style="color: #6ab3f3;">' + richEsc(l.label.toUpperCase()) + '</a></div>'; blocks += 1; });
+    chars += f.name.length + f.size.length + f.mediainfo.length;
+    if (f.shots.length) {
+      html += '<details style="margin-top: 6px;"><summary style="cursor: pointer; color: #aebbc7; font-size: 0.8rem; letter-spacing: 0.05em;">SHOTS</summary>';
+      f.shots.forEach(function(u) { html += '<img src="' + richEsc(u) + '" style="width: 100%; border-radius: 8px; margin-top: 6px;">'; });
+      html += '</details>';
+      blocks += 1;
+    }
+    if (f.mediainfo) {
+      html += '<details style="margin-top: 6px;"><summary style="cursor: pointer; color: #aebbc7; font-size: 0.8rem; letter-spacing: 0.05em;">MEDIAINFO</summary><pre style="white-space: pre-wrap; font-size: 0.72rem; background: rgba(0,0,0,0.3); padding: 8px; border-radius: 8px; margin-top: 6px;">' + richEsc(f.mediainfo.slice(0, 8000)) + '</pre></details>';
+      blocks += 1;
+    }
+  });
+  if (d.hashtags) html += '<div style="margin-top: 10px; color: #6ab3f3;">' + richEsc(d.hashtags) + '</div>';
+  body.innerHTML = html || '<span style="color: #7f8b97;">Isi judul &amp; file untuk melihat preview...</span>';
+  var counter = document.getElementById('richCounter');
+  if (counter) counter.textContent = blocks + ' blok • ±' + chars + ' karakter teks (batas Telegram 500 blok / 32768 karakter)';
+}
+
+async function sendRichRelease() {
+  var d = collectRichPayload();
+  if (!d.title) return alert('Judul wajib diisi!');
+  if (!d.files.length) return alert('Minimal 1 file (isi nama filenya dulu)!');
+  if (!d.admin_pin) return alert('PIN Admin wajib diisi!');
+  localStorage.setItem('harudrive_admin_pin', d.admin_pin);
+  if (d.channel_id) localStorage.setItem('harudrive_rich_channel', d.channel_id);
+  if (d.topic_id) localStorage.setItem('harudrive_rich_topic', d.topic_id);
+  var btn = document.getElementById('richSendBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Mengirim...'; }
+  try {
+    var res = await fetch('/api/admin/telegram-rich-post', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(d)
+    });
+    var data = await res.json().catch(function() { return {}; });
+    if (!res.ok || !data.success) throw new Error(data.error || ('HTTP ' + res.status));
+    if (typeof showCopyToast === 'function') showCopyToast('Rilisan rich terkirim! 🚀 (' + data.blocks + ' blok, message_id ' + data.message_id + ')');
+    else alert('Rilisan rich terkirim! message_id ' + data.message_id);
+    closeRichReleaseModal();
+  } catch (e) {
+    alert('Gagal kirim rilisan rich: ' + e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🚀 Kirim Rich ke Channel'; }
+  }
+}
+
 function parseFileName(name) {
   if (!name) return {};
   const clean = ' ' + String(name).replace(/\.(mkv|mp4|avi|webm|mov|m4v|wmv|ts)$/i, '').replace(/[^a-zA-Z0-9]/g, ' ') + ' ';
@@ -9971,9 +10281,9 @@ function adminConsoleUI() {
           <span>Cloud Mirror</span>
         </button>
 
-        <button id="telegramPostBtn" class="btn-action-tool" style="background: rgba(56, 189, 248, 0.12); border-color: rgba(56, 189, 248, 0.35); color: #38bdf8;" onclick="openTelegramWithSelected()">
+        <button id="telegramPostBtn" class="btn-action-tool" style="background: rgba(56, 189, 248, 0.12); border-color: rgba(56, 189, 248, 0.35); color: #38bdf8;" onclick="openRichReleaseModal()" title="Buat rilisan Rich Text custom ke channel Telegram">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M21.198 2.433a2.242 2.242 0 0 0-1.022.215l-16.5 7.5a2.25 2.25 0 0 0 .126 4.088l4.096 1.228 1.228 4.096a2.25 2.25 0 0 0 4.088.126l7.5-16.5a2.25 2.25 0 0 0-2.42-3.26z"/></svg>
-          <span>Telegram</span>
+          <span>Telegram Rich</span>
         </button>
 
         <button class="btn-action-tool" style="background: rgba(14, 165, 233, 0.12); border-color: rgba(14, 165, 233, 0.35); color: #0ea5e9; position: relative;" onclick="openTaskManagerModal()">
@@ -10025,10 +10335,6 @@ function adminConsoleUI() {
   <!-- FLOATING BULK TOOLBAR (ADMIN) -->
   <div id="bulkToolbar" class="bulk-toolbar" style="display: none;">
     <span id="bulkCount" class="bulk-count-badge">0 Dipilih</span>
-    <button class="btn-bulk btn-bulk-tg" style="color: #38bdf8; border-color: rgba(56, 189, 248, 0.4); background: rgba(56, 189, 248, 0.1);" onclick="openTelegramWithSelected()" title="Kirim ke Telegram">
-      <svg class="icon icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
-      <span>Telegram</span>
-    </button>
     <button class="btn-bulk" style="color: var(--primary-light);" onclick="openBulkMoveModal()">
       <svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/><path d="M3 12h12"/></svg>
       <span>Pindah</span>
@@ -10523,6 +10829,99 @@ function adminConsoleUI() {
             🚀 Send to Channel
           </button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RICH RELEASE BUILDER MODAL (Fase 1 — 2026-10-24) -->
+  <div id="richReleaseModal" class="modal-backdrop" style="display: none;">
+    <div class="modal-card glass" style="max-width: 720px; width: 100%; border: 1px solid rgba(56,189,248,0.35);">
+      <div class="modal-header">
+        <span class="modal-title">🚀 Rilisan Rich Text — Custom Sendiri</span>
+        <button class="btn-bulk-close" onclick="closeRichReleaseModal()">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="modal-body" style="max-height: 76vh; overflow-y: auto; padding: 20px;">
+        <p style="font-size: 0.78rem; color: var(--text-muted); margin-bottom: 14px;">Susun rilisanmu sendiri, tanpa deteksi file. Hasilnya <b>satu pesan rich text</b> ke channel khusus: foto header, judul, sinopsis, lalu tiap file punya bagian <b>SHOTS</b> &amp; <b>MEDIAINFO</b> yang bisa dibuka-tutup.</p>
+
+        <div style="margin-bottom: 12px;">
+          <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Judul Rilisan *</label>
+          <input type="text" id="richTitle" class="form-input-pro" placeholder="Avatar: Seven Havens (2026)" style="margin-top: 4px;" oninput="updateRichPreview()">
+        </div>
+
+        <div style="margin-bottom: 12px;">
+          <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Foto Header Utama (URL gambar, tampil paling atas)</label>
+          <input type="text" id="richHeaderUrl" class="form-input-pro" placeholder="https://.../poster-atau-banner.jpg" style="margin-top: 4px;" oninput="updateRichHeaderPreview(); updateRichPreview();">
+          <div style="margin-top: 8px; border: 1px dashed var(--border); border-radius: 10px; overflow: hidden; background: rgba(0,0,0,0.35);">
+            <img id="richHeaderPreview" src="" alt="" style="width: 100%; max-height: 220px; object-fit: cover; display: none;">
+            <div id="richHeaderPlaceholder" style="text-align: center; color: var(--text-dim); font-size: 0.76rem; padding: 16px;">Belum ada foto header — boleh dikosongkan</div>
+          </div>
+        </div>
+
+        <div style="margin-bottom: 12px;">
+          <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Sinopsis (tampil di bawah judul)</label>
+          <textarea id="richSynopsis" class="form-input-pro" rows="3" placeholder="Tulis sinopsisnya di sini..." style="margin-top: 4px; resize: vertical;" oninput="updateRichPreview()"></textarea>
+        </div>
+
+        <div style="margin-bottom: 12px;">
+          <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Caption / Teks Custom (opsional, tampil setelah sinopsis — bebas kamu isi apa saja)</label>
+          <textarea id="richNote" class="form-input-pro" rows="2" placeholder="Mis. rilisan encode ulang AV1 10-bit, sub Indo bawaan, dll." style="margin-top: 4px; resize: vertical;" oninput="updateRichPreview()"></textarea>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px;">
+          <div>
+            <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">🔊 Audio</label>
+            <input type="text" id="richAudio" class="form-input-pro" placeholder="English, Japanese" style="margin-top: 4px;" oninput="updateRichPreview()">
+          </div>
+          <div>
+            <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">💬 Subtitle</label>
+            <input type="text" id="richSubs" class="form-input-pro" placeholder="Indonesia, English" style="margin-top: 4px;" oninput="updateRichPreview()">
+          </div>
+        </div>
+
+        <div style="margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center;">
+          <label style="font-size: 0.82rem; font-weight: 700; color: #38bdf8;">📁 File dalam Rilisan</label>
+          <button type="button" class="nav-btn" style="font-size: 0.74rem; padding: 4px 12px; background: rgba(56,189,248,0.15); border-color: rgba(56,189,248,0.4); color: #38bdf8; font-weight: 600;" onclick="addRichFileRow()">+ Tambah File</button>
+        </div>
+        <div id="richFilesContainer"></div>
+        <p style="font-size: 0.72rem; color: var(--text-dim); margin-bottom: 14px;">Link download: satu per baris, format <b>Label | URL</b> (mis. <i>HaruDrive | https://...</i>). SHOTS: satu URL gambar per baris (fase 1 masih manual — auto-VCS menyusul). MEDIAINFO: tempel teks MediaInfo file itu.</p>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px;">
+          <div>
+            <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Channel Tujuan (khusus rilisan) *</label>
+            <input type="text" id="richChannelId" class="form-input-pro" placeholder="-100xxxxxxxxxx atau @username" style="margin-top: 4px;">
+          </div>
+          <div>
+            <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Topic ID (bila channel forum, opsional)</label>
+            <input type="text" id="richTopicId" class="form-input-pro" placeholder="Kosongkan bila bukan forum" style="margin-top: 4px;">
+          </div>
+        </div>
+        <p style="font-size: 0.72rem; color: var(--text-dim); margin-bottom: 12px;">Bot HaruDrive harus sudah jadi admin di channel itu. Channel &amp; topic akan diingat untuk rilisan berikutnya. Kosong = pakai channel default dari secret server.</p>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 4px;">
+          <div>
+            <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Hashtag (opsional)</label>
+            <input type="text" id="richHashtags" class="form-input-pro" placeholder="#Anime #Series" style="margin-top: 4px;" oninput="updateRichPreview()">
+          </div>
+          <div>
+            <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">PIN Admin *</label>
+            <input type="text" id="richAdminPin" class="form-input-pro" placeholder="••••••" autocomplete="new-password" style="margin-top: 4px; -webkit-text-security: disc; text-security: disc;">
+          </div>
+        </div>
+
+        <div style="margin-top: 14px;">
+          <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Preview (perkiraan tampilan di Telegram)</label>
+          <div style="background: #182533; border-radius: 14px; border: 1px solid rgba(255,255,255,0.08); margin-top: 6px; overflow: hidden;">
+            <img id="richPreviewImg" src="" alt="" style="width: 100%; max-height: 200px; object-fit: cover; display: none;">
+            <div id="richPreviewBody" style="padding: 14px 16px; color: #e4ecf2; font-size: 0.86rem; line-height: 1.55;"></div>
+          </div>
+          <div id="richCounter" style="font-size: 0.72rem; color: var(--text-dim); margin-top: 6px;">0 blok • 0 karakter</div>
+        </div>
+      </div>
+      <div class="modal-footer" style="justify-content: flex-end; gap: 8px;">
+        <button class="nav-btn" onclick="closeRichReleaseModal()">Batal</button>
+        <button class="nav-btn" id="richSendBtn" style="background: #38bdf8; color: white; border: none; font-weight: 600;" onclick="sendRichRelease()">🚀 Kirim Rich ke Channel</button>
       </div>
     </div>
   </div>
