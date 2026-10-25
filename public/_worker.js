@@ -7961,6 +7961,7 @@ function applyRichDraftForm(form) {
   renderRichFileRows();
   if (typeof updateRichHeaderPreview === 'function') updateRichHeaderPreview();
   updateRichPreview();
+  refreshRichAutoLangs();
 }
 
 async function openRichDraft(id) {
@@ -8084,12 +8085,112 @@ function addRichFileRow() {
 function removeRichFileRow(i) {
   window._richFiles.splice(i, 1);
   renderRichFileRows();
-  updateRichPreview();
+  refreshRichAutoLangs();
 }
 
 var RICH_FIELD_NAMES = ['name', 'size', 'links', 'shots', 'mediainfo'];
+function richLangName(raw) {
+  var v = String(raw || '').trim();
+  var cut = v.indexOf(' (');
+  if (cut !== -1) v = v.slice(0, cut).trim();
+  var cut2 = v.indexOf(' [');
+  if (cut2 !== -1) v = v.slice(0, cut2).trim();
+  var low = v.toLowerCase();
+  var codeMap = {
+    'en': 'English', 'eng': 'English', 'english': 'English',
+    'id': 'Indonesia', 'in': 'Indonesia', 'ind': 'Indonesia', 'indonesian': 'Indonesia',
+    'ja': 'Japanese', 'jpn': 'Japanese', 'japanese': 'Japanese',
+    'ms': 'Malay', 'msa': 'Malay', 'malay': 'Malay',
+    'ko': 'Korean', 'kor': 'Korean', 'korean': 'Korean',
+    'fr': 'French', 'fra': 'French', 'fre': 'French', 'french': 'French',
+    'de': 'German', 'deu': 'German', 'ger': 'German', 'german': 'German',
+    'es': 'Spanish', 'spa': 'Spanish', 'spanish': 'Spanish',
+    'it': 'Italian', 'ita': 'Italian', 'italian': 'Italian',
+    'pt': 'Portuguese', 'por': 'Portuguese', 'portuguese': 'Portuguese',
+    'ru': 'Russian', 'rus': 'Russian', 'russian': 'Russian',
+    'zh': 'Chinese', 'zho': 'Chinese', 'chi': 'Chinese', 'chinese': 'Chinese',
+    'th': 'Thai', 'tha': 'Thai', 'thai': 'Thai',
+    'vi': 'Vietnamese', 'vie': 'Vietnamese', 'vietnamese': 'Vietnamese',
+    'ar': 'Arabic', 'ara': 'Arabic', 'arabic': 'Arabic',
+    'hi': 'Hindi', 'hin': 'Hindi', 'hindi': 'Hindi',
+    'nl': 'Dutch', 'nld': 'Dutch', 'dut': 'Dutch', 'dutch': 'Dutch',
+    'tr': 'Turkish', 'tur': 'Turkish', 'turkish': 'Turkish',
+    'pl': 'Polish', 'pol': 'Polish', 'polish': 'Polish',
+    'uk': 'Ukrainian', 'ukr': 'Ukrainian', 'ukrainian': 'Ukrainian'
+  };
+  if (codeMap[low] !== undefined) return codeMap[low];
+  var dash = low.indexOf('-');
+  if (dash !== -1 && codeMap[low.slice(0, dash)] !== undefined) return codeMap[low.slice(0, dash)];
+  if (low === 'und' || low === 'undetermined' || low === 'unknown' || low === 'zxx' || low === '') return '';
+  return v;
+}
+
+function orderRichLangs(list) {
+  var priority = ['Indonesia', 'English', 'Japanese', 'Malay', 'Korean'];
+  var out = [];
+  priority.forEach(function(p) { if (list.indexOf(p) !== -1) out.push(p); });
+  list.forEach(function(l) { if (out.indexOf(l) === -1) out.push(l); });
+  return out;
+}
+
+function extractRichLangs(raw) {
+  var audio = [];
+  var subs = [];
+  var section = '';
+  var lines = String(raw || '').split(String.fromCharCode(10));
+  lines.forEach(function(line) {
+    var t = line.trim();
+    var low = t.toLowerCase();
+    if (low === 'audio' || low.indexOf('audio #') === 0) { section = 'audio'; return; }
+    if (low === 'text' || low.indexOf('text #') === 0) { section = 'subs'; return; }
+    if (low === 'general' || low === 'video' || low === 'menu' || low === 'image' || low === 'other' || low.indexOf('video #') === 0 || low.indexOf('menu #') === 0 || low.indexOf('image #') === 0 || low.indexOf('general #') === 0) { section = ''; return; }
+    if (section) {
+      var ci = t.indexOf(':');
+      if (ci !== -1 && t.slice(0, ci).trim().toLowerCase() === 'language') {
+        var name = richLangName(t.slice(ci + 1));
+        if (name) {
+          var arr = section === 'audio' ? audio : subs;
+          if (arr.indexOf(name) === -1) arr.push(name);
+        }
+      }
+    }
+  });
+  return { audio: orderRichLangs(audio), subs: orderRichLangs(subs) };
+}
+
+function refreshRichAutoLangs() {
+  var aEl = document.getElementById('richAudio');
+  var sEl = document.getElementById('richSubs');
+  if (!aEl && !sEl) return;
+  var allA = [];
+  var allS = [];
+  (window._richFiles || []).forEach(function(f) {
+    var r = extractRichLangs(f.mediainfo || '');
+    r.audio.forEach(function(l) { if (allA.indexOf(l) === -1) allA.push(l); });
+    r.subs.forEach(function(l) { if (allS.indexOf(l) === -1) allS.push(l); });
+  });
+  var aList = orderRichLangs(allA);
+  var sList = orderRichLangs(allS);
+  if (aEl) {
+    var cur = aEl.value.trim();
+    if (cur === '' || cur === window._richAutoAudio) {
+      aEl.value = aList.join(', ');
+      window._richAutoAudio = aEl.value;
+    }
+  }
+  if (sEl) {
+    var cur2 = sEl.value.trim();
+    if (cur2 === '' || cur2 === window._richAutoSubs) {
+      sEl.value = sList.join(', ');
+      window._richAutoSubs = sEl.value;
+    }
+  }
+  updateRichPreview();
+}
+
 function setRichField(i, fidx, value) {
   if (window._richFiles[i]) window._richFiles[i][RICH_FIELD_NAMES[fidx]] = value;
+  if (fidx === 4) { refreshRichAutoLangs(); return; }
   updateRichPreview();
 }
 
