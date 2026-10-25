@@ -1709,7 +1709,7 @@ export default {
     function specsFromFile(f) {
       const name = String((f && f.name) || '');
       const mi = String((f && f.mediainfo) || '');
-      let video = '', audio = '', subs = '', duration = '';
+      let video = '', audio = '', subs = '', duration = '', filename = '';
       if (mi.trim()) {
         const lines = mi.split('\n');
         let section = '', vKv = {}, vSeen = false, vActive = false, gKv = {}, aTracks = [], tTracks = [], curA = null, curT = null;
@@ -1728,11 +1728,11 @@ export default {
             if (k === 'Text') { curT = {}; tTracks.push(curT); } else curT = null;
             continue;
           }
-          if (!section) continue;
           const ci = line.indexOf(':');
           if (ci < 1) continue;
           const key = line.slice(0, ci).trim();
           const val = line.slice(ci + 1).trim();
+          if (!section) { if (!(key in gKv)) gKv[key] = val; continue; }
           if (section === 'General' && !(key in gKv)) gKv[key] = val;
           else if (section === 'Video' && vActive && !(key in vKv)) vKv[key] = val;
           else if (section === 'Audio' && curA && !(key in curA)) curA[key] = val;
@@ -1765,14 +1765,17 @@ export default {
           const title = t['Title'] || '';
           return lang + (fmt ? ' ' + fmt : '') + (title && title !== lang ? ' (' + title + ')' : '');
         }).filter(Boolean).join(', ');
-        duration = gKv['Duration'] || '';
+        duration = gKv['Duration'] || vKv['Duration'] || (aTracks.length && aTracks[0]['Duration']) || '';
+        const cn = gKv['Complete name'] || '';
+        if (cn) { const p1 = cn.split('/'); const last1 = p1[p1.length - 1]; const p2 = last1.split(String.fromCharCode(92)); filename = p2[p2.length - 1]; }
       }
       if (!video) {
         const q = specQualityFromName(name);
         const c = specCodecFromName(name);
         video = [c, q].filter(Boolean).join(' ');
       }
-      return { video: video, audio: audio, subs: subs, duration: duration };
+      if (!filename) filename = name;
+      return { video: video, audio: audio, subs: subs, duration: duration, filename: filename };
     }
     function providerFromUrl(u) {
       let h = String(u || '').trim();
@@ -1825,7 +1828,7 @@ export default {
       const tagline = String(body.meta_tagline || '').trim();
       if (body.show_tagline !== false && tagline) blocks.push({ type: 'details', summary: '💬 Tagline', is_open: false, blocks: [{ type: 'pullquote', text: tagline }] });
       const synopsis = String(body.synopsis || '').trim();
-      if (synopsis) { blocks.push({ type: 'expandable_blockquote', text: synopsis }); blocks.push({ type: 'divider' }); }
+      if (synopsis) { blocks.push({ type: 'details', summary: '📖 Sinopsis', is_open: false, blocks: [para(synopsis)] }); blocks.push({ type: 'divider' }); }
       const note = String(body.note || '').trim();
       if (note) blocks.push(para(note));
       const audio = String(body.audio || '').trim();
@@ -1869,10 +1872,11 @@ export default {
         if (body.show_specs === true) {
           const sp = specsFromFile(f);
           if (sp.video || sp.audio || sp.subs || sp.duration) {
-            blocks.push({ type: 'table', caption: 'SPECS', is_bordered: true, cells: [
+            blocks.push({ type: 'details', summary: 'SPECS', is_open: false, blocks: [{ type: 'table', is_bordered: true, cells: [
+              [{ text: sp.filename || fname, colspan: 4, is_header: true }],
               [{ text: 'Video', is_header: true }, { text: 'Audio', is_header: true }, { text: 'Subtitle', is_header: true }, { text: 'Durasi', is_header: true }],
               [{ text: sp.video || '-' }, { text: sp.audio || '-' }, { text: sp.subs || '-' }, { text: sp.duration || '-' }]
-            ] });
+            ] }] });
           }
         }
         const shots = shotMedia(f && f.shots);
@@ -8896,7 +8900,7 @@ function richProviderLabel(l) {
 function richFileSpecs(f) {
   var name = String((f && f.name) || '');
   var mi = String((f && f.mediainfo) || '');
-  var video = '', audio = '', subs = '', duration = '';
+  var video = '', audio = '', subs = '', duration = '', filename = '';
   if (mi.trim()) {
     var lines = mi.split(String.fromCharCode(10));
     var section = '', vKv = {}, vSeen = false, vActive = false, gKv = {}, aTracks = [], tTracks = [], curA = null, curT = null;
@@ -8911,11 +8915,11 @@ function richFileSpecs(f) {
         if (base === 'Text') { curT = {}; tTracks.push(curT); } else curT = null;
         continue;
       }
-      if (!section) continue;
       var ci = line.indexOf(':');
       if (ci < 1) continue;
       var key = line.slice(0, ci).trim();
       var val = line.slice(ci + 1).trim();
+      if (!section) { if (!(key in gKv)) gKv[key] = val; continue; }
       if (section === 'General' && !(key in gKv)) gKv[key] = val;
       else if (section === 'Video' && vActive && !(key in vKv)) vKv[key] = val;
       else if (section === 'Audio' && curA && !(key in curA)) curA[key] = val;
@@ -8960,7 +8964,9 @@ function richFileSpecs(f) {
       var title = t['Title'] || '';
       return lang + (fmt ? ' ' + fmt : '') + (title && title !== lang ? ' (' + title + ')' : '');
     }).filter(Boolean).join(', ');
-    duration = gKv['Duration'] || '';
+    duration = gKv['Duration'] || vKv['Duration'] || (aTracks.length && aTracks[0]['Duration']) || '';
+    var cn = gKv['Complete name'] || '';
+    if (cn) { var p1 = cn.split('/'); var last1 = p1[p1.length - 1]; var p2 = last1.split(String.fromCharCode(92)); filename = p2[p2.length - 1]; }
   }
   if (!video) {
     var pf = {};
@@ -8970,7 +8976,8 @@ function richFileSpecs(f) {
     if (pf.quality) parts.push(pf.quality);
     video = parts.join(' ');
   }
-  return { video: video, audio: audio, subs: subs, duration: duration };
+  if (!filename) filename = name;
+  return { video: video, audio: audio, subs: subs, duration: duration, filename: filename };
 }
 
 function updateRichPreview() {
@@ -9024,11 +9031,12 @@ function updateRichPreview() {
     if (d.show_specs) {
       var sp = richFileSpecs(f);
       if (sp.video || sp.audio || sp.subs || sp.duration) {
-        html += '<div style="font-size: 0.78rem; color: var(--text-muted); margin: 8px 0 2px 0;">SPECS</div>';
-        html += '<table style="width: 100%; border-collapse: collapse; font-size: 0.78rem; margin-bottom: 6px;">';
+        html += '<details style="margin: 8px 0 6px 0;"><summary style="cursor: pointer; color: #aebbc7; font-size: 0.8rem; letter-spacing: 0.05em;">SPECS</summary>';
+        html += '<table style="width: 100%; border-collapse: collapse; font-size: 0.78rem; margin-top: 6px;">';
+        html += '<tr><th colspan="4" style="border: 1px solid rgba(255,255,255,0.2); padding: 4px 6px; text-align: left; background: rgba(255,255,255,0.06);">' + richEsc(sp.filename || f.name) + '</th></tr>';
         html += '<tr>' + ['Video', 'Audio', 'Subtitle', 'Durasi'].map(function(t) { return '<th style="border: 1px solid rgba(255,255,255,0.2); padding: 4px 6px; text-align: left; background: rgba(255,255,255,0.06);">' + t + '</th>'; }).join('') + '</tr>';
         html += '<tr>' + [sp.video || '-', sp.audio || '-', sp.subs || '-', sp.duration || '-'].map(function(t) { return '<td style="border: 1px solid rgba(255,255,255,0.2); padding: 4px 6px;">' + richEsc(t) + '</td>'; }).join('') + '</tr>';
-        html += '</table>';
+        html += '</table></details>';
         blocks += 1;
       }
     }
