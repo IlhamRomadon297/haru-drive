@@ -1933,7 +1933,7 @@ export default {
       if (isHttp(joinGroup)) joinBtns.push({ text: 'Join Group', url: joinGroup, style: 'primary' });
       if (joinBtns.length) blocks.push({ type: 'buttons', buttons: joinBtns, align: 'center' });
       const hashtags = String(body.hashtags || '').trim();
-      if (hashtags) blocks.push({ type: 'divider' });
+      if (hashtags) blocks.push({ type: 'table', is_bordered: false, is_striped: false, is_compact: true, cells: [[{ text: '────────────', align: 'center' }]] });
       if (hashtags) blocks.push(para(hashtags));
       if (blocks.length > 500) {
         return { error: 'Terlalu banyak blok (' + blocks.length + ' > 500). Kurangi jumlah file/gambar.', status: 400 };
@@ -9110,7 +9110,7 @@ function updateRichPreview() {
   if ((d.join_channel || '').indexOf('http://') === 0 || (d.join_channel || '').indexOf('https://') === 0) joinBtns.push('<a href="' + richEsc(d.join_channel) + '" target="_blank" style="display: inline-block; padding: 6px 18px; margin: 2px 4px; border-radius: 999px; background: rgba(56,189,248,0.2); border: 1px solid rgba(56,189,248,0.5); color: #38bdf8; font-weight: 700; text-decoration: none;">Join Channel</a>');
   if ((d.join_group || '').indexOf('http://') === 0 || (d.join_group || '').indexOf('https://') === 0) joinBtns.push('<a href="' + richEsc(d.join_group) + '" target="_blank" style="display: inline-block; padding: 6px 18px; margin: 2px 4px; border-radius: 999px; background: rgba(56,189,248,0.2); border: 1px solid rgba(56,189,248,0.5); color: #38bdf8; font-weight: 700; text-decoration: none;">Join Group</a>');
   if (joinBtns.length) { html += '<div style="text-align: center; margin: 10px 0;">' + joinBtns.join('') + '</div>'; blocks += 1; }
-  if (d.hashtags) { html += '<hr style="border: none; border-top: 1px solid rgba(255,255,255,0.15); margin: 10px 0;">'; blocks += 1; html += '<div style="margin-top: 10px; color: #6ab3f3;">' + richEsc(d.hashtags) + '</div>'; }
+  if (d.hashtags) { html += '<div style="text-align: center; color: #aebbc7; margin: 8px 0 2px 0;">────────────</div>'; blocks += 1; html += '<div style="margin-top: 10px; color: #6ab3f3;">' + richEsc(d.hashtags) + '</div>'; }
   body.innerHTML = html || '<span style="color: #7f8b97;">Isi judul &amp; file untuk melihat preview...</span>';
   var counter = document.getElementById('richCounter');
   if (counter) counter.textContent = blocks + ' blok • ±' + chars + ' karakter teks (batas Telegram 500 blok / 32768 karakter)';
