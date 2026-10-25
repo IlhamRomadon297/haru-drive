@@ -343,16 +343,23 @@ export default {
         const hfHeaders = { 'User-Agent': 'HaruDrive/1.0' };
         if (HF_TOKEN) hfHeaders['Authorization'] = `Bearer ${HF_TOKEN}`;
 
-        const hfRes = await fetch(hfTreeUrl, { headers: hfHeaders });
         const folderSet = new Set(['']);
-
-        if (hfRes.ok) {
-          const items = await hfRes.json();
-          items.forEach(item => {
-            if (item.type === 'directory' && !item.path.startsWith('.')) {
-              folderSet.add(item.path);
-            }
-          });
+        {
+          let nextUrl = hfTreeUrl;
+          let pages = 0;
+          while (nextUrl && pages < 40) {
+            const pageRes = await fetch(nextUrl, { headers: hfHeaders });
+            if (!pageRes.ok) break;
+            const items = await pageRes.json();
+            if (Array.isArray(items)) items.forEach(item => {
+              if (item.type === 'directory' && !item.path.startsWith('.')) {
+                folderSet.add(item.path);
+              }
+            });
+            pages++;
+            const m = (pageRes.headers.get('Link') || '').match(/<([^>]+)>\s*;\s*rel="next"/);
+            nextUrl = m ? (m[1].startsWith('http') ? m[1] : 'https://huggingface.co' + m[1]) : '';
+          }
         }
 
         const sortedFolders = Array.from(folderSet).sort((a, b) => a.localeCompare(b));
@@ -567,16 +574,29 @@ export default {
         const hfHeaders = { 'User-Agent': 'HaruDrive/1.0' };
         if (HF_TOKEN) hfHeaders['Authorization'] = `Bearer ${HF_TOKEN}`;
 
-        const hfRes = await fetch(hfTreeUrl, { headers: hfHeaders });
-        if (!hfRes.ok) {
-          const errText = await hfRes.text();
-          return new Response(JSON.stringify({ error: `Hugging Face error (${hfRes.status}): ${errText}` }), {
-            status: hfRes.status,
-            headers: { 'Content-Type': 'application/json' }
-          });
+        // Tree HF dengan expand=true dipaginasi 50 item/halaman (header Link rel=next).
+        // WAJIB ikuti semua halaman — fetch sekali saja diam-diam memotong daftar di 50 item
+        // (kasus Netflix/Series: 229 folder, yang tampil cuma 50 pertama sampai Dont.Toy S02).
+        let hfItems = [];
+        {
+          let nextUrl = hfTreeUrl;
+          let pages = 0;
+          while (nextUrl && pages < 40) {
+            const pageRes = await fetch(nextUrl, { headers: hfHeaders });
+            if (!pageRes.ok) {
+              const errText = await pageRes.text();
+              return new Response(JSON.stringify({ error: `Hugging Face error (${pageRes.status}): ${errText}` }), {
+                status: pageRes.status,
+                headers: { 'Content-Type': 'application/json' }
+              });
+            }
+            const pageItems = await pageRes.json();
+            if (Array.isArray(pageItems)) hfItems = hfItems.concat(pageItems);
+            pages++;
+            const m = (pageRes.headers.get('Link') || '').match(/<([^>]+)>\s*;\s*rel="next"/);
+            nextUrl = m ? (m[1].startsWith('http') ? m[1] : 'https://huggingface.co' + m[1]) : '';
+          }
         }
-
-        const hfItems = await hfRes.json();
         const folderName = reqPath ? reqPath.split('/').pop() : 'Home';
 
         if (isRecursive && Array.isArray(hfItems)) {
