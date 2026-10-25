@@ -5215,7 +5215,7 @@ async function updateBandwidthIndicator(){ try{ const res=await fetch('/api/band
 let activeFilter = 'all';
 const selectedFiles = new Set();
 let currentPage = 1;
-const FILE_PAGE_SIZE = 50;
+const FILE_PAGE_SIZE = 25;
 function renderFileListReset() {
   currentPage = 1;
   renderFileList();
@@ -6170,7 +6170,7 @@ function renderFileList() {
     html += '</div>';
   });
 
-  if (totalPages > 1) {
+  {
     const from = pageStart + 1;
     const to = Math.min(pageStart + pageItems.length, filtered.length);
     html += '<div class="pagination-bar">';
