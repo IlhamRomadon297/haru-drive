@@ -1663,6 +1663,7 @@ export default {
       const bold = (text) => ({ type: 'bold', text: String(text) });
       const urlT = (text, u) => ({ type: 'url', text: String(text), url: String(u) });
       const photoBlock = (u) => ({ type: 'photo', photo: { type: 'photo', media: String(u).trim() } });
+      const shotCaption = (cap) => { const t = String(cap || '').trim(); return t ? { caption: { text: t } } : {}; };
       const blocks = [];
       const headerUrl = String(body.header_url || '').trim();
       if (isHttp(headerUrl)) blocks.push(photoBlock(headerUrl));
@@ -1675,10 +1676,11 @@ export default {
       const subs = String(body.subs || '').trim();
       const shotMedia = (list) => (Array.isArray(list) ? list : []).map(x => String(x || '').trim()).filter(x => isHttp(x) || x.indexOf('tg:') === 0).map(x => x.indexOf('tg:') === 0 ? x.slice(3) : x).filter(Boolean);
       const globalShots = shotMedia(body.global_shots);
+      const globalCaption = String(body.global_shots_caption || '').trim();
       if (globalShots.length === 1) {
-        blocks.push({ type: 'details', summary: 'SHOTS', is_open: false, blocks: [photoBlock(globalShots[0])] });
+        blocks.push({ type: 'details', summary: 'SHOTS', is_open: false, blocks: [Object.assign({}, photoBlock(globalShots[0]), shotCaption(globalCaption))] });
       } else if (globalShots.length > 1) {
-        blocks.push({ type: 'details', summary: 'SHOTS', is_open: false, blocks: [{ type: 'slideshow', blocks: globalShots.slice(0, 10).map(photoBlock) }] });
+        blocks.push({ type: 'details', summary: 'SHOTS', is_open: false, blocks: [Object.assign({ type: 'slideshow', blocks: globalShots.slice(0, 10).map(photoBlock) }, shotCaption(globalCaption))] });
       }
       let prevFileDetails = false;
       files.forEach((f, idx) => {
@@ -1698,10 +1700,11 @@ export default {
           blocks.push(para(parts));
         }
         const shots = shotMedia(f && f.shots);
+        const shotsCaption = String((f && f.shots_caption) || '').trim();
         if (shots.length === 1) {
-          blocks.push({ type: 'details', summary: 'SHOTS', is_open: false, blocks: [photoBlock(shots[0])] });
+          blocks.push({ type: 'details', summary: 'SHOTS', is_open: false, blocks: [Object.assign({}, photoBlock(shots[0]), shotCaption(shotsCaption))] });
         } else if (shots.length > 1) {
-          blocks.push({ type: 'details', summary: 'SHOTS', is_open: false, blocks: [{ type: 'slideshow', blocks: shots.slice(0, 10).map(photoBlock) }] });
+          blocks.push({ type: 'details', summary: 'SHOTS', is_open: false, blocks: [Object.assign({ type: 'slideshow', blocks: shots.slice(0, 10).map(photoBlock) }, shotCaption(shotsCaption))] });
         }
         const mi = String((f && f.mediainfo) || '').trim();
         if (mi) {
@@ -1832,7 +1835,7 @@ export default {
         try {
           const db = await richDraftsTable();
           if (db) {
-            const form = { title: String(body.title || ''), header_url: String(body.header_url || ''), synopsis: String(body.synopsis || ''), note: String(body.note || ''), audio: String(body.audio || ''), subs: String(body.subs || ''), hashtags: String(body.hashtags || ''), footer_text: String(body.footer_text || ''), channel_id: String(body.channel_id || ''), topic_id: String(body.topic_id || ''), global_shots: Array.isArray(body.global_shots) ? body.global_shots : [], files: Array.isArray(body.files) ? body.files : [] };
+            const form = { title: String(body.title || ''), header_url: String(body.header_url || ''), synopsis: String(body.synopsis || ''), note: String(body.note || ''), audio: String(body.audio || ''), subs: String(body.subs || ''), hashtags: String(body.hashtags || ''), footer_text: String(body.footer_text || ''), channel_id: String(body.channel_id || ''), topic_id: String(body.topic_id || ''), global_shots: Array.isArray(body.global_shots) ? body.global_shots : [], global_shots_caption: String(body.global_shots_caption || ''), files: Array.isArray(body.files) ? body.files : [] };
             const existing = draftId ? await richDraftGet(db, draftId) : null;
             const mergedTargets = (existing && Array.isArray(existing.sent_targets) ? existing.sent_targets : []).concat(sentTargets);
             draftId = await richDraftUpsert(db, { id: draftId, title: form.title, payload: { form: form, blocks: blocks }, status: 'sent', sentTargets: mergedTargets });
@@ -8068,6 +8071,7 @@ function applyRichDraftForm(form) {
   set('richAudio', form.audio);
   set('richSubs', form.subs);
   set('richGlobalShots', (form.global_shots || []).join(nl));
+  set('richGlobalShotsCaption', form.global_shots_caption);
   set('richHashtags', form.hashtags);
   set('richChannelId', form.channel_id);
   set('richTopicId', form.topic_id);
@@ -8079,6 +8083,7 @@ function applyRichDraftForm(form) {
       size: f.size || '',
       links: (f.links || []).map(function(l) { return (l.label || 'Download') + ' | ' + (l.url || ''); }).join(nl),
       shots: (f.shots || []).join(nl),
+      shots_caption: f.shots_caption || '',
       mediainfo: f.mediainfo || ''
     };
   });
@@ -8207,7 +8212,7 @@ function toggleRichFullscreen() {
 }
 
 function addRichFileRow() {
-  window._richFiles.push({ name: '', size: '', links: '', shots: '', mediainfo: '' });
+  window._richFiles.push({ name: '', size: '', links: '', shots: '', shots_caption: '', mediainfo: '' });
   renderRichFileRows();
   updateRichPreview();
 }
@@ -8218,7 +8223,7 @@ function removeRichFileRow(i) {
   refreshRichAutoLangs();
 }
 
-var RICH_FIELD_NAMES = ['name', 'size', 'links', 'shots', 'mediainfo'];
+var RICH_FIELD_NAMES = ['name', 'size', 'links', 'shots', 'mediainfo', 'shots_caption'];
 function richLangName(raw) {
   var v = String(raw || '').trim();
   var cut = v.indexOf(' (');
@@ -8416,6 +8421,7 @@ function renderRichFileRows() {
     html += '<input type="text" class="form-input-pro" placeholder="Ukuran, mis. 1.11 GB" value="' + richEsc(f.size) + '" oninput="setRichField(' + i + ', 1, this.value)" style="margin-bottom: 8px;">';
     html += '<textarea class="form-input-pro" rows="2" placeholder="Link download, satu per baris: Label | URL" oninput="setRichField(' + i + ', 2, this.value)" style="margin-bottom: 8px; resize: vertical;">' + richEsc(f.links) + '</textarea>';
     html += '<textarea class="form-input-pro" rows="2" placeholder="SHOTS: URL gambar screenshot, satu per baris" oninput="setRichField(' + i + ', 3, this.value)" style="margin-bottom: 8px; resize: vertical;">' + richEsc(f.shots) + '</textarea>';
+    html += '<input type="text" class="form-input-pro" placeholder="Caption SHOTS (opsional), mis. nama file sumber screenshot" value="' + richEsc(f.shots_caption || '') + '" oninput="setRichField(' + i + ', 5, this.value)" style="margin-bottom: 8px;">';
     html += '<div style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap;">';
     html += '<button type="button" class="nav-btn" id="richShotBtn' + i + '" style="font-size: 0.72rem; padding: 4px 12px; background: rgba(56,189,248,0.15); border-color: rgba(56,189,248,0.4); color: #38bdf8; font-weight: 600;" onclick="pickRichShots(' + i + ')">📤 Upload Foto ke Telegram</button>';
     html += '<span id="richShotStatus' + i + '" style="font-size: 0.7rem; color: var(--text-dim);"></span>';
@@ -8452,6 +8458,7 @@ function collectRichPayload() {
       size: (f.size || '').trim(),
       links: parseRichLinks(f.links),
       shots: parseRichLines(f.shots).filter(function(u) { return u.indexOf('http://') === 0 || u.indexOf('https://') === 0 || u.indexOf('tg:') === 0; }),
+      shots_caption: (f.shots_caption || '').trim(),
       mediainfo: (f.mediainfo || '').trim()
     };
   }).filter(function(f) { return f.name; });
@@ -8463,6 +8470,7 @@ function collectRichPayload() {
     audio: (document.getElementById('richAudio').value || '').trim(),
     subs: (document.getElementById('richSubs').value || '').trim(),
     global_shots: parseRichLines(document.getElementById('richGlobalShots').value || '').filter(function(u) { return u.indexOf('http://') === 0 || u.indexOf('https://') === 0 || u.indexOf('tg:') === 0; }),
+    global_shots_caption: (document.getElementById('richGlobalShotsCaption').value || '').trim(),
     hashtags: (document.getElementById('richHashtags').value || '').trim(),
     channel_id: (document.getElementById('richChannelId').value || '').trim(),
     topic_id: (document.getElementById('richTopicId').value || '').trim(),
@@ -8589,11 +8597,12 @@ function updateRichPreview() {
   if (d.title) html += '<div style="font-size: 1.02rem; font-weight: 800; margin-bottom: 6px;">' + richEsc(d.title) + '</div>';
   if (d.synopsis) html += '<details style="margin: 0 0 8px 0;"><summary style="cursor: pointer; color: #38bdf8;">Sinopsis (klik untuk membuka)</summary><blockquote style="border-left: 3px solid #38bdf8; margin: 6px 0 0 0; padding: 5px 10px; background: rgba(56,189,248,0.07); border-radius: 0 8px 8px 0; white-space: pre-wrap;">' + richEsc(d.synopsis) + '</blockquote></details><hr style="border: none; border-top: 1px solid rgba(255,255,255,0.15); margin: 10px 0;">';
   if (d.note) html += '<div style="margin-bottom: 8px; white-space: pre-wrap;">' + richEsc(d.note) + '</div>';
-  var chars = (d.title + d.synopsis + d.note + d.audio + d.subs).length;
+  var chars = (d.title + d.synopsis + d.note + d.audio + d.subs + (d.global_shots_caption || '')).length;
   var blocks = (d.header_url ? 1 : 0) + 1 + (d.synopsis ? 2 : 0) + (d.note ? 1 : 0) + ((d.audio || d.subs) ? 2 : 0) + (d.hashtags ? 1 : 0);
   if (d.global_shots.length) {
     html += '<details style="margin-top: 6px;"><summary style="cursor: pointer; color: #aebbc7; font-size: 0.8rem; letter-spacing: 0.05em;">SHOTS</summary>';
     d.global_shots.forEach(function(u) { html += richShotImg(u); });
+    if (d.global_shots_caption) html += '<div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 6px; white-space: pre-wrap;">' + richEsc(d.global_shots_caption) + '</div>';
     html += '</details>';
     blocks += 1;
   }
@@ -8605,10 +8614,11 @@ function updateRichPreview() {
     if (f.size) { html += '<div>💾 Ukuran: ' + richEsc(f.size) + '</div>'; blocks += 1; }
     if (f.links.length) { html += '<div>' + f.links.map(function(l) { return '<a href="' + richEsc(l.url) + '" target="_blank" style="color: #6ab3f3;">' + richEsc(l.label) + '</a>'; }).join(' | ') + '</div>'; blocks += 1; }
     var miShow = f.mediainfo ? (summarizeMediaInfoText(f.mediainfo.slice(0, 24000), f.name) || f.mediainfo.slice(0, 20000)) : '';
-    chars += f.name.length + f.size.length + miShow.length;
+    chars += f.name.length + f.size.length + miShow.length + (f.shots_caption || '').length;
     if (f.shots.length) {
       html += '<details style="margin-top: 6px;"><summary style="cursor: pointer; color: #aebbc7; font-size: 0.8rem; letter-spacing: 0.05em;">SHOTS</summary>';
       f.shots.forEach(function(u) { html += richShotImg(u); });
+      if (f.shots_caption) html += '<div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 6px; white-space: pre-wrap;">' + richEsc(f.shots_caption) + '</div>';
       html += '</details>';
       blocks += 1;
     }
@@ -12110,6 +12120,7 @@ function adminConsoleUI() {
             <span id="richGlobalShotStatus" style="font-size: 0.7rem; color: var(--text-dim);"></span>
             <input type="file" id="richGlobalShotInput" accept="image/*" multiple style="display: none;" onchange="handleRichGlobalShotFiles(this)">
           </div>
+          <input type="text" id="richGlobalShotsCaption" class="form-input-pro" placeholder="Caption SHOTS Global (opsional), mis. nama file sumber screenshot" style="margin-top: 6px;" oninput="updateRichPreview()">
         </div>
 
         <div style="margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center;">
