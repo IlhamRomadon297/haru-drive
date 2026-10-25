@@ -4936,8 +4936,6 @@ function htmlPage(content, env, pageMode = 'public') {
 }
 
 .guest-file-list {
-  max-height: 58vh;
-  overflow-y: auto;
   overflow-x: visible;
   scrollbar-gutter: stable;
   -webkit-overflow-scrolling: touch;
@@ -4959,6 +4957,13 @@ function htmlPage(content, env, pageMode = 'public') {
 .guest-file-list .file-row:hover {
   background: rgba(255, 255, 255, 0.04);
 }
+.pagination-bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; padding: 14px 4px 4px; }
+.pagination-info { font-size: 0.82rem; color: var(--text-muted); }
+.pagination-btns { display: flex; gap: 6px; align-items: center; }
+.page-btn { min-width: 32px; height: 32px; padding: 0 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-surface); color: var(--text); cursor: pointer; font-size: 0.85rem; }
+.page-btn.active { background: var(--accent-gradient); color: #fff; border: none; font-weight: 700; }
+.page-btn:disabled { opacity: 0.4; cursor: default; }
+.page-ellipsis { padding: 0 4px; color: var(--text-muted); }
 
 .guest-bottom-actions {
   display: flex;
@@ -5209,6 +5214,17 @@ function updateStorageModeUI(){
 async function updateBandwidthIndicator(){ try{ const res=await fetch('/api/bandwidth'); if(!res.ok) return; const data=await res.json(); const stats=data.stats||[]; const hf=stats.find(function(s){return s.mode==='hf';}); const gd=stats.find(function(s){return s.mode==='gdrive';}); const fmt=function(b){ if(!b) return '-'; const v=Number(b); if(v>=1099511627776) return (v/1099511627776).toFixed(2)+' TB'; if(v>=1073741824) return (v/1073741824).toFixed(2)+' GB'; if(v>=1048576) return (v/1048576).toFixed(2)+' MB'; if(v>=1024) return (v/1024).toFixed(2)+' KB'; return v+' B'; }; const elHf=document.getElementById('bwHf'); if(elHf) elHf.textContent='HF: ' + (hf? fmt(hf.bytes) + ' ('+hf.requests+' req)':'-'); const elGd=document.getElementById('bwGDrive'); if(elGd) elGd.textContent='GDrive: ' + (gd? fmt(gd.bytes) + ' ('+gd.requests+' req)':'-'); const elUp=document.getElementById('bwUpdated'); if(elUp && stats.length){ const maxUpdated=Math.max.apply(null, stats.map(function(s){return s.updated||0;})); if(maxUpdated) elUp.textContent='Updated: ' + new Date(maxUpdated).toLocaleString(); } }catch(e){} }
 let activeFilter = 'all';
 const selectedFiles = new Set();
+let currentPage = 1;
+const FILE_PAGE_SIZE = 50;
+function renderFileListReset() {
+  currentPage = 1;
+  renderFileList();
+}
+function goToPage(n) {
+  currentPage = n;
+  renderFileList();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
 let plyrPlayerInstance = null;
 const isPageAdmin = document.body.getAttribute('data-mode') === 'admin';
 let selectedUploadFile = null;
@@ -5252,7 +5268,7 @@ document.addEventListener('DOMContentLoaded', () => {
       document.querySelectorAll('.filter-chip').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       activeFilter = btn.getAttribute('data-filter') || 'all';
-      renderFileList();
+      renderFileListReset();
     });
   });
 
@@ -5283,17 +5299,8 @@ document.addEventListener('DOMContentLoaded', () => {
       else { _sortState.col = col; _sortState.dir = 1; }
       document.querySelectorAll('.table-header .gdi-sort-header').forEach(function(x){ x.classList.remove('asc','desc'); });
       h.classList.add(_sortState.dir === 1 ? 'asc' : 'desc');
-      const list = document.getElementById('fileListContainer');
-      if (!list) return;
-      const rows = Array.from(list.children).filter(function(c){ return c.classList.contains('file-row'); });
-      rows.sort(function(a,b){
-        if (col === 'size') return _sortState.dir * ((parseFloat(a.getAttribute('data-bytes'))||0) - (parseFloat(b.getAttribute('data-bytes'))||0));
-        if (col === 'date') return _sortState.dir * (new Date(a.getAttribute('data-date')||0) - new Date(b.getAttribute('data-date')||0));
-        const an = (a.getAttribute('data-name')||'').toLowerCase();
-        const bn = (b.getAttribute('data-name')||'').toLowerCase();
-        return _sortState.dir * an.localeCompare(bn);
-      });
-      rows.forEach(function(r){ list.appendChild(r); });
+      currentPage = 1;
+      renderFileListReset();
     });
   });
 
@@ -5776,6 +5783,7 @@ function selectFolderPickerItem(containerId, inputId, folderPath) {
 async function loadFolder(path = '', id = '') {
   currentPath = path;
   currentFolderId = id;
+  currentPage = 1;
   selectedFiles.clear();
   updateBulkToolbar();
   _sortState = { col: null, dir: 1 };
@@ -6064,7 +6072,7 @@ function renderFileList() {
     statsEl.textContent = sList.join('');
   }
 
-  const filtered = allFiles.filter(item => {
+  let filtered = allFiles.filter(item => {
     if (activeFilter === 'all') return true;
     if (activeFilter === 'folder') return item.mimeType === 'application/vnd.google-apps.folder';
     if (activeFilter === 'video') return item.mimeType.startsWith('video/');
@@ -6078,8 +6086,23 @@ function renderFileList() {
     return;
   }
 
+  if (_sortState.col) {
+    const dir = _sortState.dir;
+    const sorted = filtered.slice();
+    if (_sortState.col === 'size') sorted.sort(function(a, b) { return dir * ((a.size || 0) - (b.size || 0)); });
+    else if (_sortState.col === 'date') sorted.sort(function(a, b) { return dir * ((new Date(a.modifiedTime || 0).getTime() || 0) - (new Date(b.modifiedTime || 0).getTime() || 0)); });
+    else sorted.sort(function(a, b) { return dir * String(a.name || '').toLowerCase().localeCompare(String(b.name || '').toLowerCase()); });
+    filtered = sorted;
+  }
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / FILE_PAGE_SIZE));
+  if (currentPage > totalPages) currentPage = totalPages;
+  if (currentPage < 1) currentPage = 1;
+  const pageStart = (currentPage - 1) * FILE_PAGE_SIZE;
+  const pageItems = filtered.slice(pageStart, pageStart + FILE_PAGE_SIZE);
+
   let html = '';
-  filtered.forEach(file => {
+  pageItems.forEach(file => {
     const isDir = file.mimeType === 'application/vnd.google-apps.folder';
     const isVideo = file.mimeType.startsWith('video/');
     const iconType = isDir ? 'folder' : (isVideo ? 'video' : (file.mimeType.includes('zip') ? 'archive' : 'file'));
@@ -6146,6 +6169,26 @@ function renderFileList() {
     html += '  </div>';
     html += '</div>';
   });
+
+  if (totalPages > 1) {
+    const from = pageStart + 1;
+    const to = Math.min(pageStart + pageItems.length, filtered.length);
+    html += '<div class="pagination-bar">';
+    html += '<span class="pagination-info">Menampilkan ' + from + '–' + to + ' dari ' + filtered.length + ' item</span>';
+    html += '<div class="pagination-btns">';
+    html += '<button class="page-btn" ' + (currentPage <= 1 ? 'disabled' : 'onclick="goToPage(' + (currentPage - 1) + ')"') + '>‹</button>';
+    const pages = [];
+    for (let pg = 1; pg <= totalPages; pg++) {
+      if (pg === 1 || pg === totalPages || Math.abs(pg - currentPage) <= 2) pages.push(pg);
+      else if (pages[pages.length - 1] !== '...') pages.push('...');
+    }
+    pages.forEach(function(pg) {
+      if (pg === '...') html += '<span class="page-ellipsis">…</span>';
+      else html += '<button class="page-btn' + (pg === currentPage ? ' active' : '') + '" onclick="goToPage(' + pg + ')">' + pg + '</button>';
+    });
+    html += '<button class="page-btn" ' + (currentPage >= totalPages ? 'disabled' : 'onclick="goToPage(' + (currentPage + 1) + ')"') + '>›</button>';
+    html += '</div></div>';
+  }
 
   container.innerHTML = html;
 }
@@ -9911,7 +9954,7 @@ async function handleSearch(e) {
     }
     if (!q) {
       allFiles = [...window._fullFolderFiles];
-      renderFileList();
+      renderFileListReset();
       return;
     }
     const lowerQ = q.toLowerCase();
@@ -9924,7 +9967,7 @@ async function handleSearch(e) {
       return;
     }
     allFiles = filtered;
-    renderFileList();
+    renderFileListReset();
     return;
   }
 
@@ -9947,7 +9990,7 @@ async function handleSearch(e) {
         container.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--text-muted);"><p>Tidak ada hasil untuk "' + escapeHtml(q) + '".</p></div>';
         return;
       }
-      renderFileList();
+      renderFileListReset();
     } else {
       if (container) {
         container.innerHTML = '<div style="text-align: center; padding: 40px; color: #f87171;"><p>Gagal mencari. Silakan coba lagi.</p></div>';
@@ -11214,10 +11257,12 @@ function adminConsoleUI() {
     <div class="modal-card modal-card-lg" id="moveModalCard">
       <div class="modal-header">
         <span class="modal-title" id="moveModalTitle">Pindahkan</span>
+        <div style="display: flex; gap: 6px; align-items: center;">
         <button class="btn-close-circle" id="moveFsBtn" title="Fullscreen / ukuran normal" onclick="toggleMoveFullscreen()">⛶</button>
         <button class="btn-close-circle" onclick="closeMoveModal()">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
+        </div>
       </div>
       <div class="modal-body">
         <div id="moveTargetDesc" class="move-summary"></div>
