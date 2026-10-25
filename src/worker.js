@@ -1668,7 +1668,7 @@ export default {
       if (isHttp(headerUrl)) blocks.push(photoBlock(headerUrl));
       blocks.push({ type: 'heading', text: title, size: 2 });
       const synopsis = String(body.synopsis || '').trim();
-      if (synopsis) { blocks.push({ type: 'blockquote', blocks: [para(synopsis)] }); blocks.push({ type: 'divider' }); }
+      if (synopsis) { blocks.push({ type: 'expandable_blockquote', text: synopsis }); blocks.push({ type: 'divider' }); }
       const note = String(body.note || '').trim();
       if (note) blocks.push(para(note));
       const audio = String(body.audio || '').trim();
@@ -1681,7 +1681,7 @@ export default {
       if (globalShots.length === 1) {
         blocks.push({ type: 'details', summary: 'SHOTS', is_open: false, blocks: [photoBlock(globalShots[0])] });
       } else if (globalShots.length > 1) {
-        blocks.push({ type: 'details', summary: 'SHOTS', is_open: false, blocks: [{ type: 'collage', blocks: globalShots.slice(0, 10).map(photoBlock) }] });
+        blocks.push({ type: 'details', summary: 'SHOTS', is_open: false, blocks: [{ type: 'slideshow', blocks: globalShots.slice(0, 10).map(photoBlock) }] });
       }
       let prevFileDetails = false;
       files.forEach((f, idx) => {
@@ -1704,7 +1704,7 @@ export default {
         if (shots.length === 1) {
           blocks.push({ type: 'details', summary: 'SHOTS', is_open: false, blocks: [photoBlock(shots[0])] });
         } else if (shots.length > 1) {
-          blocks.push({ type: 'details', summary: 'SHOTS', is_open: false, blocks: [{ type: 'collage', blocks: shots.slice(0, 10).map(photoBlock) }] });
+          blocks.push({ type: 'details', summary: 'SHOTS', is_open: false, blocks: [{ type: 'slideshow', blocks: shots.slice(0, 10).map(photoBlock) }] });
         }
         const mi = String((f && f.mediainfo) || '').trim();
         if (mi) {
@@ -8569,7 +8569,7 @@ function updateRichPreview() {
   if (d.header_url) { img.src = d.header_url; img.style.display = 'block'; } else { img.style.display = 'none'; }
   var html = '';
   if (d.title) html += '<div style="font-size: 1.02rem; font-weight: 800; margin-bottom: 6px;">' + richEsc(d.title) + '</div>';
-  if (d.synopsis) html += '<blockquote style="border-left: 3px solid #38bdf8; margin: 0 0 8px 0; padding: 5px 10px; background: rgba(56,189,248,0.07); border-radius: 0 8px 8px 0; white-space: pre-wrap;">' + richEsc(d.synopsis) + '</blockquote><hr style="border: none; border-top: 1px solid rgba(255,255,255,0.15); margin: 10px 0;">';
+  if (d.synopsis) html += '<details style="margin: 0 0 8px 0;"><summary style="cursor: pointer; color: #38bdf8;">Sinopsis (klik untuk membuka)</summary><blockquote style="border-left: 3px solid #38bdf8; margin: 6px 0 0 0; padding: 5px 10px; background: rgba(56,189,248,0.07); border-radius: 0 8px 8px 0; white-space: pre-wrap;">' + richEsc(d.synopsis) + '</blockquote></details><hr style="border: none; border-top: 1px solid rgba(255,255,255,0.15); margin: 10px 0;">';
   if (d.note) html += '<div style="margin-bottom: 8px; white-space: pre-wrap;">' + richEsc(d.note) + '</div>';
   if (d.audio) html += '<div>🔊 Audio: ' + richEsc(d.audio) + '</div>';
   if (d.subs) html += '<div>💬 Subtitle: ' + richEsc(d.subs) + '</div>';
