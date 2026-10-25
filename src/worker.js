@@ -27,6 +27,7 @@ export default {
     const TELEGRAM_BOT_TOKEN = env.TELEGRAM_BOT_TOKEN || '';
     const TELEGRAM_CHAT_ID = env.TELEGRAM_CHAT_ID || '';
     const TELEGRAM_TOPIC_ID = env.TELEGRAM_TOPIC_ID || '';
+    const TELEGRAM_SHOT_CHAT_ID = env.TELEGRAM_SHOT_CHAT_ID || '';
     const TMDB_API_KEY = env.TMDB_API_KEY || '';
     const VERCEL_POSTER_URL = env.VERCEL_POSTER_URL || 'https://haru-drive.vercel.app';
     const ADMIN_EMAIL = (env.ADMIN_EMAIL || '').trim();
@@ -1675,7 +1676,8 @@ export default {
       const subs = String(body.subs || '').trim();
       if (subs) blocks.push(para('💬 Subtitle: ' + subs));
       if (audio || subs) blocks.push({ type: 'divider' });
-      const globalShots = Array.isArray(body.global_shots) ? body.global_shots.map(x => String(x || '').trim()).filter(isHttp) : [];
+      const shotMedia = (list) => (Array.isArray(list) ? list : []).map(x => String(x || '').trim()).filter(x => isHttp(x) || x.indexOf('tg:') === 0).map(x => x.indexOf('tg:') === 0 ? x.slice(3) : x).filter(Boolean);
+      const globalShots = shotMedia(body.global_shots);
       if (globalShots.length === 1) {
         blocks.push({ type: 'details', summary: 'SHOTS', is_open: false, blocks: [photoBlock(globalShots[0])] });
       } else if (globalShots.length > 1) {
@@ -1698,7 +1700,7 @@ export default {
           });
           blocks.push(para(parts));
         }
-        const shots = Array.isArray(f && f.shots) ? f.shots.map(x => String(x || '').trim()).filter(isHttp) : [];
+        const shots = shotMedia(f && f.shots);
         if (shots.length === 1) {
           blocks.push({ type: 'details', summary: 'SHOTS', is_open: false, blocks: [photoBlock(shots[0])] });
         } else if (shots.length > 1) {
@@ -1942,6 +1944,71 @@ export default {
           return new Response(JSON.stringify({ error: 'Catbox menolak upload: ' + text.slice(0, 200) }), { status: 502 });
         }
         return new Response(JSON.stringify({ success: true, url: text }), { headers: { 'Content-Type': 'application/json' } });
+      } catch (err) {
+        return new Response(JSON.stringify({ error: err.message }), { status: 500 });
+      }
+    }
+
+    // API: Upload SHOTS ke Telegram (admin) — kirim foto ke chat tampung, balas file_id. Tanpa pihak ketiga.
+    if (url.pathname === '/api/admin/upload-shot-tg' && request.method === 'POST') {
+      try {
+        const form = await request.formData();
+        const pin = form.get('admin_pin') || '';
+        if (!verifyPin(pin) && !isLoggedIn) {
+          return new Response(JSON.stringify({ error: 'PIN Admin Salah / Tidak Terotentikasi!' }), { status: 403 });
+        }
+        const file = form.get('file');
+        if (!file || typeof file === 'string' || !file.size) {
+          return new Response(JSON.stringify({ error: 'Tidak ada file.' }), { status: 400 });
+        }
+        if (!String(file.type || '').startsWith('image/')) {
+          return new Response(JSON.stringify({ error: 'Hanya file gambar yang boleh diupload.' }), { status: 400 });
+        }
+        if (file.size > 20 * 1024 * 1024) {
+          return new Response(JSON.stringify({ error: 'Ukuran file melebihi 20 MB.' }), { status: 413 });
+        }
+        if (!TELEGRAM_BOT_TOKEN) {
+          return new Response(JSON.stringify({ error: 'Telegram bot belum dikonfigurasi di server.' }), { status: 500 });
+        }
+        const harvestChat = String(form.get('chat_id') || '').trim() || TELEGRAM_SHOT_CHAT_ID;
+        if (!harvestChat) {
+          return new Response(JSON.stringify({ error: 'Chat tampung belum diatur: set TELEGRAM_SHOT_CHAT_ID di environment Worker (ID DM/chat pribadi bot) atau kirim chat_id.' }), { status: 500 });
+        }
+        const up = new FormData();
+        up.append('chat_id', harvestChat);
+        up.append('photo', file);
+        const tgRes = await fetch('https://api.telegram.org/bot' + TELEGRAM_BOT_TOKEN + '/sendPhoto', { method: 'POST', body: up });
+        const tgData = await tgRes.json().catch(() => ({}));
+        const photos = (tgData && tgData.result && tgData.result.photo) || [];
+        const biggest = photos.length ? photos[photos.length - 1] : null;
+        if (!tgRes.ok || !tgData.ok || !biggest || !biggest.file_id) {
+          return new Response(JSON.stringify({ error: 'Telegram menolak upload foto: ' + ((tgData && tgData.description) || ('HTTP ' + tgRes.status)) }), { status: 502 });
+        }
+        return new Response(JSON.stringify({ success: true, file_id: biggest.file_id }), { headers: { 'Content-Type': 'application/json' } });
+      } catch (err) {
+        return new Response(JSON.stringify({ error: err.message }), { status: 500 });
+      }
+    }
+
+    // API: Preview foto Telegram (admin) — proxy getFile agar preview builder bisa menampilkan foto file_id.
+    if (url.pathname === '/api/admin/shot-file' && request.method === 'GET') {
+      try {
+        if (!TELEGRAM_BOT_TOKEN) {
+          return new Response(JSON.stringify({ error: 'Telegram bot belum dikonfigurasi di server.' }), { status: 500 });
+        }
+        const fileId = (url.searchParams.get('file_id') || '').trim();
+        if (!fileId) return new Response(JSON.stringify({ error: 'file_id kosong.' }), { status: 400 });
+        const gfRes = await fetch('https://api.telegram.org/bot' + TELEGRAM_BOT_TOKEN + '/getFile?file_id=' + encodeURIComponent(fileId));
+        const gfData = await gfRes.json().catch(() => ({}));
+        const filePath = gfData && gfData.result && gfData.result.file_path;
+        if (!gfRes.ok || !gfData.ok || !filePath) {
+          return new Response(JSON.stringify({ error: 'getFile gagal: ' + ((gfData && gfData.description) || ('HTTP ' + gfRes.status)) }), { status: 502 });
+        }
+        const fileRes = await fetch('https://api.telegram.org/file/bot' + TELEGRAM_BOT_TOKEN + '/' + filePath);
+        if (!fileRes.ok) {
+          return new Response(JSON.stringify({ error: 'Unduh file Telegram gagal (HTTP ' + fileRes.status + ').' }), { status: 502 });
+        }
+        return new Response(fileRes.body, { headers: { 'Content-Type': fileRes.headers.get('Content-Type') || 'image/jpeg', 'Cache-Control': 'private, max-age=86400' } });
       } catch (err) {
         return new Response(JSON.stringify({ error: err.message }), { status: 500 });
       }
@@ -8260,10 +8327,10 @@ async function handleRichShotFiles(i, input) {
       var fd = new FormData();
       fd.append('admin_pin', pin);
       fd.append('file', files[k]);
-      var res = await fetch('/api/admin/upload-shot', { method: 'POST', body: fd });
+      var res = await fetch('/api/admin/upload-shot-tg', { method: 'POST', body: fd });
       var data = await res.json().catch(function() { return {}; });
-      if (!res.ok || !data.url) throw new Error(data.error || ('HTTP ' + res.status));
-      okUrls.push(data.url);
+      if (!res.ok || !data.file_id) throw new Error(data.error || ('HTTP ' + res.status));
+      okUrls.push('tg:' + data.file_id);
     } catch (e) { failed.push(files[k].name + ' (' + e.message + ')'); }
   }
   if (btn) btn.disabled = false;
@@ -8273,8 +8340,8 @@ async function handleRichShotFiles(i, input) {
     renderRichFileRows();
   }
   var st2 = document.getElementById('richShotStatus' + i);
-  if (st2) st2.textContent = failed.length ? ('Gagal: ' + failed.length + ' foto') : (okUrls.length ? ('✓ ' + okUrls.length + ' foto terupload ke Catbox') : '');
-  if (failed.length) alert('Sebagian foto gagal diupload ke Catbox:' + String.fromCharCode(10) + failed.join(String.fromCharCode(10)));
+  if (st2) st2.textContent = failed.length ? ('Gagal: ' + failed.length + ' foto') : (okUrls.length ? ('✓ ' + okUrls.length + ' foto terupload ke Telegram') : '');
+  if (failed.length) alert('Sebagian foto gagal diupload ke Telegram:' + String.fromCharCode(10) + failed.join(String.fromCharCode(10)));
   updateRichPreview();
 }
 
@@ -8299,10 +8366,10 @@ async function handleRichGlobalShotFiles(input) {
       var fd = new FormData();
       fd.append('admin_pin', pin);
       fd.append('file', files[k]);
-      var res = await fetch('/api/admin/upload-shot', { method: 'POST', body: fd });
+      var res = await fetch('/api/admin/upload-shot-tg', { method: 'POST', body: fd });
       var data = await res.json().catch(function() { return {}; });
-      if (!res.ok || !data.url) throw new Error(data.error || ('HTTP ' + res.status));
-      okUrls.push(data.url);
+      if (!res.ok || !data.file_id) throw new Error(data.error || ('HTTP ' + res.status));
+      okUrls.push('tg:' + data.file_id);
     } catch (e) { failed.push(files[k].name + ' (' + e.message + ')'); }
   }
   if (btn) btn.disabled = false;
@@ -8314,8 +8381,8 @@ async function handleRichGlobalShotFiles(input) {
     }
   }
   var st2 = document.getElementById('richGlobalShotStatus');
-  if (st2) st2.textContent = failed.length ? ('Gagal: ' + failed.length + ' foto') : (okUrls.length ? ('✓ ' + okUrls.length + ' foto terupload ke Catbox') : '');
-  if (failed.length) alert('Sebagian foto gagal diupload ke Catbox:' + String.fromCharCode(10) + failed.join(String.fromCharCode(10)));
+  if (st2) st2.textContent = failed.length ? ('Gagal: ' + failed.length + ' foto') : (okUrls.length ? ('✓ ' + okUrls.length + ' foto terupload ke Telegram') : '');
+  if (failed.length) alert('Sebagian foto gagal diupload ke Telegram:' + String.fromCharCode(10) + failed.join(String.fromCharCode(10)));
   updateRichPreview();
 }
 
@@ -8332,7 +8399,7 @@ function renderRichFileRows() {
     html += '<textarea class="form-input-pro" rows="2" placeholder="Link download, satu per baris: Label | URL" oninput="setRichField(' + i + ', 2, this.value)" style="margin-bottom: 8px; resize: vertical;">' + richEsc(f.links) + '</textarea>';
     html += '<textarea class="form-input-pro" rows="2" placeholder="SHOTS: URL gambar screenshot, satu per baris" oninput="setRichField(' + i + ', 3, this.value)" style="margin-bottom: 8px; resize: vertical;">' + richEsc(f.shots) + '</textarea>';
     html += '<div style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap;">';
-    html += '<button type="button" class="nav-btn" id="richShotBtn' + i + '" style="font-size: 0.72rem; padding: 4px 12px; background: rgba(56,189,248,0.15); border-color: rgba(56,189,248,0.4); color: #38bdf8; font-weight: 600;" onclick="pickRichShots(' + i + ')">📤 Upload Foto ke Catbox</button>';
+    html += '<button type="button" class="nav-btn" id="richShotBtn' + i + '" style="font-size: 0.72rem; padding: 4px 12px; background: rgba(56,189,248,0.15); border-color: rgba(56,189,248,0.4); color: #38bdf8; font-weight: 600;" onclick="pickRichShots(' + i + ')">📤 Upload Foto ke Telegram</button>';
     html += '<span id="richShotStatus' + i + '" style="font-size: 0.7rem; color: var(--text-dim);"></span>';
     html += '<input type="file" id="richShotInput' + i + '" accept="image/*" multiple style="display: none;" onchange="handleRichShotFiles(' + i + ', this)">';
     html += '</div>';
@@ -8366,7 +8433,7 @@ function collectRichPayload() {
       name: (f.name || '').trim(),
       size: (f.size || '').trim(),
       links: parseRichLinks(f.links),
-      shots: parseRichLines(f.shots).filter(function(u) { return /^https?:\\/\\//i.test(u); }),
+      shots: parseRichLines(f.shots).filter(function(u) { return u.indexOf('http://') === 0 || u.indexOf('https://') === 0 || u.indexOf('tg:') === 0; }),
       mediainfo: (f.mediainfo || '').trim()
     };
   }).filter(function(f) { return f.name; });
@@ -8377,7 +8444,7 @@ function collectRichPayload() {
     note: (document.getElementById('richNote').value || '').trim(),
     audio: (document.getElementById('richAudio').value || '').trim(),
     subs: (document.getElementById('richSubs').value || '').trim(),
-    global_shots: parseRichLines(document.getElementById('richGlobalShots').value || '').filter(function(u) { return u.indexOf('http://') === 0 || u.indexOf('https://') === 0; }),
+    global_shots: parseRichLines(document.getElementById('richGlobalShots').value || '').filter(function(u) { return u.indexOf('http://') === 0 || u.indexOf('https://') === 0 || u.indexOf('tg:') === 0; }),
     hashtags: (document.getElementById('richHashtags').value || '').trim(),
     channel_id: (document.getElementById('richChannelId').value || '').trim(),
     topic_id: (document.getElementById('richTopicId').value || '').trim(),
@@ -8489,6 +8556,11 @@ function summarizeMediaInfoText(rawText, fallbackName) {
 }
 /*RICH_SUMMARY_END*/
 
+function richShotImg(u) {
+  var src = u.indexOf('tg:') === 0 ? ('/api/admin/shot-file?file_id=' + encodeURIComponent(u.slice(3))) : richEsc(u);
+  return '<img src="' + src + '" style="width: 100%; border-radius: 8px; margin-top: 6px;">';
+}
+
 function updateRichPreview() {
   var body = document.getElementById('richPreviewBody');
   if (!body) return;
@@ -8506,7 +8578,7 @@ function updateRichPreview() {
   var blocks = (d.header_url ? 1 : 0) + 1 + (d.synopsis ? 2 : 0) + (d.note ? 1 : 0) + (d.audio ? 1 : 0) + (d.subs ? 1 : 0) + ((d.audio || d.subs) ? 1 : 0) + (d.hashtags ? 1 : 0);
   if (d.global_shots.length) {
     html += '<details style="margin-top: 6px;"><summary style="cursor: pointer; color: #aebbc7; font-size: 0.8rem; letter-spacing: 0.05em;">SHOTS</summary>';
-    d.global_shots.forEach(function(u) { html += '<img src="' + richEsc(u) + '" style="width: 100%; border-radius: 8px; margin-top: 6px;">'; });
+    d.global_shots.forEach(function(u) { html += richShotImg(u); });
     html += '</details>';
     blocks += 1;
   }
@@ -8521,7 +8593,7 @@ function updateRichPreview() {
     chars += f.name.length + f.size.length + miShow.length;
     if (f.shots.length) {
       html += '<details style="margin-top: 6px;"><summary style="cursor: pointer; color: #aebbc7; font-size: 0.8rem; letter-spacing: 0.05em;">SHOTS</summary>';
-      f.shots.forEach(function(u) { html += '<img src="' + richEsc(u) + '" style="width: 100%; border-radius: 8px; margin-top: 6px;">'; });
+      f.shots.forEach(function(u) { html += richShotImg(u); });
       html += '</details>';
       blocks += 1;
     }
@@ -12017,7 +12089,7 @@ function adminConsoleUI() {
           <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">📸 SHOTS Global (opsional, tampil sekali untuk seluruh rilisan)</label>
           <textarea id="richGlobalShots" class="form-input-pro" rows="2" placeholder="URL gambar screenshot, satu per baris — tampil sekali di atas daftar file (cocok buat film beda codec/resolusi)" style="margin-top: 4px; resize: vertical;" oninput="updateRichPreview()"></textarea>
           <div style="display: flex; gap: 8px; align-items: center; margin-top: 6px; flex-wrap: wrap;">
-            <button type="button" class="nav-btn" id="richGlobalShotBtn" style="font-size: 0.72rem; padding: 4px 12px; background: rgba(56,189,248,0.15); border-color: rgba(56,189,248,0.4); color: #38bdf8; font-weight: 600;" onclick="pickRichGlobalShots()">📤 Upload Foto ke Catbox</button>
+            <button type="button" class="nav-btn" id="richGlobalShotBtn" style="font-size: 0.72rem; padding: 4px 12px; background: rgba(56,189,248,0.15); border-color: rgba(56,189,248,0.4); color: #38bdf8; font-weight: 600;" onclick="pickRichGlobalShots()">📤 Upload Foto ke Telegram</button>
             <span id="richGlobalShotStatus" style="font-size: 0.7rem; color: var(--text-dim);"></span>
             <input type="file" id="richGlobalShotInput" accept="image/*" multiple style="display: none;" onchange="handleRichGlobalShotFiles(this)">
           </div>
@@ -12028,7 +12100,7 @@ function adminConsoleUI() {
           <button type="button" class="nav-btn" style="font-size: 0.74rem; padding: 4px 12px; background: rgba(56,189,248,0.15); border-color: rgba(56,189,248,0.4); color: #38bdf8; font-weight: 600;" onclick="addRichFileRow()">+ Tambah File</button>
         </div>
         <div id="richFilesContainer"></div>
-        <p style="font-size: 0.72rem; color: var(--text-dim); margin-bottom: 14px;">Link download: satu per baris, format <b>Label | URL</b> (mis. <i>HaruDrive | https://...</i>). SHOTS: satu URL gambar per baris — atau pakai tombol 📤 Upload Foto ke Catbox di tiap file (bisa pilih banyak foto sekaligus). MEDIAINFO: tempel teks MediaInfo file itu.</p>
+        <p style="font-size: 0.72rem; color: var(--text-dim); margin-bottom: 14px;">Link download: satu per baris, format <b>Label | URL</b> (mis. <i>HaruDrive | https://...</i>). SHOTS: satu URL gambar per baris — atau pakai tombol 📤 Upload Foto ke Telegram di tiap file (bisa pilih banyak foto sekaligus). MEDIAINFO: tempel teks MediaInfo file itu.</p>
 
         <div id="richDestGrid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px;">
           <div>
