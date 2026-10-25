@@ -1856,7 +1856,8 @@ export default {
           blocks: blocks.length,
           targets: sentCount,
           draft_id: draftId,
-          history_saved: historySaved
+          history_saved: historySaved,
+          sent_targets: sentTargets
         }), { headers: { 'Content-Type': 'application/json' } });
       } catch (err) {
         return new Response(JSON.stringify({ error: err.message }), { status: 500 });
@@ -1902,12 +1903,16 @@ export default {
         if (!db) return new Response(JSON.stringify({ error: 'Database tidak tersedia.' }), { status: 500 });
         const id = String(body.id || '').trim() || null;
         const existing = id ? await richDraftGet(db, id) : null;
+        // Replay antrian riwayat boleh menitipkan sentTargets + status (mis. kiriman
+        // yang tayang saat limit D1); tanpa itu, perilaku simpan draft lama dipertahankan.
+        const reqTargets = (Array.isArray(body.sentTargets) && body.sentTargets.length) ? body.sentTargets : null;
+        const reqStatus = (body.status === 'sent' || body.status === 'draft') ? body.status : null;
         const newId = await richDraftUpsert(db, {
           id: id,
           title: String(form.title || ''),
           payload: { form: form, blocks: built.blocks },
-          status: existing ? existing.status : 'draft',
-          sentTargets: existing ? existing.sent_targets : []
+          status: reqStatus || (existing ? existing.status : 'draft'),
+          sentTargets: reqTargets || (existing ? existing.sent_targets : [])
         });
         return new Response(JSON.stringify({ success: true, id: newId }), { headers: { 'Content-Type': 'application/json' } });
       } catch (err) {
@@ -7899,6 +7904,61 @@ function richEsc(t) {
   return String(t || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+function loadRichQueue() { try { var q = JSON.parse(localStorage.getItem('harudrive_rich_queue') || '[]'); return Array.isArray(q) ? q : []; } catch (e) { return []; } }
+function saveRichQueue(q) { try { localStorage.setItem('harudrive_rich_queue', JSON.stringify(q)); } catch (e) {} refreshRichQueueNote(); }
+function refreshRichQueueNote() {
+  var el = document.getElementById('richQueueNote');
+  if (!el) return;
+  var q = loadRichQueue();
+  if (!q.length) { el.style.display = 'none'; el.textContent = ''; return; }
+  el.style.display = 'block';
+  el.textContent = '⏳ ' + q.length + ' riwayat tertunda (limit D1) — akan tersinkron otomatis.';
+}
+function queueRichHistory(item) {
+  var q = loadRichQueue();
+  while (q.length >= 50) q.shift();
+  q.push(item);
+  saveRichQueue(q);
+}
+function dropQueuedForDraft(id) {
+  if (!id) return;
+  var q = loadRichQueue();
+  var next = q.filter(function(it) { return it.id !== id; });
+  if (next.length !== q.length) saveRichQueue(next);
+}
+function stripRichPin(form) {
+  var out = {};
+  Object.keys(form || {}).forEach(function(k) { if (k !== 'admin_pin') out[k] = form[k]; });
+  return out;
+}
+async function flushRichQueue() {
+  if (window._richQueueFlushing) return;
+  var q = loadRichQueue();
+  if (!q.length) { refreshRichQueueNote(); return; }
+  var pin = (typeof richDraftPin === 'function') ? richDraftPin() : '';
+  if (!pin) { refreshRichQueueNote(); return; }
+  window._richQueueFlushing = true;
+  var remaining = [];
+  for (var i = 0; i < q.length; i++) {
+    var item = q[i];
+    try {
+      var body = { admin_pin: pin, form: item.form };
+      if (item.id) body.id = item.id;
+      if (item.sentTargets) body.sentTargets = item.sentTargets;
+      if (item.status) body.status = item.status;
+      var res = await fetch('/api/admin/rich-drafts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      var data = await res.json().catch(function() { return {}; });
+      if (!res.ok || !data.success) remaining.push(item);
+    } catch (e) { remaining.push(item); }
+  }
+  window._richQueueFlushing = false;
+  saveRichQueue(remaining);
+}
+function startRichQueueTimer() {
+  if (window._richQueueTimer) return;
+  window._richQueueTimer = setInterval(function() { flushRichQueue(); }, 300000);
+}
+
 function openRichReleaseModal() {
   var m = document.getElementById('richReleaseModal');
   if (!m) return;
@@ -7913,6 +7973,9 @@ function openRichReleaseModal() {
   m.style.display = 'flex';
   updateRichHeaderPreview();
   updateRichPreview();
+  refreshRichQueueNote();
+  flushRichQueue();
+  startRichQueueTimer();
 }
 
 function closeRichReleaseModal() {
@@ -8025,6 +8088,7 @@ async function saveRichDraft() {
     var data = await res.json().catch(function() { return {}; });
     if (!res.ok || !data.success) throw new Error(data.error || ('HTTP ' + res.status));
     window._richDraftId = data.id;
+    dropQueuedForDraft(data.id);
     setRichDraftState('✓ Draft tersimpan: ' + d.title + ' — tersimpan selamanya di server, bisa dibuka lagi kapan saja.');
     if (typeof showCopyToast === 'function') showCopyToast('Draft tersimpan 💾');
     loadRichDraftList();
@@ -8167,12 +8231,17 @@ async function updateRichRelease() {
     var res = await fetch('/api/admin/telegram-rich-edit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ admin_pin: pin, draft_id: window._richDraftId, form: d }) });
     var data = await res.json().catch(function() { return {}; });
     if (!res.ok || !data.success) throw new Error(data.error || 'Gagal memperbarui');
+    var upsertFailed = (data.warnings || []).join(' ').indexOf('Riwayat gagal disimpan') >= 0;
+    if (saveFailed && upsertFailed) queueRichHistory({ id: window._richDraftId, form: stripRichPin(d) });
+    else dropQueuedForDraft(window._richDraftId);
     var warnText = '';
     if (saveFailed) warnText += ' (draft gagal disimpan: ' + saveFailed + ')';
     if (data.warnings && data.warnings.length) warnText += ' (riwayat: ' + data.warnings.join('; ') + ')';
+    if (saveFailed && upsertFailed) warnText += ' (masuk antrian sinkron otomatis)';
     if (typeof showCopyToast === 'function') showCopyToast('Pesan di channel diperbarui! 🔄 (' + data.edited + ' pesan)' + warnText);
     else alert('Pesan di channel berhasil diperbarui (' + data.edited + ' pesan).' + warnText);
     setRichDraftState('✓ Postingan di channel barusan diperbarui: ' + d.title);
+    flushRichQueue();
   } catch (e) { alert('Gagal memperbarui pesan: ' + e.message); }
   finally { if (btn) { btn.disabled = false; btn.textContent = '🔄 Perbarui Pesan Terkirim'; } }
 }
@@ -8669,6 +8738,13 @@ async function sendRichRelease() {
     if (!res.ok || !data.success) throw new Error(data.error || ('HTTP ' + res.status));
     if (data.draft_id) { window._richDraftId = data.draft_id; window._richDraftSentCount = (window._richDraftSentCount || 0) + (data.targets || 1); }
     var histWarn = (data.history_saved === false) ? ' — riwayat gagal disimpan (limit D1?)' : '';
+    if (data.history_saved === false) {
+      var targets = data.sent_targets;
+      if ((!targets || !targets.length) && d.channel_id && d.channel_id.indexOf(',') < 0 && data.message_id) targets = [{ chat_id: d.channel_id, message_id: data.message_id }];
+      if (!targets) targets = [];
+      queueRichHistory({ form: stripRichPin(d), sentTargets: targets, status: 'sent' });
+      flushRichQueue();
+    }
     if (typeof showCopyToast === 'function') showCopyToast('Rilisan rich terkirim! 🚀 (' + data.blocks + ' blok, message_id ' + data.message_id + ')' + histWarn);
     else alert('Rilisan rich terkirim! message_id ' + data.message_id + histWarn);
     closeRichReleaseModal();
@@ -12187,6 +12263,7 @@ function adminConsoleUI() {
           <div id="richCounter" style="font-size: 0.72rem; color: var(--text-dim); margin-top: 6px;">0 blok • 0 karakter</div>
         </div>
       </div>
+      <div id="richQueueNote" style="display: none; font-size: 0.72rem; color: #fbbf24; padding: 0 16px 10px 16px;"></div>
       <div class="modal-footer" style="justify-content: flex-end; gap: 8px;">
         <button class="nav-btn" onclick="closeRichReleaseModal()">Batal</button>
         <button class="nav-btn" id="richSaveDraftBtn" style="font-weight: 600;" onclick="saveRichDraft()">💾 Simpan Draft</button>
