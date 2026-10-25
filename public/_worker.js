@@ -1719,6 +1719,12 @@ export default {
       if (audio) langLines.push(para('🔊 Audio: ' + audio));
       if (subs) langLines.push(para('💬 Subtitle: ' + subs));
       if (langLines.length) { blocks.push({ type: 'divider' }); blocks.push({ type: 'blockquote', blocks: langLines }); }
+      const joinBtns = [];
+      const joinChannel = String(body.join_channel || '').trim();
+      const joinGroup = String(body.join_group || '').trim();
+      if (isHttp(joinChannel)) joinBtns.push({ text: 'Join Channel', url: joinChannel, style: 'primary' });
+      if (isHttp(joinGroup)) joinBtns.push({ text: 'Join Group', url: joinGroup, style: 'primary' });
+      if (joinBtns.length) blocks.push({ type: 'buttons', buttons: joinBtns, align: 'center' });
       const hashtags = String(body.hashtags || '').trim();
       if (hashtags) blocks.push(para(hashtags));
       if (blocks.length > 500) {
@@ -1835,7 +1841,7 @@ export default {
         try {
           const db = await richDraftsTable();
           if (db) {
-            const form = { title: String(body.title || ''), header_url: String(body.header_url || ''), synopsis: String(body.synopsis || ''), note: String(body.note || ''), audio: String(body.audio || ''), subs: String(body.subs || ''), hashtags: String(body.hashtags || ''), footer_text: String(body.footer_text || ''), channel_id: String(body.channel_id || ''), topic_id: String(body.topic_id || ''), global_shots: Array.isArray(body.global_shots) ? body.global_shots : [], global_shots_caption: String(body.global_shots_caption || ''), files: Array.isArray(body.files) ? body.files : [] };
+            const form = { title: String(body.title || ''), header_url: String(body.header_url || ''), synopsis: String(body.synopsis || ''), note: String(body.note || ''), audio: String(body.audio || ''), subs: String(body.subs || ''), hashtags: String(body.hashtags || ''), footer_text: String(body.footer_text || ''), channel_id: String(body.channel_id || ''), topic_id: String(body.topic_id || ''), global_shots: Array.isArray(body.global_shots) ? body.global_shots : [], global_shots_caption: String(body.global_shots_caption || ''), join_channel: String(body.join_channel || ''), join_group: String(body.join_group || ''), files: Array.isArray(body.files) ? body.files : [] };
             const existing = draftId ? await richDraftGet(db, draftId) : null;
             const mergedTargets = (existing && Array.isArray(existing.sent_targets) ? existing.sent_targets : []).concat(sentTargets);
             draftId = await richDraftUpsert(db, { id: draftId, title: form.title, payload: { form: form, blocks: blocks }, status: 'sent', sentTargets: mergedTargets });
@@ -4532,7 +4538,7 @@ function htmlPage(content, env, pageMode = 'public') {
     @media (max-width: 768px) {
       #richReleaseBody { padding: 14px !important; max-height: 62dvh !important; }
       #richReleaseModal .modal-footer .nav-btn { flex: 1 1 40%; text-align: center; }
-      #richLangGrid, #richDestGrid, #richTagGrid { grid-template-columns: 1fr !important; }
+      #richLangGrid, #richDestGrid, #richTagGrid, #richJoinGrid { grid-template-columns: 1fr !important; }
     }
 
     .form-input-pro {
@@ -8072,6 +8078,8 @@ function applyRichDraftForm(form) {
   set('richSubs', form.subs);
   set('richGlobalShots', (form.global_shots || []).join(nl));
   set('richGlobalShotsCaption', form.global_shots_caption);
+  set('richJoinChannel', form.join_channel);
+  set('richJoinGroup', form.join_group);
   set('richHashtags', form.hashtags);
   set('richChannelId', form.channel_id);
   set('richTopicId', form.topic_id);
@@ -8471,6 +8479,8 @@ function collectRichPayload() {
     subs: (document.getElementById('richSubs').value || '').trim(),
     global_shots: parseRichLines(document.getElementById('richGlobalShots').value || '').filter(function(u) { return u.indexOf('http://') === 0 || u.indexOf('https://') === 0 || u.indexOf('tg:') === 0; }),
     global_shots_caption: (document.getElementById('richGlobalShotsCaption').value || '').trim(),
+    join_channel: (document.getElementById('richJoinChannel').value || '').trim(),
+    join_group: (document.getElementById('richJoinGroup').value || '').trim(),
     hashtags: (document.getElementById('richHashtags').value || '').trim(),
     channel_id: (document.getElementById('richChannelId').value || '').trim(),
     topic_id: (document.getElementById('richTopicId').value || '').trim(),
@@ -8628,6 +8638,10 @@ function updateRichPreview() {
     }
   });
   if (d.audio || d.subs) { html += '<hr style="border: none; border-top: 1px solid rgba(255,255,255,0.15); margin: 10px 0;"><blockquote style="border-left: 3px solid #38bdf8; margin: 0 0 8px 0; padding: 5px 10px; background: rgba(56,189,248,0.07); border-radius: 0 8px 8px 0;">'; if (d.audio) html += '<div>🔊 Audio: ' + richEsc(d.audio) + '</div>'; if (d.subs) html += '<div>💬 Subtitle: ' + richEsc(d.subs) + '</div>'; html += '</blockquote>'; }
+  var joinBtns = [];
+  if ((d.join_channel || '').indexOf('http://') === 0 || (d.join_channel || '').indexOf('https://') === 0) joinBtns.push('<a href="' + richEsc(d.join_channel) + '" target="_blank" style="display: inline-block; padding: 6px 18px; margin: 2px 4px; border-radius: 999px; background: rgba(56,189,248,0.2); border: 1px solid rgba(56,189,248,0.5); color: #38bdf8; font-weight: 700; text-decoration: none;">Join Channel</a>');
+  if ((d.join_group || '').indexOf('http://') === 0 || (d.join_group || '').indexOf('https://') === 0) joinBtns.push('<a href="' + richEsc(d.join_group) + '" target="_blank" style="display: inline-block; padding: 6px 18px; margin: 2px 4px; border-radius: 999px; background: rgba(56,189,248,0.2); border: 1px solid rgba(56,189,248,0.5); color: #38bdf8; font-weight: 700; text-decoration: none;">Join Group</a>');
+  if (joinBtns.length) { html += '<div style="text-align: center; margin: 10px 0;">' + joinBtns.join('') + '</div>'; blocks += 1; }
   if (d.hashtags) html += '<div style="margin-top: 10px; color: #6ab3f3;">' + richEsc(d.hashtags) + '</div>';
   body.innerHTML = html || '<span style="color: #7f8b97;">Isi judul &amp; file untuk melihat preview...</span>';
   var counter = document.getElementById('richCounter');
@@ -12141,6 +12155,17 @@ function adminConsoleUI() {
           </div>
         </div>
         <p style="font-size: 0.72rem; color: var(--text-dim); margin-bottom: 12px;">Bot HaruDrive harus sudah jadi admin di channel itu. Channel &amp; topic akan diingat untuk rilisan berikutnya. Kosong = pakai channel default dari secret server.</p>
+
+        <div id="richJoinGrid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px;">
+          <div>
+            <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Join Channel (opsional)</label>
+            <input type="text" id="richJoinChannel" class="form-input-pro" placeholder="https://t.me/namachannel" style="margin-top: 4px;" oninput="updateRichPreview()">
+          </div>
+          <div>
+            <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Join Group (opsional)</label>
+            <input type="text" id="richJoinGroup" class="form-input-pro" placeholder="https://t.me/namagroup" style="margin-top: 4px;" oninput="updateRichPreview()">
+          </div>
+        </div>
 
         <div id="richTagGrid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 4px;">
           <div>
