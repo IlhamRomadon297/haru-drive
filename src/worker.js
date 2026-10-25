@@ -1844,16 +1844,17 @@ export default {
       let prevFileDetails = false;
       files.forEach((f, idx) => {
         if (idx > 0 && !prevFileDetails) blocks.push({ type: 'divider' });
+        const fileBlocks = [];
         const fname = String((f && f.name) || '').trim() || ('File ' + (idx + 1));
         const fsize = String((f && f.size) || '').trim();
-        blocks.push(para([bold(fname)]));
-        if (fsize) blocks.push(para('💾 Ukuran: ' + fsize));
+        fileBlocks.push(para([bold(fname)]));
+        if (fsize) fileBlocks.push(para('💾 Ukuran: ' + fsize));
         const links = Array.isArray(f && f.links) ? f.links.filter(l => l && isHttp(l.url)) : [];
         if (links.length) {
           if (files.length === 1) {
             for (let c = 0; c < links.length; c += 8) {
               const chunk = links.slice(c, c + 8);
-              blocks.push({ type: 'buttons', buttons: chunk.map(l => {
+              fileBlocks.push({ type: 'buttons', buttons: chunk.map(l => {
                 const lbl = String(l.label || '').trim();
                 const prov = (lbl && lbl !== 'Download') ? lbl : providerFromUrl(l.url);
                 return { text: '📥 ' + prov, url: String(l.url).trim(), style: 'primary' };
@@ -1866,13 +1867,13 @@ export default {
               const label = String(l.label || '').trim() || 'Download';
               parts.push(urlT(label, String(l.url).trim()));
             });
-            blocks.push(para(parts));
+            fileBlocks.push(para(parts));
           }
         }
         if (body.show_specs === true) {
           const sp = specsFromFile(f);
           if (sp.video || sp.audio || sp.subs || sp.duration) {
-            blocks.push({ type: 'details', summary: 'SPECS', is_open: false, blocks: [{ type: 'table', is_bordered: true, cells: [
+            fileBlocks.push({ type: 'details', summary: 'SPECS', is_open: false, blocks: [{ type: 'table', is_bordered: true, cells: [
               [{ text: sp.filename || fname, colspan: 4, is_header: true }],
               [{ text: 'Video', is_header: true }, { text: 'Audio', is_header: true }, { text: 'Subtitle', is_header: true }, { text: 'Durasi', is_header: true }],
               [{ text: sp.video || '-' }, { text: sp.audio || '-' }, { text: sp.subs || '-' }, { text: sp.duration || '-' }]
@@ -1882,15 +1883,16 @@ export default {
         const shots = shotMedia(f && f.shots);
         const shotsCaption = String((f && f.shots_caption) || '').trim();
         if (shots.length === 1) {
-          blocks.push({ type: 'details', summary: 'SHOTS', is_open: false, blocks: [Object.assign({}, photoBlock(shots[0]), shotCaption(shotsCaption))] });
+          fileBlocks.push({ type: 'details', summary: 'SHOTS', is_open: false, blocks: [Object.assign({}, photoBlock(shots[0]), shotCaption(shotsCaption))] });
         } else if (shots.length > 1) {
-          blocks.push({ type: 'details', summary: 'SHOTS', is_open: false, blocks: [Object.assign({ type: 'slideshow', blocks: shots.slice(0, 10).map(photoBlock) }, shotCaption(shotsCaption))] });
+          fileBlocks.push({ type: 'details', summary: 'SHOTS', is_open: false, blocks: [Object.assign({ type: 'slideshow', blocks: shots.slice(0, 10).map(photoBlock) }, shotCaption(shotsCaption))] });
         }
         const mi = String((f && f.mediainfo) || '').trim();
         if (mi) {
           const miShort = summarizeMediaInfoText(mi.slice(0, 24000), fname);
-          blocks.push({ type: 'details', summary: 'MEDIAINFO', is_open: false, blocks: [{ type: 'pre', text: miShort || mi.slice(0, 20000) }] });
+          fileBlocks.push({ type: 'details', summary: 'MEDIAINFO', is_open: false, blocks: [{ type: 'pre', text: miShort || mi.slice(0, 20000) }] });
         }
+        blocks.push({ type: 'blockquote', blocks: fileBlocks });
         prevFileDetails = shots.length > 0 || !!mi;
       });
       const footerText = String(body.footer_text || '').trim();
@@ -9012,6 +9014,7 @@ function updateRichPreview() {
   d.files.forEach(function(f, i) {
     var prevF = i > 0 ? d.files[i - 1] : null;
     if (prevF && !(prevF.shots.length || prevF.mediainfo)) { html += '<hr style="border: none; border-top: 1px solid rgba(255,255,255,0.15); margin: 10px 0;">'; blocks += 1; }
+    html += '<blockquote style="border-left: 3px solid #38bdf8; margin: 8px 0; padding: 5px 10px; background: rgba(56,189,248,0.07); border-radius: 0 8px 8px 0;">'; blocks += 1;
     html += '<div style="font-weight: 700; margin-top: 8px;">' + richEsc(f.name) + '</div>';
     blocks += 1;
     if (f.size) { html += '<div>💾 Ukuran: ' + richEsc(f.size) + '</div>'; blocks += 1; }
@@ -9053,6 +9056,7 @@ function updateRichPreview() {
       html += '<details style="margin-top: 6px;"><summary style="cursor: pointer; color: #aebbc7; font-size: 0.8rem; letter-spacing: 0.05em;">MEDIAINFO</summary><pre style="white-space: pre-wrap; font-size: 0.72rem; background: rgba(0,0,0,0.3); padding: 8px; border-radius: 8px; margin-top: 6px;">' + richEsc(miShow) + '</pre></details>';
       blocks += 1;
     }
+    html += '</blockquote>';
   });
   var lastFile = d.files.length ? d.files[d.files.length - 1] : null;
   var lastDetails = !!(lastFile && (lastFile.shots.length || lastFile.mediainfo));
