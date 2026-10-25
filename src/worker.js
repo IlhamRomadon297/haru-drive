@@ -1826,7 +1826,9 @@ export default {
         }
 
         // Catat sebagai riwayat rilisan supaya bisa dibuka & diperbarui lagi nanti.
+        // Best-effort: kalau D1 sedang limit, kiriman tetap sukses — cuma riwayat yang gagal.
         let draftId = String(body.draft_id || '').trim() || null;
+        let historySaved = false;
         try {
           const db = await richDraftsTable();
           if (db) {
@@ -1834,6 +1836,7 @@ export default {
             const existing = draftId ? await richDraftGet(db, draftId) : null;
             const mergedTargets = (existing && Array.isArray(existing.sent_targets) ? existing.sent_targets : []).concat(sentTargets);
             draftId = await richDraftUpsert(db, { id: draftId, title: form.title, payload: { form: form, blocks: blocks }, status: 'sent', sentTargets: mergedTargets });
+            historySaved = true;
           }
         } catch (e) { console.error('rich draft record failed:', e); }
 
@@ -1843,7 +1846,8 @@ export default {
           message_id: lastMessageId,
           blocks: blocks.length,
           targets: sentCount,
-          draft_id: draftId
+          draft_id: draftId,
+          history_saved: historySaved
         }), { headers: { 'Content-Type': 'application/json' } });
       } catch (err) {
         return new Response(JSON.stringify({ error: err.message }), { status: 500 });
@@ -2032,7 +2036,9 @@ export default {
         if (!d.sent_targets || !d.sent_targets.length) {
           return new Response(JSON.stringify({ error: 'Rilisan ini belum pernah terkirim — tidak ada pesan yang bisa diperbarui.' }), { status: 400 });
         }
-        const form = (d.payload && d.payload.form) || {};
+        // Form segar dari client diutamakan (kalau simpan draft gagal karena limit D1,
+        // edit tetap jalan dengan form yang tampil di modal); kalau tidak ada, pakai tersimpan.
+        const form = (body.form && body.form.title) ? body.form : ((d.payload && d.payload.form) || {});
         const built = buildRichBlocks(form);
         if (built.error) {
           return new Response(JSON.stringify({ error: built.error }), { status: built.status || 400 });
@@ -2053,7 +2059,12 @@ export default {
         if (edited === 0) {
           return new Response(JSON.stringify({ error: 'Gagal memperbarui pesan: ' + errors.join('; ') }), { status: 500 });
         }
-        await richDraftUpsert(db, { id: d.id, title: d.title, payload: { form: form, blocks: built.blocks }, status: 'sent', sentTargets: d.sent_targets });
+        // Best-effort: gagal simpan riwayat (mis. limit D1) tidak menggagalkan edit.
+        try {
+          await richDraftUpsert(db, { id: d.id, title: d.title, payload: { form: form, blocks: built.blocks }, status: 'sent', sentTargets: d.sent_targets });
+        } catch (e) {
+          errors.push('Riwayat gagal disimpan: ' + e.message);
+        }
         return new Response(JSON.stringify({ success: true, edited: edited, warnings: errors }), { headers: { 'Content-Type': 'application/json' } });
       } catch (err) {
         return new Response(JSON.stringify({ error: err.message }), { status: 500 });
@@ -8134,14 +8145,20 @@ async function updateRichRelease() {
   var btn = document.getElementById('richUpdateBtn');
   if (btn) { btn.disabled = true; btn.textContent = 'Memperbarui...'; }
   try {
-    var sres = await fetch('/api/admin/rich-drafts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ admin_pin: pin, id: window._richDraftId, form: d }) });
-    var sdata = await sres.json().catch(function() { return {}; });
-    if (!sres.ok || !sdata.success) throw new Error(sdata.error || 'Gagal menyimpan perubahan');
-    var res = await fetch('/api/admin/telegram-rich-edit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ admin_pin: pin, draft_id: window._richDraftId }) });
+    var saveFailed = '';
+    try {
+      var sres = await fetch('/api/admin/rich-drafts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ admin_pin: pin, id: window._richDraftId, form: d }) });
+      var sdata = await sres.json().catch(function() { return {}; });
+      if (!sres.ok || !sdata.success) saveFailed = sdata.error || 'Gagal menyimpan perubahan';
+    } catch (e) { saveFailed = e.message; }
+    var res = await fetch('/api/admin/telegram-rich-edit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ admin_pin: pin, draft_id: window._richDraftId, form: d }) });
     var data = await res.json().catch(function() { return {}; });
     if (!res.ok || !data.success) throw new Error(data.error || 'Gagal memperbarui');
-    if (typeof showCopyToast === 'function') showCopyToast('Pesan di channel diperbarui! 🔄 (' + data.edited + ' pesan)');
-    else alert('Pesan di channel berhasil diperbarui (' + data.edited + ' pesan).');
+    var warnText = '';
+    if (saveFailed) warnText += ' (draft gagal disimpan: ' + saveFailed + ')';
+    if (data.warnings && data.warnings.length) warnText += ' (riwayat: ' + data.warnings.join('; ') + ')';
+    if (typeof showCopyToast === 'function') showCopyToast('Pesan di channel diperbarui! 🔄 (' + data.edited + ' pesan)' + warnText);
+    else alert('Pesan di channel berhasil diperbarui (' + data.edited + ' pesan).' + warnText);
     setRichDraftState('✓ Postingan di channel barusan diperbarui: ' + d.title);
   } catch (e) { alert('Gagal memperbarui pesan: ' + e.message); }
   finally { if (btn) { btn.disabled = false; btn.textContent = '🔄 Perbarui Pesan Terkirim'; } }
@@ -8627,8 +8644,9 @@ async function sendRichRelease() {
     var data = await res.json().catch(function() { return {}; });
     if (!res.ok || !data.success) throw new Error(data.error || ('HTTP ' + res.status));
     if (data.draft_id) { window._richDraftId = data.draft_id; window._richDraftSentCount = (window._richDraftSentCount || 0) + (data.targets || 1); }
-    if (typeof showCopyToast === 'function') showCopyToast('Rilisan rich terkirim! 🚀 (' + data.blocks + ' blok, message_id ' + data.message_id + ')');
-    else alert('Rilisan rich terkirim! message_id ' + data.message_id);
+    var histWarn = (data.history_saved === false) ? ' — riwayat gagal disimpan (limit D1?)' : '';
+    if (typeof showCopyToast === 'function') showCopyToast('Rilisan rich terkirim! 🚀 (' + data.blocks + ' blok, message_id ' + data.message_id + ')' + histWarn);
+    else alert('Rilisan rich terkirim! message_id ' + data.message_id + histWarn);
     closeRichReleaseModal();
   } catch (e) {
     alert('Gagal kirim rilisan rich: ' + e.message);
