@@ -559,9 +559,10 @@ export default {
         const repoId = HF_REPO_ID;
         const isRecursive = url.searchParams.get('recursive') === 'true';
         const encodedReqPath = reqPath ? reqPath.split('/').map(seg => encodeURIComponent(seg)).join('/') : '';
-        const hfTreeUrl = encodedReqPath 
-          ? `https://huggingface.co/api/datasets/${repoId}/tree/main/${encodedReqPath}${isRecursive ? '?recursive=true' : ''}`
-          : `https://huggingface.co/api/datasets/${repoId}/tree/main${isRecursive ? '?recursive=true' : ''}`;
+        const hfTreeQuery = (isRecursive ? 'recursive=true&' : '') + 'expand=true';
+        const hfTreeUrl = encodedReqPath
+          ? `https://huggingface.co/api/datasets/${repoId}/tree/main/${encodedReqPath}?${hfTreeQuery}`
+          : `https://huggingface.co/api/datasets/${repoId}/tree/main?${hfTreeQuery}`;
 
         const hfHeaders = { 'User-Agent': 'HaruDrive/1.0' };
         if (HF_TOKEN) hfHeaders['Authorization'] = `Bearer ${HF_TOKEN}`;
@@ -645,7 +646,7 @@ export default {
             name: itemName,
             mimeType: isDir ? 'application/vnd.google-apps.folder' : getMimeType(itemName),
             size: item.size || 0,
-            modifiedTime: item.lastCommit ? item.lastCommit.date : new Date().toISOString()
+            modifiedTime: item.lastCommit ? item.lastCommit.date : ''
           });
         }
 
@@ -2296,6 +2297,9 @@ export default {
         if (!paths.length) {
           return new Response(JSON.stringify({ error: 'Tidak ada file/folder yang dipilih.' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
         }
+        if (paths.length > 20) {
+          return new Response(JSON.stringify({ error: 'Maksimal 20 item per permintaan pindah (dialog mengirim bertahap otomatis).' }), { status: 413, headers: { 'Content-Type': 'application/json' } });
+        }
         if (targetFolder && !isSafeRepoPath(targetFolder)) {
           return new Response(JSON.stringify({ error: 'Folder tujuan tidak valid.' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
         }
@@ -2521,9 +2525,18 @@ export default {
       if (range) hfHeaders.set('Range', range);
 
       const hfFetchMethod = request.method === 'HEAD' ? 'HEAD' : 'GET';
-      const hfRes = await fetch(hfFileUrl, { method: hfFetchMethod, headers: hfHeaders });
+      let hfRes = await fetch(hfFileUrl, { method: hfFetchMethod, headers: hfHeaders });
+      if (!hfRes.ok && hfRes.status === 404 && pathAfterPrefix.indexOf('/') === -1) {
+        const recovered = await recoverShortlinkPath(env, shortId);
+        if (recovered) {
+          filePath = recovered;
+          fileName = recovered.split('/').pop() || 'file';
+          const enc2 = filePath.split('/').map(seg => encodeURIComponent(seg)).join('/');
+          hfRes = await fetch(`https://huggingface.co/datasets/${HF_REPO_ID}/resolve/main/${enc2}`, { method: hfFetchMethod, headers: hfHeaders });
+        }
+      }
       if (!hfRes.ok && hfRes.status !== 206) {
-        return new Response(`File Not Found on Storage (${hfRes.status})`, { status: hfRes.status });
+        return new Response('File tidak ditemukan di storage (mungkin sudah dipindah/dihapus, atau link sudah tidak berlaku).', { status: 404 });
       }
 
       // Track bandwidth for HF (only on download or initial stream start, non-blocking via ctx.waitUntil)
@@ -2675,6 +2688,41 @@ async function allocateShortId(env, path) {
 }
 
 // Resolve the permanent short_id for many repo paths (falls back to the path hash for unindexed paths).
+// Self-heal untuk link /file/<shortId> yang baris D1-nya hilang atau path-nya basi:
+// pindai tree HF (rekursif, berhenti begitu ketemu), cocokkan shortId = 8 char hash path,
+// simpan barisnya kembali lalu kembalikan path baru. Dipakai HANYA saat fetch awal 404.
+// Catatan: tidak bisa menyelamatkan link file yang dipindah TANPA update D1 (hash path berubah
+// total) — untuk itu pemindahan harus lewat jalur HaruDrive sendiri sampai selesai.
+async function recoverShortlinkPath(env, shortId) {
+  const db = env.harudrive_db;
+  if (!db) return null;
+  const repo = env.HF_REPO_ID || 'username/harudrive-data';
+  const headers = { 'User-Agent': 'HaruDrive/1.0' };
+  if (env.HF_TOKEN) headers['Authorization'] = 'Bearer ' + env.HF_TOKEN;
+  let next = 'https://huggingface.co/api/datasets/' + repo + '/tree/main?recursive=true';
+  let pages = 0;
+  while (next && pages < 45) {
+    const res = await fetch(next, { headers });
+    pages++;
+    if (!res.ok) return null;
+    const arr = await res.json();
+    if (!Array.isArray(arr)) return null;
+    for (const it of arr) {
+      if (!it.path) continue;
+      const id = await generateShortId(it.path);
+      if (id === shortId) {
+        try {
+          await db.prepare('INSERT OR REPLACE INTO shortlinks (short_id, file_path, name, type, size) VALUES (?, ?, ?, ?, ?)').bind(shortId, it.path, it.path.split('/').pop(), it.type === 'directory' ? 'folder' : 'file', it.size || 0).run();
+        } catch (e) {}
+        return it.path;
+      }
+    }
+    const m = (res.headers.get('Link') || '').match(/<([^>]+)>\s*;\s*rel="next"/);
+    next = m ? (m[1].startsWith('http') ? m[1] : 'https://huggingface.co' + m[1]) : '';
+  }
+  return null;
+}
+
 async function resolveShortIds(env, paths) {
   const map = new Map();
   const db = env.harudrive_db;
@@ -2992,6 +3040,11 @@ async function syncIndex(env) {
       toDeleteFolders.push(existingDir);
     }
   }
+
+  // PENTING: bila scan terpotong MAX_ITEMS, file di luar jangkauan TIDAK BOLEH dianggap
+  // terhapus — menghapusnya justru mematikan link-link yang masih valid (kasus 404 massal).
+  const truncated = items >= MAX_ITEMS;
+  if (truncated) { toDeleteShortIds.length = 0; toDeleteFolders.length = 0; }
 
   // Batch execute only if changes are detected (0 writes if dataset is identical!)
   const hasChanges = toUpsertFiles.length > 0 || toDeleteShortIds.length > 0 || toUpsertFolders.length > 0 || toDeleteFolders.length > 0;
@@ -6324,6 +6377,7 @@ async function submitRename() {
 // ===== MOVE (single + bulk) =====
 let moveItems = [];
 let moveDest = null;
+var moveExpanded = { '': true };
 
 function getAdminPin() {
   return localStorage.getItem('harudrive_admin_pin') || getCookie('harudrive_admin_pin') || '290722';
@@ -6349,6 +6403,7 @@ async function openMoveModalFor(paths) {
   if (!m) return;
   moveItems = paths.slice();
   moveDest = null;
+  moveExpanded = { '': true };
 
   const title = document.getElementById('moveModalTitle');
   if (title) title.textContent = moveItems.length > 1 ? ('Pindahkan ' + moveItems.length + ' Item') : 'Pindahkan Item';
@@ -6371,6 +6426,13 @@ async function openMoveModalFor(paths) {
   renderMovePicker('');
 }
 
+function toggleMoveFolder(path, ev) {
+  if (ev && ev.stopPropagation) ev.stopPropagation();
+  moveExpanded[path] = !moveExpanded[path];
+  const q = (document.getElementById('moveFolderSearch') || {}).value || '';
+  renderMovePicker(q);
+}
+
 function renderMovePicker(filter) {
   const picker = document.getElementById('moveFolderPicker');
   if (!picker) return;
@@ -6379,23 +6441,58 @@ function renderMovePicker(filter) {
   const allSameParent = parents.every(function(p) { return p === parents[0]; });
   let html = '';
   let shown = 0;
-  availableFolders.forEach(function(f) {
-    // Hide invalid destinations: the item itself or anything inside it.
+  if (q) {
+    availableFolders.forEach(function(f) {
+      const invalid = moveItems.some(function(p) { return f === p || f.indexOf(p + '/') === 0; });
+      if (invalid) return;
+      if (f.toLowerCase().indexOf(q) === -1) return;
+      const isCurrentParent = allSameParent && f === parents[0];
+      const label = f ? f.split('/').pop() : 'Root (/)';
+      const isSel = moveDest !== null && f === moveDest;
+      html += '<div class="picker-item' + (isSel ? ' active' : '') + (isCurrentParent ? ' disabled' : '') + '" data-path="' + escapeHtml(f) + '"' + (isCurrentParent ? '' : ' onclick="pickMoveDest(this.dataset.path)"') + ' title="' + escapeHtml(f || '/') + '">';
+      html += '<svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>';
+      html += '<span class="picker-name">' + escapeHtml(label) + '</span>';
+      if (f) html += '<span class="picker-sub">' + escapeHtml(f) + '</span>';
+      if (isCurrentParent) html += '<span class="picker-sub">(lokasi saat ini)</span>';
+      html += '</div>';
+      shown++;
+    });
+    if (!shown) html = '<div style="padding:18px;text-align:center;color:var(--text-muted);">Folder tidak ditemukan.</div>';
+    picker.innerHTML = html;
+    return;
+  }
+  const folders = availableFolders.slice();
+  if (folders.indexOf('') === -1) folders.unshift('');
+  const childrenOf = {};
+  folders.forEach(function(f) {
+    if (!f) return;
+    const parent = f.indexOf('/') === -1 ? '' : f.slice(0, f.lastIndexOf('/'));
+    if (!childrenOf[parent]) childrenOf[parent] = [];
+    childrenOf[parent].push(f);
+  });
+  function renderNode(f, depth) {
     const invalid = moveItems.some(function(p) { return f === p || f.indexOf(p + '/') === 0; });
     if (invalid) return;
-    if (q && f.toLowerCase().indexOf(q) === -1) return;
     const isCurrentParent = allSameParent && f === parents[0];
-    const depth = f ? f.split('/').length : 0;
     const label = f ? f.split('/').pop() : 'Root (/)';
     const isSel = moveDest !== null && f === moveDest;
-    html += '<div class="picker-item' + (isSel ? ' active' : '') + (isCurrentParent ? ' disabled' : '') + '" style="padding-left:' + (12 + (q ? 0 : Math.min(depth, 8) * 16)) + 'px" data-path="' + escapeHtml(f) + '"' + (isCurrentParent ? '' : ' onclick="pickMoveDest(this.dataset.path)"') + ' title="' + escapeHtml(f || '/') + '">';
+    const kids = childrenOf[f] || [];
+    const hasKids = kids.length > 0;
+    const expanded = !!moveExpanded[f];
+    html += '<div class="picker-item' + (isSel ? ' active' : '') + (isCurrentParent ? ' disabled' : '') + '" style="padding-left:' + (12 + Math.min(depth, 8) * 16) + 'px" data-path="' + escapeHtml(f) + '"' + (isCurrentParent ? '' : ' onclick="pickMoveDest(this.dataset.path)"') + ' title="' + escapeHtml(f || '/') + '">';
+    if (hasKids) {
+      html += '<span onclick="toggleMoveFolder(' + JSON.stringify(f).replace(/"/g, '&quot;') + ', event)" style="cursor:pointer;padding-right:6px;font-weight:700;">' + (expanded ? '▾' : '▸') + '</span>';
+    } else {
+      html += '<span style="padding-right:6px;opacity:0;">▸</span>';
+    }
     html += '<svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>';
     html += '<span class="picker-name">' + escapeHtml(label) + '</span>';
-    if (q && f) html += '<span class="picker-sub">' + escapeHtml(f) + '</span>';
     if (isCurrentParent) html += '<span class="picker-sub">(lokasi saat ini)</span>';
     html += '</div>';
     shown++;
-  });
+    if (hasKids && expanded) kids.forEach(function(k) { renderNode(k, depth + 1); });
+  }
+  renderNode('', 0);
   if (!shown) html = '<div style="padding:18px;text-align:center;color:var(--text-muted);">Folder tidak ditemukan.</div>';
   picker.innerHTML = html;
 }
@@ -6416,7 +6513,36 @@ function updateMoveDestUI() {
   if (input) input.value = moveDest === null ? '' : moveDest;
 }
 
+function toggleMoveFullscreen() {
+  var card = document.getElementById('moveModalCard');
+  var backdrop = document.getElementById('moveModal');
+  var btn = document.getElementById('moveFsBtn');
+  var picker = document.getElementById('moveFolderPicker');
+  if (!card) return;
+  window._moveFullscreen = !window._moveFullscreen;
+  if (window._moveFullscreen) {
+    if (backdrop) backdrop.style.padding = '0';
+    card.style.maxWidth = '100%';
+    card.style.width = '100%';
+    card.style.height = '100vh';
+    card.style.maxHeight = '100vh';
+    card.style.borderRadius = '0';
+    if (picker) picker.style.maxHeight = 'calc(100vh - 320px)';
+    if (btn) btn.textContent = '🗗';
+  } else {
+    if (backdrop) backdrop.style.padding = '';
+    card.style.maxWidth = '';
+    card.style.width = '';
+    card.style.height = '';
+    card.style.maxHeight = '';
+    card.style.borderRadius = '';
+    if (picker) picker.style.maxHeight = '';
+    if (btn) btn.textContent = '⛶';
+  }
+}
+
 function closeMoveModal() {
+  if (window._moveFullscreen) toggleMoveFullscreen();
   const m = document.getElementById('moveModal');
   if (m) m.style.display = 'none';
   moveItems = [];
@@ -6428,26 +6554,34 @@ async function submitMove() {
   if (!moveItems.length) return;
   const btn = document.getElementById('btnSubmitMove');
   const oldLabel = btn ? btn.textContent : '';
-  if (btn) { btn.disabled = true; btn.textContent = 'Memindahkan...'; }
-
+  if (btn) btn.disabled = true;
+  const CHUNK = 12;
+  let movedTotal = 0;
   try {
-    const res = await fetch('/api/admin/move', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ paths: moveItems, destination: moveDest, admin_pin: getAdminPin() })
-    });
-    const data = await res.json().catch(function() { return {}; });
-    if (res.ok && data.success) {
-      const n = data.movedCount || 0;
-      closeMoveModal();
-      selectedFiles.clear();
-      await loadFolder(currentPath, currentFolderId);
-      updateBulkToolbar();
-      fetchFolderTree();
-      showCopyToast(n ? (n + ' item berhasil dipindahkan') : 'Tidak ada perubahan (item sudah di folder tujuan)');
-    } else {
-      alert('Gagal memindahkan: ' + (data.error || ('HTTP ' + res.status)));
+    for (let start = 0; start < moveItems.length; start += CHUNK) {
+      const part = moveItems.slice(start, start + CHUNK);
+      if (btn) btn.textContent = 'Memindahkan ' + (start + 1) + '-' + (start + part.length) + ' dari ' + moveItems.length + '...';
+      const res = await fetch('/api/admin/move', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paths: part, destination: moveDest, admin_pin: getAdminPin() })
+      });
+      const data = await res.json().catch(function() { return {}; });
+      if (!res.ok || !data.success) {
+        alert('Pindah berhenti di batch ' + (start + 1) + '-' + (start + part.length) + ': ' + (data.error || ('HTTP ' + res.status)) + '. Yang sudah berhasil: ' + movedTotal + ' item. Silakan ulangi untuk sisanya.');
+        await loadFolder(currentPath, currentFolderId);
+        updateBulkToolbar();
+        fetchFolderTree();
+        return;
+      }
+      movedTotal += (data.movedCount || part.length);
     }
+    closeMoveModal();
+    selectedFiles.clear();
+    await loadFolder(currentPath, currentFolderId);
+    updateBulkToolbar();
+    fetchFolderTree();
+    showCopyToast(movedTotal ? (movedTotal + ' item berhasil dipindahkan') : 'Tidak ada perubahan (item sudah di folder tujuan)');
   } catch (e) {
     alert('Error: ' + e.message);
   } finally {
@@ -9748,6 +9882,7 @@ function formatBytes(bytes) {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 function formatDate(dStr) {
+  if (!dStr) return '-';
   const d = new Date(dStr);
   return isNaN(d.getTime()) ? dStr : d.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' });
 }
@@ -11076,9 +11211,10 @@ function adminConsoleUI() {
 
   <!-- MOVE MODAL -->
   <div id="moveModal" class="modal-backdrop" style="display: none;" onclick="if(event.target===this)closeMoveModal()">
-    <div class="modal-card modal-card-lg">
+    <div class="modal-card modal-card-lg" id="moveModalCard">
       <div class="modal-header">
         <span class="modal-title" id="moveModalTitle">Pindahkan</span>
+        <button class="btn-close-circle" id="moveFsBtn" title="Fullscreen / ukuran normal" onclick="toggleMoveFullscreen()">⛶</button>
         <button class="btn-close-circle" onclick="closeMoveModal()">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
