@@ -1672,10 +1672,7 @@ export default {
       const note = String(body.note || '').trim();
       if (note) blocks.push(para(note));
       const audio = String(body.audio || '').trim();
-      if (audio) blocks.push(para('🔊 Audio: ' + audio));
       const subs = String(body.subs || '').trim();
-      if (subs) blocks.push(para('💬 Subtitle: ' + subs));
-      if (audio || subs) blocks.push({ type: 'divider' });
       const shotMedia = (list) => (Array.isArray(list) ? list : []).map(x => String(x || '').trim()).filter(x => isHttp(x) || x.indexOf('tg:') === 0).map(x => x.indexOf('tg:') === 0 ? x.slice(3) : x).filter(Boolean);
       const globalShots = shotMedia(body.global_shots);
       if (globalShots.length === 1) {
@@ -1715,6 +1712,10 @@ export default {
       });
       const footerText = String(body.footer_text || '').trim();
       if (footerText) blocks.push({ type: 'footer', text: footerText });
+      const langLines = [];
+      if (audio) langLines.push(para('🔊 Audio: ' + audio));
+      if (subs) langLines.push(para('💬 Subtitle: ' + subs));
+      if (langLines.length) { blocks.push({ type: 'divider' }); blocks.push({ type: 'blockquote', blocks: langLines }); }
       const hashtags = String(body.hashtags || '').trim();
       if (hashtags) blocks.push(para(hashtags));
       if (blocks.length > 500) {
@@ -8571,11 +8572,8 @@ function updateRichPreview() {
   if (d.title) html += '<div style="font-size: 1.02rem; font-weight: 800; margin-bottom: 6px;">' + richEsc(d.title) + '</div>';
   if (d.synopsis) html += '<details style="margin: 0 0 8px 0;"><summary style="cursor: pointer; color: #38bdf8;">Sinopsis (klik untuk membuka)</summary><blockquote style="border-left: 3px solid #38bdf8; margin: 6px 0 0 0; padding: 5px 10px; background: rgba(56,189,248,0.07); border-radius: 0 8px 8px 0; white-space: pre-wrap;">' + richEsc(d.synopsis) + '</blockquote></details><hr style="border: none; border-top: 1px solid rgba(255,255,255,0.15); margin: 10px 0;">';
   if (d.note) html += '<div style="margin-bottom: 8px; white-space: pre-wrap;">' + richEsc(d.note) + '</div>';
-  if (d.audio) html += '<div>🔊 Audio: ' + richEsc(d.audio) + '</div>';
-  if (d.subs) html += '<div>💬 Subtitle: ' + richEsc(d.subs) + '</div>';
-  if (d.audio || d.subs) html += '<hr style="border: none; border-top: 1px solid rgba(255,255,255,0.15); margin: 10px 0;">';
   var chars = (d.title + d.synopsis + d.note + d.audio + d.subs).length;
-  var blocks = (d.header_url ? 1 : 0) + 1 + (d.synopsis ? 2 : 0) + (d.note ? 1 : 0) + (d.audio ? 1 : 0) + (d.subs ? 1 : 0) + ((d.audio || d.subs) ? 1 : 0) + (d.hashtags ? 1 : 0);
+  var blocks = (d.header_url ? 1 : 0) + 1 + (d.synopsis ? 2 : 0) + (d.note ? 1 : 0) + ((d.audio || d.subs) ? 2 : 0) + (d.hashtags ? 1 : 0);
   if (d.global_shots.length) {
     html += '<details style="margin-top: 6px;"><summary style="cursor: pointer; color: #aebbc7; font-size: 0.8rem; letter-spacing: 0.05em;">SHOTS</summary>';
     d.global_shots.forEach(function(u) { html += richShotImg(u); });
@@ -8602,6 +8600,7 @@ function updateRichPreview() {
       blocks += 1;
     }
   });
+  if (d.audio || d.subs) { html += '<hr style="border: none; border-top: 1px solid rgba(255,255,255,0.15); margin: 10px 0;"><blockquote style="border-left: 3px solid #38bdf8; margin: 0 0 8px 0; padding: 5px 10px; background: rgba(56,189,248,0.07); border-radius: 0 8px 8px 0;">'; if (d.audio) html += '<div>🔊 Audio: ' + richEsc(d.audio) + '</div>'; if (d.subs) html += '<div>💬 Subtitle: ' + richEsc(d.subs) + '</div>'; html += '</blockquote>'; }
   if (d.hashtags) html += '<div style="margin-top: 10px; color: #6ab3f3;">' + richEsc(d.hashtags) + '</div>';
   body.innerHTML = html || '<span style="color: #7f8b97;">Isi judul &amp; file untuk melihat preview...</span>';
   var counter = document.getElementById('richCounter');
