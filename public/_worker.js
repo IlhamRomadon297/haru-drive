@@ -1653,6 +1653,101 @@ export default {
       return out.join('\n');
     }
 
+    function specNormName(name) {
+      return ' ' + String(name || '').replace(/[^a-zA-Z0-9]/g, ' ').toUpperCase() + ' ';
+    }
+    function specQualityFromName(name) {
+      const s = specNormName(name);
+      if (s.includes(' 2160P ') || s.includes(' 2160 ') || s.includes(' 4K ') || s.includes(' UHD ') || s.includes(' 3840X2160 ')) return '2160p';
+      if (s.includes(' 1080P ') || s.includes(' 1080I ') || s.includes(' 1080 ') || s.includes(' FHD ') || s.includes(' 1920X1080 ')) return '1080p';
+      if (s.includes(' 720P ') || s.includes(' 720 ') || s.includes(' HD ') || s.includes(' 1280X720 ')) return '720p';
+      if (s.includes(' 576P ') || s.includes(' 576 ')) return '576p';
+      if (s.includes(' 480P ') || s.includes(' 480 ') || s.includes(' SD ')) return '480p';
+      if (s.includes(' 360P ') || s.includes(' 360 ')) return '360p';
+      return '';
+    }
+    function specCodecFromName(name) {
+      const s = specNormName(name);
+      if (s.includes(' AV1 ')) return 'AV1';
+      if (s.includes(' HEVC ') || s.includes(' X265 ') || s.includes(' H265 ') || s.includes(' H 265 ')) return 'HEVC';
+      if (s.includes(' AVC ') || s.includes(' X264 ') || s.includes(' H264 ') || s.includes(' H 264 ')) return 'H.264';
+      if (s.includes(' VP9 ')) return 'VP9';
+      if (s.includes(' XVID ')) return 'XviD';
+      return '';
+    }
+    function specSourceFromName(name) {
+      const s = specNormName(name);
+      if (s.includes(' NF ') || s.includes(' NETFLIX ')) return 'NF';
+      if (s.includes(' WEB DL ') || s.includes(' WEBDL ')) return 'WEB-DL';
+      if (s.includes(' WEBRIP ') || s.includes(' WEB RIP ')) return 'WEBRip';
+      if (s.includes(' BLURAY ')) return 'BluRay';
+      if (s.includes(' BDRIP ')) return 'BDRip';
+      if (s.includes(' HDRIP ')) return 'HDRip';
+      if (s.includes(' DVDRIP ')) return 'DVDRip';
+      if (s.includes(' AMZN ')) return 'AMZN';
+      if (s.includes(' DISNEY ') || s.includes(' DSNP ')) return 'Disney+';
+      if (s.includes(' HULU ')) return 'Hulu';
+      return '';
+    }
+
+    function specsFromFile(f) {
+      const name = String((f && f.name) || '');
+      const mi = String((f && f.mediainfo) || '');
+      let res = '', codec = '', audio = '';
+      if (mi.trim()) {
+        const lines = mi.split('\n');
+        let section = '', vKv = {}, aKv = {}, aCount = 0, aLangs = [];
+        const baseKind = (t) => {
+          const b = t.split(' #')[0];
+          return (b === 'General' || b === 'Video' || b === 'Audio' || b === 'Text' || b === 'Menu' || b === 'Image' || b === 'Other') ? b : '';
+        };
+        for (let li = 0; li < lines.length; li++) {
+          const line = lines[li];
+          const k = baseKind(line.trim());
+          if (k) { section = k; if (k === 'Audio') aCount++; continue; }
+          if (!section) continue;
+          const ci = line.indexOf(':');
+          if (ci < 1) continue;
+          const key = line.slice(0, ci).trim();
+          const val = line.slice(ci + 1).trim();
+          if (section === 'Video' && !(key in vKv)) vKv[key] = val;
+          if (section === 'Audio' && aCount === 1 && !(key in aKv)) aKv[key] = val;
+          if (section === 'Audio' && key === 'Language' && aLangs.indexOf(val) < 0) aLangs.push(val);
+        }
+        if (vKv['Height']) {
+          const h = vKv['Height'].split(' pixels')[0].split(' ').join('');
+          if (h) res = h + 'p';
+        }
+        if (vKv['Format']) codec = vKv['Format'].split(' ')[0];
+        if (codec === 'AVC') codec = 'H.264';
+        if (aCount === 1 && aKv['Language']) audio = aKv['Language'] + (aKv['Format'] ? ' ' + aKv['Format'] : '');
+        else if (aLangs.length) audio = aLangs.join(', ');
+      }
+      if (!res) res = specQualityFromName(name);
+      if (!codec) codec = specCodecFromName(name);
+      return { res: res, codec: codec, audio: audio, size: String((f && f.size) || '').trim(), source: specSourceFromName(name) };
+    }
+    function providerFromUrl(u) {
+      let h = String(u || '').trim();
+      const proto = h.indexOf('://');
+      if (proto >= 0) h = h.slice(proto + 3);
+      const slash = h.indexOf('/');
+      if (slash >= 0) h = h.slice(0, slash);
+      if (h.indexOf('www.') === 0) h = h.slice(4);
+      const dot = String.fromCharCode(46);
+      const map = {};
+      map[['harudrive', 'eu', 'cc'].join(dot)] = 'HaruDrive';
+      map[['haru-drive', 'pages', 'dev'].join(dot)] = 'HaruDrive';
+      map[['transfer', 'it'].join(dot)] = 'Transfer.it';
+      map[['gofile', 'io'].join(dot)] = 'Gofile';
+      map[['pixeldrain', 'com'].join(dot)] = 'PixelDrain';
+      map[['mega', 'nz'].join(dot)] = 'MEGA';
+      map[['drive', 'google', 'com'].join(dot)] = 'Google Drive';
+      map[['mediafire', 'com'].join(dot)] = 'MediaFire';
+      map[['buzzheavier', 'com'].join(dot)] = 'BuzzHeavier';
+      return map[h] || h;
+    }
+
     function buildRichBlocks(body) {
       const title = String(body.title || '').trim();
       if (!title) return { error: 'Judul wajib diisi.', status: 400 };
@@ -1668,6 +1763,20 @@ export default {
       const headerUrl = String(body.header_url || '').trim();
       if (isHttp(headerUrl)) blocks.push(photoBlock(headerUrl));
       blocks.push({ type: 'heading', text: title, size: 2 });
+      const metaParts = [];
+      const metaRating = String(body.meta_rating || '').trim();
+      const metaYear = String(body.meta_year || '').trim();
+      const metaDuration = String(body.meta_duration || '').trim();
+      const metaGenres = String(body.meta_genres || '').trim();
+      if (body.show_meta !== false) {
+        if (metaRating) metaParts.push('⭐ ' + (metaRating.indexOf('/') >= 0 ? metaRating : metaRating + '/10'));
+        if (metaYear) metaParts.push('📅 ' + metaYear);
+        if (metaDuration) metaParts.push('⏱ ' + metaDuration);
+        if (metaGenres) metaParts.push('🎭 ' + metaGenres);
+        if (metaParts.length) blocks.push(para(metaParts.join(' • ')));
+      }
+      const tagline = String(body.meta_tagline || '').trim();
+      if (body.show_tagline !== false && tagline) blocks.push({ type: 'pullquote', text: tagline });
       const synopsis = String(body.synopsis || '').trim();
       if (synopsis) { blocks.push({ type: 'expandable_blockquote', text: synopsis }); blocks.push({ type: 'divider' }); }
       const note = String(body.note || '').trim();
@@ -1682,6 +1791,16 @@ export default {
       } else if (globalShots.length > 1) {
         blocks.push({ type: 'details', summary: 'SHOTS', is_open: false, blocks: [Object.assign({ type: 'slideshow', blocks: globalShots.slice(0, 10).map(photoBlock) }, shotCaption(globalCaption))] });
       }
+      if (files.length <= 8) {
+        const specRows = files.map(specsFromFile);
+        if (specRows.some(r => r.res || r.codec)) {
+          const cells = [['Resolusi', 'Codec', 'Audio', 'Ukuran', 'Sumber'].map(t => ({ text: t, is_header: true }))];
+          specRows.forEach(r => {
+            cells.push([{ text: r.res || '-' }, { text: r.codec || '-' }, { text: r.audio || '-' }, { text: r.size || '-' }, { text: r.source || '-' }]);
+          });
+          blocks.push({ type: 'table', cells: cells, is_bordered: true });
+        }
+      }
       let prevFileDetails = false;
       files.forEach((f, idx) => {
         if (idx > 0 && !prevFileDetails) blocks.push({ type: 'divider' });
@@ -1691,13 +1810,24 @@ export default {
         if (fsize) blocks.push(para('💾 Ukuran: ' + fsize));
         const links = Array.isArray(f && f.links) ? f.links.filter(l => l && isHttp(l.url)) : [];
         if (links.length) {
-          const parts = [];
-          links.forEach((l, li) => {
-            if (li > 0) parts.push(' | ');
-            const label = String(l.label || '').trim() || 'Download';
-            parts.push(urlT(label, String(l.url).trim()));
-          });
-          blocks.push(para(parts));
+          if (files.length === 1) {
+            for (let c = 0; c < links.length; c += 8) {
+              const chunk = links.slice(c, c + 8);
+              blocks.push({ type: 'buttons', buttons: chunk.map(l => {
+                const lbl = String(l.label || '').trim();
+                const prov = (lbl && lbl !== 'Download') ? lbl : providerFromUrl(l.url);
+                return { text: '📥 ' + prov, url: String(l.url).trim(), style: 'primary' };
+              }), align: 'center' });
+            }
+          } else {
+            const parts = [];
+            links.forEach((l, li) => {
+              if (li > 0) parts.push(' | ');
+              const label = String(l.label || '').trim() || 'Download';
+              parts.push(urlT(label, String(l.url).trim()));
+            });
+            blocks.push(para(parts));
+          }
         }
         const shots = shotMedia(f && f.shots);
         const shotsCaption = String((f && f.shots_caption) || '').trim();
@@ -1841,7 +1971,7 @@ export default {
         try {
           const db = await richDraftsTable();
           if (db) {
-            const form = { title: String(body.title || ''), header_url: String(body.header_url || ''), synopsis: String(body.synopsis || ''), note: String(body.note || ''), audio: String(body.audio || ''), subs: String(body.subs || ''), hashtags: String(body.hashtags || ''), footer_text: String(body.footer_text || ''), channel_id: String(body.channel_id || ''), topic_id: String(body.topic_id || ''), global_shots: Array.isArray(body.global_shots) ? body.global_shots : [], global_shots_caption: String(body.global_shots_caption || ''), join_channel: String(body.join_channel || ''), join_group: String(body.join_group || ''), files: Array.isArray(body.files) ? body.files : [] };
+            const form = { title: String(body.title || ''), header_url: String(body.header_url || ''), synopsis: String(body.synopsis || ''), note: String(body.note || ''), audio: String(body.audio || ''), subs: String(body.subs || ''), hashtags: String(body.hashtags || ''), footer_text: String(body.footer_text || ''), channel_id: String(body.channel_id || ''), topic_id: String(body.topic_id || ''), global_shots: Array.isArray(body.global_shots) ? body.global_shots : [], global_shots_caption: String(body.global_shots_caption || ''), join_channel: String(body.join_channel || ''), join_group: String(body.join_group || ''), meta_rating: String(body.meta_rating || ''), meta_year: String(body.meta_year || ''), meta_duration: String(body.meta_duration || ''), meta_genres: String(body.meta_genres || ''), meta_tagline: String(body.meta_tagline || ''), show_meta: body.show_meta !== false, show_tagline: body.show_tagline !== false, files: Array.isArray(body.files) ? body.files : [] };
             const existing = draftId ? await richDraftGet(db, draftId) : null;
             const mergedTargets = (existing && Array.isArray(existing.sent_targets) ? existing.sent_targets : []).concat(sentTargets);
             draftId = await richDraftUpsert(db, { id: draftId, title: form.title, payload: { form: form, blocks: blocks }, status: 'sent', sentTargets: mergedTargets });
@@ -2297,6 +2427,7 @@ export default {
         const results = await Promise.all(rawList.map(async (r) => {
           let ov = r.overview || '';
           let dur = '';
+          let tg = '';
           let bd = r.backdrop_path ? 'https://image.tmdb.org/t/p/w1280' + r.backdrop_path : null;
           let ctry = (r.origin_country || []).join(', ');
           if (ov && /\b(the|and|after|with|his|her|who|this|from|about|when|their|they|have|has|for|is|was)\b/i.test(ov)) {
@@ -2316,6 +2447,7 @@ export default {
                 ctry = dData.production_countries.map(c => c.name).join(', ');
               }
               if (dData.runtime) dur = dData.runtime + ' menit';
+              if (dData.tagline) tg = dData.tagline;
               const pickedBd = pickBackdropUrl(dData);
               if (pickedBd) bd = pickedBd;
             }
@@ -2334,6 +2466,7 @@ export default {
             media_type: r.media_type || searchType,
             genres: (r.genre_ids || []).map(gid => genreMap[gid]).filter(Boolean).join(', '),
             duration: dur,
+            tagline: tg,
             release_date: r.release_date || r.first_air_date || '',
             country: ctry
           };
@@ -4543,7 +4676,7 @@ function htmlPage(content, env, pageMode = 'public') {
     @media (max-width: 768px) {
       #richReleaseBody { padding: 14px !important; max-height: 62dvh !important; }
       #richReleaseModal .modal-footer .nav-btn { flex: 1 1 40%; text-align: center; }
-      #richLangGrid, #richDestGrid, #richTagGrid, #richJoinGrid { grid-template-columns: 1fr !important; }
+      #richLangGrid, #richDestGrid, #richTagGrid, #richJoinGrid, #richMetaGrid { grid-template-columns: 1fr !important; }
     }
 
     .form-input-pro {
@@ -8047,6 +8180,16 @@ function applyRichTmdb(idx) {
   if (synEl && r.overview) synEl.value = r.overview;
   var headEl = document.getElementById('richHeaderUrl');
   if (headEl && (r.backdrop || r.poster)) { headEl.value = r.backdrop || r.poster; if (typeof updateRichHeaderPreview === 'function') updateRichHeaderPreview(); }
+  var setMeta = function(id, v) { var el = document.getElementById(id); if (el) el.value = v || ''; };
+  setMeta('richMetaRating', r.rating);
+  setMeta('richMetaYear', r.year);
+  setMeta('richMetaDuration', r.duration);
+  setMeta('richMetaGenres', r.genres);
+  setMeta('richMetaTagline', r.tagline);
+  var metaChk = document.getElementById('richShowMeta');
+  if (metaChk && (r.rating || r.year || r.duration || r.genres)) metaChk.checked = true;
+  var tagChk = document.getElementById('richShowTagline');
+  if (tagChk && r.tagline) tagChk.checked = true;
   var tagEl = document.getElementById('richHashtags');
   if (tagEl && !tagEl.value.trim()) {
     var tag = '#' + String(r.title || '').split(' ').filter(Boolean).join('_').replace(/[^A-Za-z0-9_]/g, '');
@@ -8054,7 +8197,7 @@ function applyRichTmdb(idx) {
     tagEl.value = tag;
   }
   var box = document.getElementById('richTmdbResults');
-  if (box) box.innerHTML = '<span style="color: #38bdf8; font-size: 0.78rem;">✓ Metadata terimpor dari TMDB: ' + escapeHtml(r.title) + (r.year ? ' (' + r.year + ')' : '') + ' — judul/sinopsis/foto header sudah terisi, silakan cek &amp; edit bila perlu.</span>';
+  if (box) box.innerHTML = '<span style="color: #38bdf8; font-size: 0.78rem;">✓ Metadata terimpor dari TMDB: ' + escapeHtml(r.title) + (r.year ? ' (' + r.year + ')' : '') + ' — judul/sinopsis/foto header/meta sudah terisi, silakan cek &amp; edit bila perlu.</span>';
   updateRichPreview();
 }
 
@@ -8133,7 +8276,9 @@ async function loadRichDraftList() {
 }
 
 function applyRichDraftForm(form) {
+  var nl = String.fromCharCode(10);
   var set = function(id, v) { var el = document.getElementById(id); if (el) el.value = v || ''; };
+  var chk = function(id, v) { var el = document.getElementById(id); if (el) el.checked = !!v; };
   set('richTitle', form.title);
   set('richHeaderUrl', form.header_url);
   set('richSynopsis', form.synopsis);
@@ -8144,10 +8289,16 @@ function applyRichDraftForm(form) {
   set('richGlobalShotsCaption', form.global_shots_caption);
   set('richJoinChannel', form.join_channel);
   set('richJoinGroup', form.join_group);
+  set('richMetaRating', form.meta_rating);
+  set('richMetaYear', form.meta_year);
+  set('richMetaDuration', form.meta_duration);
+  set('richMetaGenres', form.meta_genres);
+  set('richMetaTagline', form.meta_tagline);
+  chk('richShowMeta', form.show_meta === undefined ? !!(form.meta_rating || form.meta_year || form.meta_duration || form.meta_genres) : form.show_meta);
+  chk('richShowTagline', form.show_tagline === undefined ? !!form.meta_tagline : form.show_tagline);
   set('richHashtags', form.hashtags);
   set('richChannelId', form.channel_id);
   set('richTopicId', form.topic_id);
-  var nl = String.fromCharCode(10);
   var srcFiles = (form.files && form.files.length) ? form.files : [{ name: '', size: '', links: [], shots: [], mediainfo: '' }];
   window._richFiles = srcFiles.map(function(f) {
     return {
@@ -8550,6 +8701,13 @@ function collectRichPayload() {
     global_shots_caption: (document.getElementById('richGlobalShotsCaption').value || '').trim(),
     join_channel: (document.getElementById('richJoinChannel').value || '').trim(),
     join_group: (document.getElementById('richJoinGroup').value || '').trim(),
+    meta_rating: (document.getElementById('richMetaRating').value || '').trim(),
+    meta_year: (document.getElementById('richMetaYear').value || '').trim(),
+    meta_duration: (document.getElementById('richMetaDuration').value || '').trim(),
+    meta_genres: (document.getElementById('richMetaGenres').value || '').trim(),
+    meta_tagline: (document.getElementById('richMetaTagline').value || '').trim(),
+    show_meta: !!document.getElementById('richShowMeta').checked,
+    show_tagline: !!document.getElementById('richShowTagline').checked,
     hashtags: (document.getElementById('richHashtags').value || '').trim(),
     channel_id: (document.getElementById('richChannelId').value || '').trim(),
     topic_id: (document.getElementById('richTopicId').value || '').trim(),
@@ -8666,6 +8824,62 @@ function richShotImg(u) {
   return '<img src="' + src + '" style="width: 100%; border-radius: 8px; margin-top: 6px;">';
 }
 
+function richProviderLabel(l) {
+  var lbl = String((l && l.label) || '').trim();
+  if (lbl && lbl !== 'Download') return lbl;
+  var h = String((l && l.url) || '').trim();
+  var proto = h.indexOf('://');
+  if (proto >= 0) h = h.slice(proto + 3);
+  var slash = h.indexOf('/');
+  if (slash >= 0) h = h.slice(0, slash);
+  if (h.indexOf('www.') === 0) h = h.slice(4);
+  var dot = String.fromCharCode(46);
+  if (h === ['harudrive', 'eu', 'cc'].join(dot) || h === ['haru-drive', 'pages', 'dev'].join(dot)) return 'HaruDrive';
+  if (h === ['transfer', 'it'].join(dot)) return 'Transfer.it';
+  if (h === ['gofile', 'io'].join(dot)) return 'Gofile';
+  if (h === ['pixeldrain', 'com'].join(dot)) return 'PixelDrain';
+  if (h === ['mega', 'nz'].join(dot)) return 'MEGA';
+  if (h === ['drive', 'google', 'com'].join(dot)) return 'Google Drive';
+  if (h === ['mediafire', 'com'].join(dot)) return 'MediaFire';
+  if (h === ['buzzheavier', 'com'].join(dot)) return 'BuzzHeavier';
+  return h;
+}
+function richFileSpecs(f) {
+  var name = String((f && f.name) || '');
+  var mi = String((f && f.mediainfo) || '');
+  var res = '', codec = '', audio = '';
+  if (mi.trim()) {
+    var lines = mi.split(String.fromCharCode(10));
+    var section = '', vH = '', vF = '', aLang = '', aFmt = '', aCount = 0, aLangs = [];
+    for (var li = 0; li < lines.length; li++) {
+      var line = lines[li];
+      var t = line.trim();
+      var base = t.split(' #')[0];
+      if (base === 'General' || base === 'Video' || base === 'Audio' || base === 'Text' || base === 'Menu' || base === 'Image' || base === 'Other') { section = base; if (base === 'Audio') aCount++; continue; }
+      if (!section) continue;
+      var ci = line.indexOf(':');
+      if (ci < 1) continue;
+      var key = line.slice(0, ci).trim();
+      var val = line.slice(ci + 1).trim();
+      if (section === 'Video' && key === 'Height' && !vH) vH = val;
+      if (section === 'Video' && key === 'Format' && !vF) vF = val;
+      if (section === 'Audio' && aCount === 1 && key === 'Language' && !aLang) aLang = val;
+      if (section === 'Audio' && aCount === 1 && key === 'Format' && !aFmt) aFmt = val;
+      if (section === 'Audio' && key === 'Language' && aLangs.indexOf(val) < 0) aLangs.push(val);
+    }
+    if (vH) res = vH.split(' pixels')[0].split(' ').join('') + 'p';
+    if (vF) codec = vF.split(' ')[0];
+    if (codec === 'AVC') codec = 'H.264';
+    if (aCount === 1 && aLang) audio = aLang + (aFmt ? ' ' + aFmt : '');
+    else if (aLangs.length) audio = aLangs.join(', ');
+  }
+  var pf = {};
+  if (typeof parseFileName === 'function') { try { pf = parseFileName(name) || {}; } catch (e) { pf = {}; } }
+  if (!res) res = pf.quality || '';
+  if (!codec) codec = pf.codec || '';
+  return { res: res, codec: codec, audio: audio, size: String((f && f.size) || '').trim(), source: pf.source || '' };
+}
+
 function updateRichPreview() {
   var body = document.getElementById('richPreviewBody');
   if (!body) return;
@@ -8674,10 +8888,20 @@ function updateRichPreview() {
   if (d.header_url) { img.src = d.header_url; img.style.display = 'block'; } else { img.style.display = 'none'; }
   var html = '';
   if (d.title) html += '<div style="font-size: 1.02rem; font-weight: 800; margin-bottom: 6px;">' + richEsc(d.title) + '</div>';
+  var metaParts = [];
+  var metaShown = false, tagShown = false;
+  if (d.show_meta) {
+    if (d.meta_rating) metaParts.push('⭐ ' + (d.meta_rating.indexOf('/') >= 0 ? d.meta_rating : d.meta_rating + '/10'));
+    if (d.meta_year) metaParts.push('📅 ' + d.meta_year);
+    if (d.meta_duration) metaParts.push('⏱ ' + d.meta_duration);
+    if (d.meta_genres) metaParts.push('🎭 ' + d.meta_genres);
+    if (metaParts.length) { html += '<div style="margin-bottom: 8px; color: var(--text-muted);">' + richEsc(metaParts.join(' • ')) + '</div>'; metaShown = true; }
+  }
+  if (d.show_tagline && d.meta_tagline) { html += '<div style="text-align: center; font-style: italic; margin: 0 0 8px 0; color: var(--text-muted);">“' + richEsc(d.meta_tagline) + '”</div>'; tagShown = true; }
   if (d.synopsis) html += '<details style="margin: 0 0 8px 0;"><summary style="cursor: pointer; color: #38bdf8;">Sinopsis (klik untuk membuka)</summary><blockquote style="border-left: 3px solid #38bdf8; margin: 6px 0 0 0; padding: 5px 10px; background: rgba(56,189,248,0.07); border-radius: 0 8px 8px 0; white-space: pre-wrap;">' + richEsc(d.synopsis) + '</blockquote></details><hr style="border: none; border-top: 1px solid rgba(255,255,255,0.15); margin: 10px 0;">';
   if (d.note) html += '<div style="margin-bottom: 8px; white-space: pre-wrap;">' + richEsc(d.note) + '</div>';
-  var chars = (d.title + d.synopsis + d.note + d.audio + d.subs + (d.global_shots_caption || '')).length;
-  var blocks = (d.header_url ? 1 : 0) + 1 + (d.synopsis ? 2 : 0) + (d.note ? 1 : 0) + ((d.audio || d.subs) ? 2 : 0) + (d.hashtags ? 1 : 0);
+  var chars = (d.title + d.synopsis + d.note + d.audio + d.subs + (d.global_shots_caption || '')).length + (metaShown ? metaParts.join(' • ').length : 0) + (tagShown ? d.meta_tagline.length : 0);
+  var blocks = (d.header_url ? 1 : 0) + 1 + (d.synopsis ? 2 : 0) + (d.note ? 1 : 0) + ((d.audio || d.subs) ? 2 : 0) + (d.hashtags ? 1 : 0) + (metaShown ? 1 : 0) + (tagShown ? 1 : 0);
   if (d.global_shots.length) {
     html += '<details style="margin-top: 6px;"><summary style="cursor: pointer; color: #aebbc7; font-size: 0.8rem; letter-spacing: 0.05em;">SHOTS</summary>';
     d.global_shots.forEach(function(u) { html += richShotImg(u); });
@@ -8685,13 +8909,38 @@ function updateRichPreview() {
     html += '</details>';
     blocks += 1;
   }
+  if (d.files.length <= 8) {
+    var specRows = d.files.map(function(f) { return richFileSpecs(f); });
+    var hasSpecs = specRows.some(function(r) { return r.res || r.codec; });
+    if (hasSpecs) {
+      html += '<table style="width: 100%; border-collapse: collapse; font-size: 0.78rem; margin: 8px 0;">';
+      html += '<tr>' + ['Resolusi', 'Codec', 'Audio', 'Ukuran', 'Sumber'].map(function(t) { return '<th style="border: 1px solid rgba(255,255,255,0.2); padding: 4px 6px; text-align: left; background: rgba(255,255,255,0.06);">' + t + '</th>'; }).join('') + '</tr>';
+      specRows.forEach(function(r) {
+        html += '<tr>' + [r.res || '-', r.codec || '-', r.audio || '-', r.size || '-', r.source || '-'].map(function(t) { return '<td style="border: 1px solid rgba(255,255,255,0.2); padding: 4px 6px;">' + richEsc(t) + '</td>'; }).join('') + '</tr>';
+      });
+      html += '</table>';
+      blocks += 1;
+    }
+  }
   d.files.forEach(function(f, i) {
     var prevF = i > 0 ? d.files[i - 1] : null;
     if (prevF && !(prevF.shots.length || prevF.mediainfo)) { html += '<hr style="border: none; border-top: 1px solid rgba(255,255,255,0.15); margin: 10px 0;">'; blocks += 1; }
     html += '<div style="font-weight: 700; margin-top: 8px;">' + richEsc(f.name) + '</div>';
     blocks += 1;
     if (f.size) { html += '<div>💾 Ukuran: ' + richEsc(f.size) + '</div>'; blocks += 1; }
-    if (f.links.length) { html += '<div>' + f.links.map(function(l) { return '<a href="' + richEsc(l.url) + '" target="_blank" style="color: #6ab3f3;">' + richEsc(l.label) + '</a>'; }).join(' | ') + '</div>'; blocks += 1; }
+    if (f.links.length) {
+      if (d.files.length === 1) {
+        var chunks = Math.ceil(f.links.length / 8);
+        for (var c = 0; c < chunks; c++) {
+          var chunk = f.links.slice(c * 8, c * 8 + 8);
+          html += '<div style="text-align: center; margin: 8px 0;">' + chunk.map(function(l) { return '<a href="' + richEsc(l.url) + '" target="_blank" style="display: inline-block; padding: 6px 18px; margin: 2px 4px; border-radius: 999px; background: rgba(56,189,248,0.2); border: 1px solid rgba(56,189,248,0.5); color: #38bdf8; font-weight: 700; text-decoration: none;">📥 ' + richEsc(richProviderLabel(l)) + '</a>'; }).join('') + '</div>';
+        }
+        blocks += chunks;
+      } else {
+        html += '<div>' + f.links.map(function(l) { return '<a href="' + richEsc(l.url) + '" target="_blank" style="color: #6ab3f3;">' + richEsc(l.label) + '</a>'; }).join(' | ') + '</div>';
+        blocks += 1;
+      }
+    }
     var miShow = f.mediainfo ? (summarizeMediaInfoText(f.mediainfo.slice(0, 24000), f.name) || f.mediainfo.slice(0, 20000)) : '';
     chars += f.name.length + f.size.length + miShow.length + (f.shots_caption || '').length;
     if (f.shots.length) {
@@ -12184,6 +12433,21 @@ function adminConsoleUI() {
         <div style="margin-bottom: 12px;">
           <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Sinopsis (tampil di bawah judul)</label>
           <textarea id="richSynopsis" class="form-input-pro" rows="3" placeholder="Tulis sinopsisnya di sini..." style="margin-top: 4px; resize: vertical;" oninput="updateRichPreview()"></textarea>
+        </div>
+
+        <div style="margin-bottom: 12px;">
+          <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Meta TMDB (opsional — terisi otomatis dari TMDB, boleh diedit)</label>
+          <div id="richMetaGrid" style="display: grid; grid-template-columns: 1fr 1fr 1fr 2fr; gap: 8px; margin-top: 4px;">
+            <input type="text" id="richMetaRating" class="form-input-pro" placeholder="Rating, mis. 7.3" oninput="updateRichPreview()">
+            <input type="text" id="richMetaYear" class="form-input-pro" placeholder="Tahun, mis. 2022" oninput="updateRichPreview()">
+            <input type="text" id="richMetaDuration" class="form-input-pro" placeholder="Durasi, mis. 12 menit" oninput="updateRichPreview()">
+            <input type="text" id="richMetaGenres" class="form-input-pro" placeholder="Genre, mis. Animasi, Keluarga" oninput="updateRichPreview()">
+          </div>
+          <input type="text" id="richMetaTagline" class="form-input-pro" placeholder="Tagline (opsional), mis. Petualangan baru dimulai" style="margin-top: 8px;" oninput="updateRichPreview()">
+          <div style="display: flex; gap: 16px; margin-top: 8px; font-size: 0.76rem; color: var(--text-muted);">
+            <label style="display: flex; gap: 4px; align-items: center; cursor: pointer;"><input type="checkbox" id="richShowMeta" checked style="accent-color: #38bdf8;" onchange="updateRichPreview()"> Tampilkan garis meta</label>
+            <label style="display: flex; gap: 4px; align-items: center; cursor: pointer;"><input type="checkbox" id="richShowTagline" checked style="accent-color: #38bdf8;" onchange="updateRichPreview()"> Tampilkan tagline</label>
+          </div>
         </div>
 
         <div style="margin-bottom: 12px;">
