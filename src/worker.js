@@ -1909,6 +1909,38 @@ export default {
       }
     }
 
+    // API: Upload SHOTS ke Catbox (admin) — satu file per request, tanpa kunci.
+    if (url.pathname === '/api/admin/upload-shot' && request.method === 'POST') {
+      try {
+        const form = await request.formData();
+        const pin = form.get('admin_pin') || '';
+        if (!verifyPin(pin) && !isLoggedIn) {
+          return new Response(JSON.stringify({ error: 'PIN Admin Salah / Tidak Terotentikasi!' }), { status: 403 });
+        }
+        const file = form.get('file');
+        if (!file || typeof file === 'string' || !file.size) {
+          return new Response(JSON.stringify({ error: 'Tidak ada file.' }), { status: 400 });
+        }
+        if (!String(file.type || '').startsWith('image/')) {
+          return new Response(JSON.stringify({ error: 'Hanya file gambar yang boleh diupload.' }), { status: 400 });
+        }
+        if (file.size > 20 * 1024 * 1024) {
+          return new Response(JSON.stringify({ error: 'Ukuran file melebihi 20 MB.' }), { status: 413 });
+        }
+        const up = new FormData();
+        up.append('reqtype', 'fileupload');
+        up.append('fileToUpload', file);
+        const cat = await fetch('https://catbox.moe/user/api.php', { method: 'POST', body: up });
+        const text = (await cat.text()).trim();
+        if (!cat.ok || (text.indexOf('https://files.catbox.moe/') !== 0 && text.indexOf('http://files.catbox.moe/') !== 0)) {
+          return new Response(JSON.stringify({ error: 'Catbox menolak upload: ' + text.slice(0, 200) }), { status: 502 });
+        }
+        return new Response(JSON.stringify({ success: true, url: text }), { headers: { 'Content-Type': 'application/json' } });
+      } catch (err) {
+        return new Response(JSON.stringify({ error: err.message }), { status: 500 });
+      }
+    }
+
     // API: Telegram Rich Edit — perbarui pesan channel yang sudah terkirim dari draft/riwayat
     if (url.pathname === '/api/admin/telegram-rich-edit' && request.method === 'POST') {
       try {
@@ -4407,6 +4439,12 @@ function htmlPage(content, env, pageMode = 'public') {
       display: flex;
       justify-content: flex-end;
       gap: 10px;
+      flex-wrap: wrap;
+    }
+    @media (max-width: 768px) {
+      #richReleaseBody { padding: 14px !important; max-height: 62dvh !important; }
+      #richReleaseModal .modal-footer .nav-btn { flex: 1 1 40%; text-align: center; }
+      #richLangGrid, #richDestGrid, #richTagGrid { grid-template-columns: 1fr !important; }
     }
 
     .form-input-pro {
@@ -8194,6 +8232,45 @@ function setRichField(i, fidx, value) {
   updateRichPreview();
 }
 
+function pickRichShots(i) {
+  var inp = document.getElementById('richShotInput' + i);
+  if (inp) inp.click();
+}
+
+async function handleRichShotFiles(i, input) {
+  var files = input.files ? Array.prototype.slice.call(input.files) : [];
+  input.value = '';
+  if (!files.length) return;
+  var btn = document.getElementById('richShotBtn' + i);
+  var pin = (typeof richDraftPin === 'function') ? richDraftPin() : '';
+  var okUrls = [];
+  var failed = [];
+  if (btn) btn.disabled = true;
+  for (var k = 0; k < files.length; k++) {
+    var st = document.getElementById('richShotStatus' + i);
+    if (st) st.textContent = 'Upload ' + (k + 1) + '/' + files.length + ': ' + files[k].name + '…';
+    try {
+      var fd = new FormData();
+      fd.append('admin_pin', pin);
+      fd.append('file', files[k]);
+      var res = await fetch('/api/admin/upload-shot', { method: 'POST', body: fd });
+      var data = await res.json().catch(function() { return {}; });
+      if (!res.ok || !data.url) throw new Error(data.error || ('HTTP ' + res.status));
+      okUrls.push(data.url);
+    } catch (e) { failed.push(files[k].name + ' (' + e.message + ')'); }
+  }
+  if (btn) btn.disabled = false;
+  if (okUrls.length && window._richFiles[i]) {
+    var cur = (window._richFiles[i].shots || '').trim();
+    window._richFiles[i].shots = (cur ? cur + String.fromCharCode(10) : '') + okUrls.join(String.fromCharCode(10));
+    renderRichFileRows();
+  }
+  var st2 = document.getElementById('richShotStatus' + i);
+  if (st2) st2.textContent = failed.length ? ('Gagal: ' + failed.length + ' foto') : (okUrls.length ? ('✓ ' + okUrls.length + ' foto terupload ke Catbox') : '');
+  if (failed.length) alert('Sebagian foto gagal diupload ke Catbox:' + String.fromCharCode(10) + failed.join(String.fromCharCode(10)));
+  updateRichPreview();
+}
+
 function renderRichFileRows() {
   var c = document.getElementById('richFilesContainer');
   if (!c) return;
@@ -8206,6 +8283,11 @@ function renderRichFileRows() {
     html += '<input type="text" class="form-input-pro" placeholder="Ukuran, mis. 1.11 GB" value="' + richEsc(f.size) + '" oninput="setRichField(' + i + ', 1, this.value)" style="margin-bottom: 8px;">';
     html += '<textarea class="form-input-pro" rows="2" placeholder="Link download, satu per baris: Label | URL" oninput="setRichField(' + i + ', 2, this.value)" style="margin-bottom: 8px; resize: vertical;">' + richEsc(f.links) + '</textarea>';
     html += '<textarea class="form-input-pro" rows="2" placeholder="SHOTS: URL gambar screenshot, satu per baris" oninput="setRichField(' + i + ', 3, this.value)" style="margin-bottom: 8px; resize: vertical;">' + richEsc(f.shots) + '</textarea>';
+    html += '<div style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap;">';
+    html += '<button type="button" class="nav-btn" id="richShotBtn' + i + '" style="font-size: 0.72rem; padding: 4px 12px; background: rgba(56,189,248,0.15); border-color: rgba(56,189,248,0.4); color: #38bdf8; font-weight: 600;" onclick="pickRichShots(' + i + ')">📤 Upload Foto ke Catbox</button>';
+    html += '<span id="richShotStatus' + i + '" style="font-size: 0.7rem; color: var(--text-dim);"></span>';
+    html += '<input type="file" id="richShotInput' + i + '" accept="image/*" multiple style="display: none;" onchange="handleRichShotFiles(' + i + ', this)">';
+    html += '</div>';
     html += '<textarea class="form-input-pro" rows="3" placeholder="MEDIAINFO: tempel teks MediaInfo LENGKAP file ini — pas dikirim otomatis diringkas (bagian penting aja, ala Endeavor)" oninput="setRichField(' + i + ', 4, this.value)" style="resize: vertical; font-family: monospace; font-size: 0.74rem;">' + richEsc(f.mediainfo) + '</textarea>';
     html += '</div>';
   });
@@ -11865,7 +11947,7 @@ function adminConsoleUI() {
           <textarea id="richNote" class="form-input-pro" rows="2" placeholder="Mis. rilisan encode ulang AV1 10-bit, sub Indo bawaan, dll." style="margin-top: 4px; resize: vertical;" oninput="updateRichPreview()"></textarea>
         </div>
 
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px;">
+        <div id="richLangGrid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px;">
           <div>
             <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">🔊 Audio</label>
             <input type="text" id="richAudio" class="form-input-pro" placeholder="English, Japanese" style="margin-top: 4px;" oninput="updateRichPreview()">
@@ -11881,9 +11963,9 @@ function adminConsoleUI() {
           <button type="button" class="nav-btn" style="font-size: 0.74rem; padding: 4px 12px; background: rgba(56,189,248,0.15); border-color: rgba(56,189,248,0.4); color: #38bdf8; font-weight: 600;" onclick="addRichFileRow()">+ Tambah File</button>
         </div>
         <div id="richFilesContainer"></div>
-        <p style="font-size: 0.72rem; color: var(--text-dim); margin-bottom: 14px;">Link download: satu per baris, format <b>Label | URL</b> (mis. <i>HaruDrive | https://...</i>). SHOTS: satu URL gambar per baris (fase 1 masih manual — auto-VCS menyusul). MEDIAINFO: tempel teks MediaInfo file itu.</p>
+        <p style="font-size: 0.72rem; color: var(--text-dim); margin-bottom: 14px;">Link download: satu per baris, format <b>Label | URL</b> (mis. <i>HaruDrive | https://...</i>). SHOTS: satu URL gambar per baris — atau pakai tombol 📤 Upload Foto ke Catbox di tiap file (bisa pilih banyak foto sekaligus). MEDIAINFO: tempel teks MediaInfo file itu.</p>
 
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px;">
+        <div id="richDestGrid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px;">
           <div>
             <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Channel Tujuan (khusus rilisan) *</label>
             <input type="text" id="richChannelId" class="form-input-pro" placeholder="-100xxxxxxxxxx atau @username" style="margin-top: 4px;">
@@ -11895,7 +11977,7 @@ function adminConsoleUI() {
         </div>
         <p style="font-size: 0.72rem; color: var(--text-dim); margin-bottom: 12px;">Bot HaruDrive harus sudah jadi admin di channel itu. Channel &amp; topic akan diingat untuk rilisan berikutnya. Kosong = pakai channel default dari secret server.</p>
 
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 4px;">
+        <div id="richTagGrid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 4px;">
           <div>
             <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Hashtag (opsional)</label>
             <input type="text" id="richHashtags" class="form-input-pro" placeholder="#Anime #Series" style="margin-top: 4px;" oninput="updateRichPreview()">
