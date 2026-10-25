@@ -1690,13 +1690,29 @@ export default {
       return '';
     }
 
+    function specRange(hh) {
+      if (!hh) return '';
+      if (hh.indexOf('Dolby Vision') >= 0) return 'Dolby Vision';
+      if (hh.indexOf('HDR10+') >= 0) return 'HDR10+';
+      if (hh.indexOf('HDR10') >= 0) return 'HDR10';
+      return hh.split(',')[0].trim();
+    }
+    function specSubFmt(cid, fmt) {
+      if (cid.indexOf('UTF8') >= 0 || cid.indexOf('UTF-8') >= 0) return 'UTF-8';
+      if (cid.indexOf('ASS') >= 0) return 'ASS';
+      if (cid.indexOf('PGS') >= 0) return 'PGS';
+      if (cid.indexOf('VobSub') >= 0) return 'VobSub';
+      let f = fmt || '';
+      if (f === 'SubRip') f = 'SRT';
+      return f;
+    }
     function specsFromFile(f) {
       const name = String((f && f.name) || '');
       const mi = String((f && f.mediainfo) || '');
-      let res = '', codec = '', audio = '';
+      let video = '', audio = '', subs = '', duration = '';
       if (mi.trim()) {
         const lines = mi.split('\n');
-        let section = '', vKv = {}, aKv = {}, aCount = 0, aLangs = [];
+        let section = '', vKv = {}, vSeen = false, vActive = false, gKv = {}, aTracks = [], tTracks = [], curA = null, curT = null;
         const baseKind = (t) => {
           const b = t.split(' #')[0];
           return (b === 'General' || b === 'Video' || b === 'Audio' || b === 'Text' || b === 'Menu' || b === 'Image' || b === 'Other') ? b : '';
@@ -1704,28 +1720,59 @@ export default {
         for (let li = 0; li < lines.length; li++) {
           const line = lines[li];
           const k = baseKind(line.trim());
-          if (k) { section = k; if (k === 'Audio') aCount++; continue; }
+          if (k) {
+            section = k;
+            if (k === 'Video') { vActive = !vSeen; if (vActive) { vKv = {}; vSeen = true; } }
+            else vActive = false;
+            if (k === 'Audio') { curA = {}; aTracks.push(curA); } else curA = null;
+            if (k === 'Text') { curT = {}; tTracks.push(curT); } else curT = null;
+            continue;
+          }
           if (!section) continue;
           const ci = line.indexOf(':');
           if (ci < 1) continue;
           const key = line.slice(0, ci).trim();
           const val = line.slice(ci + 1).trim();
-          if (section === 'Video' && !(key in vKv)) vKv[key] = val;
-          if (section === 'Audio' && aCount === 1 && !(key in aKv)) aKv[key] = val;
-          if (section === 'Audio' && key === 'Language' && aLangs.indexOf(val) < 0) aLangs.push(val);
+          if (section === 'General' && !(key in gKv)) gKv[key] = val;
+          else if (section === 'Video' && vActive && !(key in vKv)) vKv[key] = val;
+          else if (section === 'Audio' && curA && !(key in curA)) curA[key] = val;
+          else if (section === 'Text' && curT && !(key in curT)) curT[key] = val;
         }
-        if (vKv['Height']) {
+        const vParts = [];
+        let vFmt = (vKv['Format'] || '').split(' ')[0];
+        if (vFmt === 'AVC') vFmt = 'H.264';
+        if (vFmt) vParts.push(vFmt);
+        if (vKv['Bit depth']) vParts.push(vKv['Bit depth'].split(' ')[0] + '-bit');
+        if (vKv['Width'] && vKv['Height']) {
+          const w = vKv['Width'].split(' pixels')[0].split(' ').join('');
           const h = vKv['Height'].split(' pixels')[0].split(' ').join('');
-          if (h) res = h + 'p';
+          if (w && h) vParts.push(w + 'x' + h);
         }
-        if (vKv['Format']) codec = vKv['Format'].split(' ')[0];
-        if (codec === 'AVC') codec = 'H.264';
-        if (aCount === 1 && aKv['Language']) audio = aKv['Language'] + (aKv['Format'] ? ' ' + aKv['Format'] : '');
-        else if (aLangs.length) audio = aLangs.join(', ');
+        if (vKv['Frame rate']) vParts.push(vKv['Frame rate']);
+        const rg = specRange(vKv['HDR format'] || '');
+        if (rg) vParts.push(rg);
+        video = vParts.join(' ');
+        audio = aTracks.map(a => {
+          const lang = a['Language'] || 'Unknown';
+          const fmt = a['Format'] || '';
+          let ch = a['Channel(s)'] || '';
+          if (ch) ch = ch.split(' ')[0] + 'ch';
+          return (lang + (fmt ? ' ' + fmt : '') + (ch ? ' ' + ch : '')).trim();
+        }).filter(Boolean).join(', ');
+        subs = tTracks.map(t => {
+          const lang = t['Language'] || 'Unknown';
+          const fmt = specSubFmt(t['Codec ID'] || '', t['Format'] || '');
+          const title = t['Title'] || '';
+          return lang + (fmt ? ' ' + fmt : '') + (title && title !== lang ? ' (' + title + ')' : '');
+        }).filter(Boolean).join(', ');
+        duration = gKv['Duration'] || '';
       }
-      if (!res) res = specQualityFromName(name);
-      if (!codec) codec = specCodecFromName(name);
-      return { res: res, codec: codec, audio: audio, size: String((f && f.size) || '').trim(), source: specSourceFromName(name) };
+      if (!video) {
+        const q = specQualityFromName(name);
+        const c = specCodecFromName(name);
+        video = [c, q].filter(Boolean).join(' ');
+      }
+      return { video: video, audio: audio, subs: subs, duration: duration };
     }
     function providerFromUrl(u) {
       let h = String(u || '').trim();
@@ -1776,7 +1823,7 @@ export default {
         if (metaParts.length) blocks.push(para(metaParts.join(' • ')));
       }
       const tagline = String(body.meta_tagline || '').trim();
-      if (body.show_tagline !== false && tagline) blocks.push({ type: 'pullquote', text: tagline });
+      if (body.show_tagline !== false && tagline) blocks.push({ type: 'details', summary: '💬 Tagline', is_open: false, blocks: [{ type: 'pullquote', text: tagline }] });
       const synopsis = String(body.synopsis || '').trim();
       if (synopsis) { blocks.push({ type: 'expandable_blockquote', text: synopsis }); blocks.push({ type: 'divider' }); }
       const note = String(body.note || '').trim();
@@ -1790,16 +1837,6 @@ export default {
         blocks.push({ type: 'details', summary: 'SHOTS', is_open: false, blocks: [Object.assign({}, photoBlock(globalShots[0]), shotCaption(globalCaption))] });
       } else if (globalShots.length > 1) {
         blocks.push({ type: 'details', summary: 'SHOTS', is_open: false, blocks: [Object.assign({ type: 'slideshow', blocks: globalShots.slice(0, 10).map(photoBlock) }, shotCaption(globalCaption))] });
-      }
-      if (files.length <= 8) {
-        const specRows = files.map(specsFromFile);
-        if (specRows.some(r => r.res || r.codec)) {
-          const cells = [['Resolusi', 'Codec', 'Audio', 'Ukuran', 'Sumber'].map(t => ({ text: t, is_header: true }))];
-          specRows.forEach(r => {
-            cells.push([{ text: r.res || '-' }, { text: r.codec || '-' }, { text: r.audio || '-' }, { text: r.size || '-' }, { text: r.source || '-' }]);
-          });
-          blocks.push({ type: 'table', cells: cells, is_bordered: true });
-        }
       }
       let prevFileDetails = false;
       files.forEach((f, idx) => {
@@ -1829,6 +1866,15 @@ export default {
             blocks.push(para(parts));
           }
         }
+        if (body.show_specs === true) {
+          const sp = specsFromFile(f);
+          if (sp.video || sp.audio || sp.subs || sp.duration) {
+            blocks.push({ type: 'table', caption: 'SPECS', is_bordered: true, cells: [
+              [{ text: 'Video', is_header: true }, { text: 'Audio', is_header: true }, { text: 'Subtitle', is_header: true }, { text: 'Durasi', is_header: true }],
+              [{ text: sp.video || '-' }, { text: sp.audio || '-' }, { text: sp.subs || '-' }, { text: sp.duration || '-' }]
+            ] });
+          }
+        }
         const shots = shotMedia(f && f.shots);
         const shotsCaption = String((f && f.shots_caption) || '').trim();
         if (shots.length === 1) {
@@ -1848,7 +1894,8 @@ export default {
       const langLines = [];
       if (audio) langLines.push(para('🔊 Audio: ' + audio));
       if (subs) langLines.push(para('💬 Subtitle: ' + subs));
-      if (langLines.length) { blocks.push({ type: 'divider' }); blocks.push({ type: 'blockquote', blocks: langLines }); }
+      const lastWasDetails = !footerText && prevFileDetails;
+      if (langLines.length) { if (!lastWasDetails) blocks.push({ type: 'divider' }); blocks.push({ type: 'blockquote', blocks: langLines }); }
       const joinBtns = [];
       const joinChannel = String(body.join_channel || '').trim();
       const joinGroup = String(body.join_group || '').trim();
@@ -1971,7 +2018,7 @@ export default {
         try {
           const db = await richDraftsTable();
           if (db) {
-            const form = { title: String(body.title || ''), header_url: String(body.header_url || ''), synopsis: String(body.synopsis || ''), note: String(body.note || ''), audio: String(body.audio || ''), subs: String(body.subs || ''), hashtags: String(body.hashtags || ''), footer_text: String(body.footer_text || ''), channel_id: String(body.channel_id || ''), topic_id: String(body.topic_id || ''), global_shots: Array.isArray(body.global_shots) ? body.global_shots : [], global_shots_caption: String(body.global_shots_caption || ''), join_channel: String(body.join_channel || ''), join_group: String(body.join_group || ''), meta_rating: String(body.meta_rating || ''), meta_year: String(body.meta_year || ''), meta_duration: String(body.meta_duration || ''), meta_genres: String(body.meta_genres || ''), meta_tagline: String(body.meta_tagline || ''), show_meta: body.show_meta !== false, show_tagline: body.show_tagline !== false, files: Array.isArray(body.files) ? body.files : [] };
+            const form = { title: String(body.title || ''), header_url: String(body.header_url || ''), synopsis: String(body.synopsis || ''), note: String(body.note || ''), audio: String(body.audio || ''), subs: String(body.subs || ''), hashtags: String(body.hashtags || ''), footer_text: String(body.footer_text || ''), channel_id: String(body.channel_id || ''), topic_id: String(body.topic_id || ''), global_shots: Array.isArray(body.global_shots) ? body.global_shots : [], global_shots_caption: String(body.global_shots_caption || ''), join_channel: String(body.join_channel || ''), join_group: String(body.join_group || ''), meta_rating: String(body.meta_rating || ''), meta_year: String(body.meta_year || ''), meta_duration: String(body.meta_duration || ''), meta_genres: String(body.meta_genres || ''), meta_tagline: String(body.meta_tagline || ''), show_meta: body.show_meta !== false, show_tagline: body.show_tagline !== false, show_specs: body.show_specs === true, files: Array.isArray(body.files) ? body.files : [] };
             const existing = draftId ? await richDraftGet(db, draftId) : null;
             const mergedTargets = (existing && Array.isArray(existing.sent_targets) ? existing.sent_targets : []).concat(sentTargets);
             draftId = await richDraftUpsert(db, { id: draftId, title: form.title, payload: { form: form, blocks: blocks }, status: 'sent', sentTargets: mergedTargets });
@@ -8296,6 +8343,7 @@ function applyRichDraftForm(form) {
   set('richMetaTagline', form.meta_tagline);
   chk('richShowMeta', form.show_meta === undefined ? !!(form.meta_rating || form.meta_year || form.meta_duration || form.meta_genres) : form.show_meta);
   chk('richShowTagline', form.show_tagline === undefined ? !!form.meta_tagline : form.show_tagline);
+  chk('richShowSpecs', form.show_specs === true);
   set('richHashtags', form.hashtags);
   set('richChannelId', form.channel_id);
   set('richTopicId', form.topic_id);
@@ -8708,6 +8756,7 @@ function collectRichPayload() {
     meta_tagline: (document.getElementById('richMetaTagline').value || '').trim(),
     show_meta: !!document.getElementById('richShowMeta').checked,
     show_tagline: !!document.getElementById('richShowTagline').checked,
+    show_specs: !!document.getElementById('richShowSpecs').checked,
     hashtags: (document.getElementById('richHashtags').value || '').trim(),
     channel_id: (document.getElementById('richChannelId').value || '').trim(),
     topic_id: (document.getElementById('richTopicId').value || '').trim(),
@@ -8847,37 +8896,81 @@ function richProviderLabel(l) {
 function richFileSpecs(f) {
   var name = String((f && f.name) || '');
   var mi = String((f && f.mediainfo) || '');
-  var res = '', codec = '', audio = '';
+  var video = '', audio = '', subs = '', duration = '';
   if (mi.trim()) {
     var lines = mi.split(String.fromCharCode(10));
-    var section = '', vH = '', vF = '', aLang = '', aFmt = '', aCount = 0, aLangs = [];
+    var section = '', vKv = {}, vSeen = false, vActive = false, gKv = {}, aTracks = [], tTracks = [], curA = null, curT = null;
     for (var li = 0; li < lines.length; li++) {
       var line = lines[li];
       var t = line.trim();
       var base = t.split(' #')[0];
-      if (base === 'General' || base === 'Video' || base === 'Audio' || base === 'Text' || base === 'Menu' || base === 'Image' || base === 'Other') { section = base; if (base === 'Audio') aCount++; continue; }
+      if (base === 'General' || base === 'Video' || base === 'Audio' || base === 'Text' || base === 'Menu' || base === 'Image' || base === 'Other') {
+        section = base;
+        if (base === 'Video') { vActive = !vSeen; if (vActive) { vKv = {}; vSeen = true; } } else vActive = false;
+        if (base === 'Audio') { curA = {}; aTracks.push(curA); } else curA = null;
+        if (base === 'Text') { curT = {}; tTracks.push(curT); } else curT = null;
+        continue;
+      }
       if (!section) continue;
       var ci = line.indexOf(':');
       if (ci < 1) continue;
       var key = line.slice(0, ci).trim();
       var val = line.slice(ci + 1).trim();
-      if (section === 'Video' && key === 'Height' && !vH) vH = val;
-      if (section === 'Video' && key === 'Format' && !vF) vF = val;
-      if (section === 'Audio' && aCount === 1 && key === 'Language' && !aLang) aLang = val;
-      if (section === 'Audio' && aCount === 1 && key === 'Format' && !aFmt) aFmt = val;
-      if (section === 'Audio' && key === 'Language' && aLangs.indexOf(val) < 0) aLangs.push(val);
+      if (section === 'General' && !(key in gKv)) gKv[key] = val;
+      else if (section === 'Video' && vActive && !(key in vKv)) vKv[key] = val;
+      else if (section === 'Audio' && curA && !(key in curA)) curA[key] = val;
+      else if (section === 'Text' && curT && !(key in curT)) curT[key] = val;
     }
-    if (vH) res = vH.split(' pixels')[0].split(' ').join('') + 'p';
-    if (vF) codec = vF.split(' ')[0];
-    if (codec === 'AVC') codec = 'H.264';
-    if (aCount === 1 && aLang) audio = aLang + (aFmt ? ' ' + aFmt : '');
-    else if (aLangs.length) audio = aLangs.join(', ');
+    var vParts = [];
+    var vFmt = (vKv['Format'] || '').split(' ')[0];
+    if (vFmt === 'AVC') vFmt = 'H.264';
+    if (vFmt) vParts.push(vFmt);
+    if (vKv['Bit depth']) vParts.push(vKv['Bit depth'].split(' ')[0] + '-bit');
+    if (vKv['Width'] && vKv['Height']) {
+      var w = vKv['Width'].split(' pixels')[0].split(' ').join('');
+      var h = vKv['Height'].split(' pixels')[0].split(' ').join('');
+      if (w && h) vParts.push(w + 'x' + h);
+    }
+    if (vKv['Frame rate']) vParts.push(vKv['Frame rate']);
+    var hdr = vKv['HDR format'] || '';
+    var rg = '';
+    if (hdr.indexOf('Dolby Vision') >= 0) rg = 'Dolby Vision';
+    else if (hdr.indexOf('HDR10+') >= 0) rg = 'HDR10+';
+    else if (hdr.indexOf('HDR10') >= 0) rg = 'HDR10';
+    else if (hdr) rg = hdr.split(',')[0].trim();
+    if (rg) vParts.push(rg);
+    video = vParts.join(' ');
+    audio = aTracks.map(function(a) {
+      var lang = a['Language'] || 'Unknown';
+      var fmt = a['Format'] || '';
+      var ch = a['Channel(s)'] || '';
+      if (ch) ch = ch.split(' ')[0] + 'ch';
+      return (lang + (fmt ? ' ' + fmt : '') + (ch ? ' ' + ch : '')).trim();
+    }).filter(Boolean).join(', ');
+    subs = tTracks.map(function(t) {
+      var lang = t['Language'] || 'Unknown';
+      var cid = t['Codec ID'] || '';
+      var fmt = '';
+      if (cid.indexOf('UTF8') >= 0 || cid.indexOf('UTF-8') >= 0) fmt = 'UTF-8';
+      else if (cid.indexOf('ASS') >= 0) fmt = 'ASS';
+      else if (cid.indexOf('PGS') >= 0) fmt = 'PGS';
+      else if (cid.indexOf('VobSub') >= 0) fmt = 'VobSub';
+      else fmt = t['Format'] || '';
+      if (fmt === 'SubRip') fmt = 'SRT';
+      var title = t['Title'] || '';
+      return lang + (fmt ? ' ' + fmt : '') + (title && title !== lang ? ' (' + title + ')' : '');
+    }).filter(Boolean).join(', ');
+    duration = gKv['Duration'] || '';
   }
-  var pf = {};
-  if (typeof parseFileName === 'function') { try { pf = parseFileName(name) || {}; } catch (e) { pf = {}; } }
-  if (!res) res = pf.quality || '';
-  if (!codec) codec = pf.codec || '';
-  return { res: res, codec: codec, audio: audio, size: String((f && f.size) || '').trim(), source: pf.source || '' };
+  if (!video) {
+    var pf = {};
+    if (typeof parseFileName === 'function') { try { pf = parseFileName(name) || {}; } catch (e) { pf = {}; } }
+    var parts = [];
+    if (pf.codec) parts.push(pf.codec);
+    if (pf.quality) parts.push(pf.quality);
+    video = parts.join(' ');
+  }
+  return { video: video, audio: audio, subs: subs, duration: duration };
 }
 
 function updateRichPreview() {
@@ -8897,7 +8990,7 @@ function updateRichPreview() {
     if (d.meta_genres) metaParts.push('🎭 ' + d.meta_genres);
     if (metaParts.length) { html += '<div style="margin-bottom: 8px; color: var(--text-muted);">' + richEsc(metaParts.join(' • ')) + '</div>'; metaShown = true; }
   }
-  if (d.show_tagline && d.meta_tagline) { html += '<div style="text-align: center; font-style: italic; margin: 0 0 8px 0; color: var(--text-muted);">“' + richEsc(d.meta_tagline) + '”</div>'; tagShown = true; }
+  if (d.show_tagline && d.meta_tagline) { html += '<details style="margin: 0 0 8px 0;"><summary style="cursor: pointer; color: var(--text-muted); font-size: 0.8rem;">💬 Tagline (klik untuk membuka)</summary><div style="text-align: center; font-style: italic; margin-top: 6px; color: var(--text-muted);">“' + richEsc(d.meta_tagline) + '”</div></details>'; tagShown = true; }
   if (d.synopsis) html += '<details style="margin: 0 0 8px 0;"><summary style="cursor: pointer; color: #38bdf8;">Sinopsis (klik untuk membuka)</summary><blockquote style="border-left: 3px solid #38bdf8; margin: 6px 0 0 0; padding: 5px 10px; background: rgba(56,189,248,0.07); border-radius: 0 8px 8px 0; white-space: pre-wrap;">' + richEsc(d.synopsis) + '</blockquote></details><hr style="border: none; border-top: 1px solid rgba(255,255,255,0.15); margin: 10px 0;">';
   if (d.note) html += '<div style="margin-bottom: 8px; white-space: pre-wrap;">' + richEsc(d.note) + '</div>';
   var chars = (d.title + d.synopsis + d.note + d.audio + d.subs + (d.global_shots_caption || '')).length + (metaShown ? metaParts.join(' • ').length : 0) + (tagShown ? d.meta_tagline.length : 0);
@@ -8908,19 +9001,6 @@ function updateRichPreview() {
     if (d.global_shots_caption) html += '<div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 6px; white-space: pre-wrap;">' + richEsc(d.global_shots_caption) + '</div>';
     html += '</details>';
     blocks += 1;
-  }
-  if (d.files.length <= 8) {
-    var specRows = d.files.map(function(f) { return richFileSpecs(f); });
-    var hasSpecs = specRows.some(function(r) { return r.res || r.codec; });
-    if (hasSpecs) {
-      html += '<table style="width: 100%; border-collapse: collapse; font-size: 0.78rem; margin: 8px 0;">';
-      html += '<tr>' + ['Resolusi', 'Codec', 'Audio', 'Ukuran', 'Sumber'].map(function(t) { return '<th style="border: 1px solid rgba(255,255,255,0.2); padding: 4px 6px; text-align: left; background: rgba(255,255,255,0.06);">' + t + '</th>'; }).join('') + '</tr>';
-      specRows.forEach(function(r) {
-        html += '<tr>' + [r.res || '-', r.codec || '-', r.audio || '-', r.size || '-', r.source || '-'].map(function(t) { return '<td style="border: 1px solid rgba(255,255,255,0.2); padding: 4px 6px;">' + richEsc(t) + '</td>'; }).join('') + '</tr>';
-      });
-      html += '</table>';
-      blocks += 1;
-    }
   }
   d.files.forEach(function(f, i) {
     var prevF = i > 0 ? d.files[i - 1] : null;
@@ -8941,6 +9021,17 @@ function updateRichPreview() {
         blocks += 1;
       }
     }
+    if (d.show_specs) {
+      var sp = richFileSpecs(f);
+      if (sp.video || sp.audio || sp.subs || sp.duration) {
+        html += '<div style="font-size: 0.78rem; color: var(--text-muted); margin: 8px 0 2px 0;">SPECS</div>';
+        html += '<table style="width: 100%; border-collapse: collapse; font-size: 0.78rem; margin-bottom: 6px;">';
+        html += '<tr>' + ['Video', 'Audio', 'Subtitle', 'Durasi'].map(function(t) { return '<th style="border: 1px solid rgba(255,255,255,0.2); padding: 4px 6px; text-align: left; background: rgba(255,255,255,0.06);">' + t + '</th>'; }).join('') + '</tr>';
+        html += '<tr>' + [sp.video || '-', sp.audio || '-', sp.subs || '-', sp.duration || '-'].map(function(t) { return '<td style="border: 1px solid rgba(255,255,255,0.2); padding: 4px 6px;">' + richEsc(t) + '</td>'; }).join('') + '</tr>';
+        html += '</table>';
+        blocks += 1;
+      }
+    }
     var miShow = f.mediainfo ? (summarizeMediaInfoText(f.mediainfo.slice(0, 24000), f.name) || f.mediainfo.slice(0, 20000)) : '';
     chars += f.name.length + f.size.length + miShow.length + (f.shots_caption || '').length;
     if (f.shots.length) {
@@ -8955,7 +9046,9 @@ function updateRichPreview() {
       blocks += 1;
     }
   });
-  if (d.audio || d.subs) { html += '<hr style="border: none; border-top: 1px solid rgba(255,255,255,0.15); margin: 10px 0;"><blockquote style="border-left: 3px solid #38bdf8; margin: 0 0 8px 0; padding: 5px 10px; background: rgba(56,189,248,0.07); border-radius: 0 8px 8px 0;">'; if (d.audio) html += '<div>🔊 Audio: ' + richEsc(d.audio) + '</div>'; if (d.subs) html += '<div>💬 Subtitle: ' + richEsc(d.subs) + '</div>'; html += '</blockquote>'; }
+  var lastFile = d.files.length ? d.files[d.files.length - 1] : null;
+  var lastDetails = !!(lastFile && (lastFile.shots.length || lastFile.mediainfo));
+  if (d.audio || d.subs) { html += (lastDetails ? '' : '<hr style="border: none; border-top: 1px solid rgba(255,255,255,0.15); margin: 10px 0;">') + '<blockquote style="border-left: 3px solid #38bdf8; margin: 0 0 8px 0; padding: 5px 10px; background: rgba(56,189,248,0.07); border-radius: 0 8px 8px 0;">'; if (d.audio) html += '<div>🔊 Audio: ' + richEsc(d.audio) + '</div>'; if (d.subs) html += '<div>💬 Subtitle: ' + richEsc(d.subs) + '</div>'; html += '</blockquote>'; }
   var joinBtns = [];
   if ((d.join_channel || '').indexOf('http://') === 0 || (d.join_channel || '').indexOf('https://') === 0) joinBtns.push('<a href="' + richEsc(d.join_channel) + '" target="_blank" style="display: inline-block; padding: 6px 18px; margin: 2px 4px; border-radius: 999px; background: rgba(56,189,248,0.2); border: 1px solid rgba(56,189,248,0.5); color: #38bdf8; font-weight: 700; text-decoration: none;">Join Channel</a>');
   if ((d.join_group || '').indexOf('http://') === 0 || (d.join_group || '').indexOf('https://') === 0) joinBtns.push('<a href="' + richEsc(d.join_group) + '" target="_blank" style="display: inline-block; padding: 6px 18px; margin: 2px 4px; border-radius: 999px; background: rgba(56,189,248,0.2); border: 1px solid rgba(56,189,248,0.5); color: #38bdf8; font-weight: 700; text-decoration: none;">Join Group</a>');
@@ -12480,6 +12573,9 @@ function adminConsoleUI() {
         <div style="margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center;">
           <label style="font-size: 0.82rem; font-weight: 700; color: #38bdf8;">📁 File dalam Rilisan</label>
           <button type="button" class="nav-btn" style="font-size: 0.74rem; padding: 4px 12px; background: rgba(56,189,248,0.15); border-color: rgba(56,189,248,0.4); color: #38bdf8; font-weight: 600;" onclick="addRichFileRow()">+ Tambah File</button>
+        </div>
+        <div style="margin-bottom: 10px; font-size: 0.76rem; color: var(--text-muted);">
+          <label style="display: flex; gap: 4px; align-items: center; cursor: pointer;"><input type="checkbox" id="richShowSpecs" style="accent-color: #38bdf8;" onchange="updateRichPreview()"> Tampilkan SPECS (tabel spek per file, di bawah link download)</label>
         </div>
         <div id="richFilesContainer"></div>
         <p style="font-size: 0.72rem; color: var(--text-dim); margin-bottom: 14px;">Link download: satu per baris, format <b>Label | URL</b> (mis. <i>HaruDrive | https://...</i>). SHOTS: satu URL gambar per baris — atau pakai tombol 📤 Upload Foto ke Telegram di tiap file (bisa pilih banyak foto sekaligus). MEDIAINFO: tempel teks MediaInfo file itu.</p>
