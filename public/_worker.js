@@ -1828,7 +1828,7 @@ export default {
       const tagline = String(body.meta_tagline || '').trim();
       if (body.show_tagline !== false && tagline) blocks.push({ type: 'details', summary: '💬 Tagline', is_open: false, blocks: [{ type: 'pullquote', text: tagline }] });
       const synopsis = String(body.synopsis || '').trim();
-      if (synopsis) { blocks.push({ type: 'details', summary: '📖 Sinopsis', is_open: false, blocks: [para(synopsis)] }); blocks.push({ type: 'divider' }); }
+      if (synopsis) { blocks.push({ type: 'details', summary: '📖 Sinopsis', is_open: false, blocks: [para(synopsis)] }); }
       const note = String(body.note || '').trim();
       if (note) blocks.push(para(note));
       const audio = String(body.audio || '').trim();
@@ -8998,10 +8998,10 @@ function updateRichPreview() {
     if (metaParts.length) { html += '<div style="margin-bottom: 8px; color: var(--text-muted);">' + richEsc(metaParts.join(' • ')) + '</div>'; metaShown = true; }
   }
   if (d.show_tagline && d.meta_tagline) { html += '<details style="margin: 0 0 8px 0;"><summary style="cursor: pointer; color: var(--text-muted); font-size: 0.8rem;">💬 Tagline (klik untuk membuka)</summary><div style="text-align: center; font-style: italic; margin-top: 6px; color: var(--text-muted);">“' + richEsc(d.meta_tagline) + '”</div></details>'; tagShown = true; }
-  if (d.synopsis) html += '<details style="margin: 0 0 8px 0;"><summary style="cursor: pointer; color: #38bdf8;">Sinopsis (klik untuk membuka)</summary><blockquote style="border-left: 3px solid #38bdf8; margin: 6px 0 0 0; padding: 5px 10px; background: rgba(56,189,248,0.07); border-radius: 0 8px 8px 0; white-space: pre-wrap;">' + richEsc(d.synopsis) + '</blockquote></details><hr style="border: none; border-top: 1px solid rgba(255,255,255,0.15); margin: 10px 0;">';
+  if (d.synopsis) html += '<details style="margin: 0 0 8px 0;"><summary style="cursor: pointer; color: #38bdf8;">Sinopsis (klik untuk membuka)</summary><blockquote style="border-left: 3px solid #38bdf8; margin: 6px 0 0 0; padding: 5px 10px; background: rgba(56,189,248,0.07); border-radius: 0 8px 8px 0; white-space: pre-wrap;">' + richEsc(d.synopsis) + '</blockquote></details>';
   if (d.note) html += '<div style="margin-bottom: 8px; white-space: pre-wrap;">' + richEsc(d.note) + '</div>';
   var chars = (d.title + d.synopsis + d.note + d.audio + d.subs + (d.global_shots_caption || '')).length + (metaShown ? metaParts.join(' • ').length : 0) + (tagShown ? d.meta_tagline.length : 0);
-  var blocks = (d.header_url ? 1 : 0) + 1 + (d.synopsis ? 2 : 0) + (d.note ? 1 : 0) + ((d.audio || d.subs) ? 2 : 0) + (d.hashtags ? 1 : 0) + (metaShown ? 1 : 0) + (tagShown ? 1 : 0);
+  var blocks = (d.header_url ? 1 : 0) + 1 + (d.synopsis ? 1 : 0) + (d.note ? 1 : 0) + ((d.audio || d.subs) ? 2 : 0) + (d.hashtags ? 1 : 0) + (metaShown ? 1 : 0) + (tagShown ? 1 : 0);
   if (d.global_shots.length) {
     html += '<details style="margin-top: 6px;"><summary style="cursor: pointer; color: #aebbc7; font-size: 0.8rem; letter-spacing: 0.05em;">SHOTS</summary>';
     d.global_shots.forEach(function(u) { html += richShotImg(u); });
@@ -9620,11 +9620,11 @@ async function getOrScanMediaInfoForFile(fileOrUrl) {
       let j = d.mediainfo_json;
       if (typeof j === 'string') { try { j = JSON.parse(j); } catch(e){} }
       let raw = d.mediainfo_raw || d.raw || '';
-      if (j && (j.video?.length || j.audio?.length) && (j._v >= 2 || j._pasted)) {
+      if (j && (j.video?.length || j.audio?.length) && (j._v >= 3 || j._pasted)) {
         if (!raw) raw = buildMediaInfoRawText(j);
         if (typeof mediaInfoMemoryCache !== 'undefined') mediaInfoMemoryCache.set(fileObj.id, j);
         return { json: j, raw: raw, file: fileObj };
-      } else if (raw && j && (j._v >= 2 || j._pasted)) {
+      } else if (raw && j && (j._v >= 3 || j._pasted)) {
         return { json: j || generateSmartInitialMediaInfo(fileObj), raw: raw, file: fileObj };
       }
     }
@@ -10861,6 +10861,12 @@ function parseMediaInfoTextReport(text, file) {
     _raw: text
   };
 }
+function formatMkvDuration(totalSec) {
+  var s = Math.round(totalSec);
+  if (s >= 3600) { var h = Math.floor(s / 3600); var m = Math.floor((s % 3600) / 60); return h + ' h ' + m + ' min'; }
+  if (s >= 60) { var mm = Math.floor(s / 60); var ss = s % 60; return mm + ' min ' + ss + ' s'; }
+  return s + ' s';
+}
 function parseMatroskaEBML(bytes, file) {
   let pos = 0;
   const len = bytes.length;
@@ -11055,14 +11061,18 @@ function parseMatroskaEBML(bytes, file) {
         if (segId === null || segSize === null) break;
         const subEnd = pos + segSize;
         if (segId === 0x1549A966) {
+          let tsScale = 1000000, segDur = 0;
           while (pos < subEnd && pos < len) {
             const infoId = readId(); const infoSize = readSize();
             if (infoId === null || infoSize === null) break;
             if (infoId === 0x4D80) result.general.writingApp = readUtf8(infoSize);
             else if (infoId === 0x5741) result.general.writingLib = readUtf8(infoSize);
             else if (infoId === 0x7BA9) result.general.title = readUtf8(infoSize);
+            else if (infoId === 0x2AD7B1) tsScale = readUint(infoSize) || 1000000;
+            else if (infoId === 0x4489) segDur = readFloat(infoSize);
             else pos += infoSize;
           }
+          if (segDur > 0) result.general.duration = formatMkvDuration(segDur * tsScale / 1000000000);
         } else if (segId === 0x1654AE6B) { parseTracksElement(subEnd); break; }
         else { pos = subEnd; }
       }
@@ -11121,7 +11131,7 @@ function parseMatroskaEBML(bytes, file) {
     }
   }
 
-  result._v = 2;
+  result._v = 3;
   return result;
 }
 function parseMp4Boxes(bytes, file) {
@@ -11216,7 +11226,7 @@ function parseMp4Boxes(bytes, file) {
     }
     pos += boxSize;
   }
-  if (result.video.length || result.audio.length) { result._v = 2; return result; }
+  if (result.video.length || result.audio.length) { result._v = 3; return result; }
   return null;
 }
 function buildMediaInfoRawText(data) {
@@ -11394,7 +11404,7 @@ async function startBinaryMediaInfoScan(force) {
   // Layer 1: RAM cache
   if (!force && mediaInfoMemoryCache.has(scanTargetId)) {
     const cached = mediaInfoMemoryCache.get(scanTargetId);
-    if (cached && (cached._v >= 2 || cached._pasted)) {
+    if (cached && (cached._v >= 3 || cached._pasted)) {
       if (activeMediaInfoFileId === scanTargetId) { renderMediaInfoCards(cached); if (scanBadge) { scanBadge.style.background='rgba(16,185,129,0.15)'; scanBadge.style.color='#6ee7b7'; scanBadge.textContent='Cached'; } }
       return;
     }
@@ -11408,7 +11418,7 @@ async function startBinaryMediaInfoScan(force) {
         if (j.cached && j.mediainfo_json) {
           let parsed = j.mediainfo_json;
           if (typeof parsed === 'string') { try { parsed = JSON.parse(parsed); } catch(e) {} }
-          if (parsed && (parsed.video || parsed.audio) && (parsed._v >= 2 || parsed._pasted)) {
+          if (parsed && (parsed.video || parsed.audio) && (parsed._v >= 3 || parsed._pasted)) {
             mediaInfoMemoryCache.set(scanTargetId, parsed);
             if (activeMediaInfoFileId === scanTargetId) { renderMediaInfoCards(parsed); if (scanBadge) { scanBadge.style.background='rgba(16,185,129,0.15)'; scanBadge.style.color='#6ee7b7'; scanBadge.textContent='D1 Cached'; } }
             return;
