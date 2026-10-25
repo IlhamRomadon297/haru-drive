@@ -1675,6 +1675,12 @@ export default {
       const subs = String(body.subs || '').trim();
       if (subs) blocks.push(para('💬 Subtitle: ' + subs));
       if (audio || subs) blocks.push({ type: 'divider' });
+      const globalShots = Array.isArray(body.global_shots) ? body.global_shots.map(x => String(x || '').trim()).filter(isHttp) : [];
+      if (globalShots.length === 1) {
+        blocks.push({ type: 'details', summary: 'SHOTS', is_open: false, blocks: [photoBlock(globalShots[0])] });
+      } else if (globalShots.length > 1) {
+        blocks.push({ type: 'details', summary: 'SHOTS', is_open: false, blocks: [{ type: 'collage', blocks: globalShots.slice(0, 10).map(photoBlock) }] });
+      }
       let prevFileDetails = false;
       files.forEach((f, idx) => {
         if (idx > 0 && !prevFileDetails) blocks.push({ type: 'divider' });
@@ -1821,7 +1827,7 @@ export default {
         try {
           const db = await richDraftsTable();
           if (db) {
-            const form = { title: String(body.title || ''), header_url: String(body.header_url || ''), synopsis: String(body.synopsis || ''), note: String(body.note || ''), audio: String(body.audio || ''), subs: String(body.subs || ''), hashtags: String(body.hashtags || ''), footer_text: String(body.footer_text || ''), channel_id: String(body.channel_id || ''), topic_id: String(body.topic_id || ''), files: Array.isArray(body.files) ? body.files : [] };
+            const form = { title: String(body.title || ''), header_url: String(body.header_url || ''), synopsis: String(body.synopsis || ''), note: String(body.note || ''), audio: String(body.audio || ''), subs: String(body.subs || ''), hashtags: String(body.hashtags || ''), footer_text: String(body.footer_text || ''), channel_id: String(body.channel_id || ''), topic_id: String(body.topic_id || ''), global_shots: Array.isArray(body.global_shots) ? body.global_shots : [], files: Array.isArray(body.files) ? body.files : [] };
             const existing = draftId ? await richDraftGet(db, draftId) : null;
             const mergedTargets = (existing && Array.isArray(existing.sent_targets) ? existing.sent_targets : []).concat(sentTargets);
             draftId = await richDraftUpsert(db, { id: draftId, title: form.title, payload: { form: form, blocks: blocks }, status: 'sent', sentTargets: mergedTargets });
@@ -7982,6 +7988,7 @@ function applyRichDraftForm(form) {
   set('richNote', form.note);
   set('richAudio', form.audio);
   set('richSubs', form.subs);
+  set('richGlobalShots', (form.global_shots || []).join(nl));
   set('richHashtags', form.hashtags);
   set('richChannelId', form.channel_id);
   set('richTopicId', form.topic_id);
@@ -8271,6 +8278,47 @@ async function handleRichShotFiles(i, input) {
   updateRichPreview();
 }
 
+function pickRichGlobalShots() {
+  var inp = document.getElementById('richGlobalShotInput');
+  if (inp) inp.click();
+}
+
+async function handleRichGlobalShotFiles(input) {
+  var files = input.files ? Array.prototype.slice.call(input.files) : [];
+  input.value = '';
+  if (!files.length) return;
+  var btn = document.getElementById('richGlobalShotBtn');
+  var pin = (typeof richDraftPin === 'function') ? richDraftPin() : '';
+  var okUrls = [];
+  var failed = [];
+  if (btn) btn.disabled = true;
+  for (var k = 0; k < files.length; k++) {
+    var st = document.getElementById('richGlobalShotStatus');
+    if (st) st.textContent = 'Upload ' + (k + 1) + '/' + files.length + ': ' + files[k].name + '…';
+    try {
+      var fd = new FormData();
+      fd.append('admin_pin', pin);
+      fd.append('file', files[k]);
+      var res = await fetch('/api/admin/upload-shot', { method: 'POST', body: fd });
+      var data = await res.json().catch(function() { return {}; });
+      if (!res.ok || !data.url) throw new Error(data.error || ('HTTP ' + res.status));
+      okUrls.push(data.url);
+    } catch (e) { failed.push(files[k].name + ' (' + e.message + ')'); }
+  }
+  if (btn) btn.disabled = false;
+  if (okUrls.length) {
+    var ta = document.getElementById('richGlobalShots');
+    if (ta) {
+      var cur = ta.value.trim();
+      ta.value = (cur ? cur + String.fromCharCode(10) : '') + okUrls.join(String.fromCharCode(10));
+    }
+  }
+  var st2 = document.getElementById('richGlobalShotStatus');
+  if (st2) st2.textContent = failed.length ? ('Gagal: ' + failed.length + ' foto') : (okUrls.length ? ('✓ ' + okUrls.length + ' foto terupload ke Catbox') : '');
+  if (failed.length) alert('Sebagian foto gagal diupload ke Catbox:' + String.fromCharCode(10) + failed.join(String.fromCharCode(10)));
+  updateRichPreview();
+}
+
 function renderRichFileRows() {
   var c = document.getElementById('richFilesContainer');
   if (!c) return;
@@ -8329,6 +8377,7 @@ function collectRichPayload() {
     note: (document.getElementById('richNote').value || '').trim(),
     audio: (document.getElementById('richAudio').value || '').trim(),
     subs: (document.getElementById('richSubs').value || '').trim(),
+    global_shots: parseRichLines(document.getElementById('richGlobalShots').value || '').filter(function(u) { return u.indexOf('http://') === 0 || u.indexOf('https://') === 0; }),
     hashtags: (document.getElementById('richHashtags').value || '').trim(),
     channel_id: (document.getElementById('richChannelId').value || '').trim(),
     topic_id: (document.getElementById('richTopicId').value || '').trim(),
@@ -8455,6 +8504,12 @@ function updateRichPreview() {
   if (d.audio || d.subs) html += '<hr style="border: none; border-top: 1px solid rgba(255,255,255,0.15); margin: 10px 0;">';
   var chars = (d.title + d.synopsis + d.note + d.audio + d.subs).length;
   var blocks = (d.header_url ? 1 : 0) + 1 + (d.synopsis ? 2 : 0) + (d.note ? 1 : 0) + (d.audio ? 1 : 0) + (d.subs ? 1 : 0) + ((d.audio || d.subs) ? 1 : 0) + (d.hashtags ? 1 : 0);
+  if (d.global_shots.length) {
+    html += '<details style="margin-top: 6px;"><summary style="cursor: pointer; color: #aebbc7; font-size: 0.8rem; letter-spacing: 0.05em;">SHOTS</summary>';
+    d.global_shots.forEach(function(u) { html += '<img src="' + richEsc(u) + '" style="width: 100%; border-radius: 8px; margin-top: 6px;">'; });
+    html += '</details>';
+    blocks += 1;
+  }
   d.files.forEach(function(f, i) {
     var prevF = i > 0 ? d.files[i - 1] : null;
     if (prevF && !(prevF.shots.length || prevF.mediainfo)) { html += '<hr style="border: none; border-top: 1px solid rgba(255,255,255,0.15); margin: 10px 0;">'; blocks += 1; }
@@ -11955,6 +12010,16 @@ function adminConsoleUI() {
           <div>
             <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">💬 Subtitle</label>
             <input type="text" id="richSubs" class="form-input-pro" placeholder="Indonesia, English" style="margin-top: 4px;" oninput="updateRichPreview()">
+          </div>
+        </div>
+
+        <div style="margin-bottom: 12px;">
+          <label style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">📸 SHOTS Global (opsional, tampil sekali untuk seluruh rilisan)</label>
+          <textarea id="richGlobalShots" class="form-input-pro" rows="2" placeholder="URL gambar screenshot, satu per baris — tampil sekali di atas daftar file (cocok buat film beda codec/resolusi)" style="margin-top: 4px; resize: vertical;" oninput="updateRichPreview()"></textarea>
+          <div style="display: flex; gap: 8px; align-items: center; margin-top: 6px; flex-wrap: wrap;">
+            <button type="button" class="nav-btn" id="richGlobalShotBtn" style="font-size: 0.72rem; padding: 4px 12px; background: rgba(56,189,248,0.15); border-color: rgba(56,189,248,0.4); color: #38bdf8; font-weight: 600;" onclick="pickRichGlobalShots()">📤 Upload Foto ke Catbox</button>
+            <span id="richGlobalShotStatus" style="font-size: 0.7rem; color: var(--text-dim);"></span>
+            <input type="file" id="richGlobalShotInput" accept="image/*" multiple style="display: none;" onchange="handleRichGlobalShotFiles(this)">
           </div>
         </div>
 
