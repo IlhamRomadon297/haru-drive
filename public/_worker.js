@@ -1653,6 +1653,30 @@ export default {
       return out.join('\n');
     }
 
+    // MEDIAINFO gaya DUDU: tanpa codeblock — header besar + baris biasa (wrap),
+    // jadi tidak melebar seperti <pre>. Baris ringkasan (VIDEO/AUDIO/SUBTITLES)
+    // jadi heading; fallback teks mentah memetakan header section MediaInfo.
+    function mediaInfoBlocks(miShort, miRaw) {
+      var src = miShort || miRaw || '';
+      var lines = String(src).split(String.fromCharCode(10));
+      var blocks = [];
+      var headSet = { 'VIDEO': 1, 'AUDIO': 1, 'SUBTITLES': 1 };
+      function secKind(t) {
+        var b = t.split(' #')[0];
+        if (b === 'General' || b === 'Video' || b === 'Audio' || b === 'Text' || b === 'Menu' || b === 'Image' || b === 'Other') return b;
+        return null;
+      }
+      for (var i = 0; i < lines.length; i++) {
+        var trim = lines[i].trim();
+        if (!trim) continue;
+        if (headSet[trim]) { blocks.push({ type: 'heading', size: 3, text: trim }); continue; }
+        var k = secKind(trim);
+        if (k) { blocks.push({ type: 'heading', size: 3, text: k === 'Text' ? 'SUBTITLES' : k.toUpperCase() }); continue; }
+        blocks.push({ type: 'paragraph', text: trim });
+      }
+      return blocks;
+    }
+
     function specNormName(name) {
       return ' ' + String(name || '').replace(/[^a-zA-Z0-9]/g, ' ').toUpperCase() + ' ';
     }
@@ -1808,7 +1832,7 @@ export default {
       const bold = (text) => ({ type: 'bold', text: String(text) });
       const urlT = (text, u) => ({ type: 'url', text: String(text), url: String(u) });
       const photoBlock = (u) => ({ type: 'photo', photo: { type: 'photo', media: String(u).trim() } });
-      const shotCaption = (cap) => { const t = String(cap || '').trim(); return t ? { caption: { text: t } } : {}; };
+      const shotCaption = (cap) => { const t = String(cap || '').trim(); if (!t) return {}; if (t.indexOf('🎬') === 0) return { caption: { text: t } }; return { caption: { text: '🎬 Screenshots' + String.fromCharCode(10) + t } }; };
       const blocks = [];
       const headerUrl = String(body.header_url || '').trim();
       if (isHttp(headerUrl)) blocks.push(photoBlock(headerUrl));
@@ -1873,7 +1897,7 @@ export default {
         if (body.show_specs === true) {
           const sp = specsFromFile(f);
           if (sp.video || sp.audio || sp.subs || sp.duration) {
-            fileBlocks.push({ type: 'details', summary: 'SPECS', is_open: false, blocks: [{ type: 'table', is_bordered: true, cells: [
+            fileBlocks.push({ type: 'details', summary: 'SPECS', is_open: false, blocks: [{ type: 'table', is_bordered: true, is_striped: true, cells: [
               [{ text: sp.filename || fname, colspan: 4, is_header: true }],
               [{ text: 'Video', is_header: true }, { text: 'Audio', is_header: true }, { text: 'Subtitle', is_header: true }, { text: 'Durasi', is_header: true }],
               [{ text: sp.video || '-' }, { text: sp.audio || '-' }, { text: sp.subs || '-' }, { text: sp.duration || '-' }]
@@ -1890,7 +1914,7 @@ export default {
         const mi = String((f && f.mediainfo) || '').trim();
         if (mi) {
           const miShort = summarizeMediaInfoText(mi.slice(0, 24000), fname);
-          fileBlocks.push({ type: 'details', summary: 'MEDIAINFO', is_open: false, blocks: [{ type: 'pre', text: miShort || mi.slice(0, 20000) }] });
+          fileBlocks.push({ type: 'details', summary: 'MEDIAINFO', is_open: false, blocks: mediaInfoBlocks(miShort, mi.slice(0, 20000)) });
         }
         blocks.push({ type: 'blockquote', blocks: fileBlocks });
         prevFileDetails = shots.length > 0 || !!mi;
@@ -1909,6 +1933,7 @@ export default {
       if (isHttp(joinGroup)) joinBtns.push({ text: 'Join Group', url: joinGroup, style: 'primary' });
       if (joinBtns.length) blocks.push({ type: 'buttons', buttons: joinBtns, align: 'center' });
       const hashtags = String(body.hashtags || '').trim();
+      if (hashtags) blocks.push({ type: 'pullquote', text: '────────────' });
       if (hashtags) blocks.push(para(hashtags));
       if (blocks.length > 500) {
         return { error: 'Terlalu banyak blok (' + blocks.length + ' > 500). Kurangi jumlah file/gambar.', status: 400 };
@@ -8089,6 +8114,26 @@ window._richFiles = [];
 function richEsc(t) {
   return String(t || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
+function richShotCaptionText(t) {
+  var s = String(t || '').trim();
+  if (!s) return '';
+  if (s.indexOf('🎬') === 0) return s;
+  return '🎬 Screenshots' + String.fromCharCode(10) + s;
+}
+function mediaInfoPreviewHtml(t) {
+  var lines = String(t || '').split(String.fromCharCode(10));
+  var out = '';
+  var i, trim, base, head;
+  for (i = 0; i < lines.length; i++) {
+    trim = lines[i].trim();
+    if (!trim) continue;
+    if (trim === 'VIDEO' || trim === 'AUDIO' || trim === 'SUBTITLES') { out += '<div style="font-weight: 800; font-size: 0.95rem; margin: 8px 0 2px 0;">' + richEsc(trim) + '</div>'; continue; }
+    base = trim.split(' #')[0];
+    if (base === 'General' || base === 'Video' || base === 'Audio' || base === 'Text' || base === 'Menu' || base === 'Image' || base === 'Other') { head = base === 'Text' ? 'SUBTITLES' : base.toUpperCase(); out += '<div style="font-weight: 800; font-size: 0.95rem; margin: 8px 0 2px 0;">' + richEsc(head) + '</div>'; continue; }
+    out += '<div>' + richEsc(trim) + '</div>';
+  }
+  return out;
+}
 
 function loadRichQueue() { try { var q = JSON.parse(localStorage.getItem('harudrive_rich_queue') || '[]'); return Array.isArray(q) ? q : []; } catch (e) { return []; } }
 function saveRichQueue(q) { try { localStorage.setItem('harudrive_rich_queue', JSON.stringify(q)); } catch (e) {} refreshRichQueueNote(); }
@@ -8703,7 +8748,7 @@ function renderRichFileRows() {
     html += '<input type="text" class="form-input-pro" placeholder="Ukuran, mis. 1.11 GB" value="' + richEsc(f.size) + '" oninput="setRichField(' + i + ', 1, this.value)" style="margin-bottom: 8px;">';
     html += '<textarea class="form-input-pro" rows="2" placeholder="Link download, satu per baris: Label | URL" oninput="setRichField(' + i + ', 2, this.value)" style="margin-bottom: 8px; resize: vertical;">' + richEsc(f.links) + '</textarea>';
     html += '<textarea class="form-input-pro" rows="2" placeholder="SHOTS: URL gambar screenshot, satu per baris" oninput="setRichField(' + i + ', 3, this.value)" style="margin-bottom: 8px; resize: vertical;">' + richEsc(f.shots) + '</textarea>';
-    html += '<input type="text" class="form-input-pro" placeholder="Caption SHOTS (opsional), mis. nama file sumber screenshot" value="' + richEsc(f.shots_caption || '') + '" oninput="setRichField(' + i + ', 5, this.value)" style="margin-bottom: 8px;">';
+    html += '<textarea class="form-input-pro" rows="2" placeholder="Caption SHOTS (opsional): ketik nama file sumber screenshot — prefix 🎬 Screenshots otomatis" oninput="setRichField(' + i + ', 5, this.value)" style="margin-bottom: 8px; resize: vertical;">' + richEsc(f.shots_caption || '') + '</textarea>';
     html += '<div style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap;">';
     html += '<button type="button" class="nav-btn" id="richShotBtn' + i + '" style="font-size: 0.72rem; padding: 4px 12px; background: rgba(56,189,248,0.15); border-color: rgba(56,189,248,0.4); color: #38bdf8; font-weight: 600;" onclick="pickRichShots(' + i + ')">📤 Upload Foto ke Telegram</button>';
     html += '<span id="richShotStatus' + i + '" style="font-size: 0.7rem; color: var(--text-dim);"></span>';
@@ -9002,12 +9047,12 @@ function updateRichPreview() {
   if (d.show_tagline && d.meta_tagline) { html += '<details style="margin: 0 0 8px 0;"><summary style="cursor: pointer; color: var(--text-muted); font-size: 0.8rem;">💬 Tagline (klik untuk membuka)</summary><div style="text-align: center; font-style: italic; margin-top: 6px; color: var(--text-muted);">“' + richEsc(d.meta_tagline) + '”</div></details>'; tagShown = true; }
   if (d.synopsis) html += '<details style="margin: 0 0 8px 0;"><summary style="cursor: pointer; color: #38bdf8;">Sinopsis (klik untuk membuka)</summary><blockquote style="border-left: 3px solid #38bdf8; margin: 6px 0 0 0; padding: 5px 10px; background: rgba(56,189,248,0.07); border-radius: 0 8px 8px 0; white-space: pre-wrap;">' + richEsc(d.synopsis) + '</blockquote></details>';
   if (d.note) html += '<div style="margin-bottom: 8px; white-space: pre-wrap;">' + richEsc(d.note) + '</div>';
-  var chars = (d.title + d.synopsis + d.note + d.audio + d.subs + (d.global_shots_caption || '')).length + (metaShown ? metaParts.join(' • ').length : 0) + (tagShown ? d.meta_tagline.length : 0);
+  var chars = (d.title + d.synopsis + d.note + d.audio + d.subs + richShotCaptionText(d.global_shots_caption)).length + (metaShown ? metaParts.join(' • ').length : 0) + (tagShown ? d.meta_tagline.length : 0);
   var blocks = (d.header_url ? 1 : 0) + 1 + (d.synopsis ? 1 : 0) + (d.note ? 1 : 0) + ((d.audio || d.subs) ? 2 : 0) + (d.hashtags ? 1 : 0) + (metaShown ? 1 : 0) + (tagShown ? 1 : 0);
   if (d.global_shots.length) {
     html += '<details style="margin-top: 6px;"><summary style="cursor: pointer; color: #aebbc7; font-size: 0.8rem; letter-spacing: 0.05em;">SHOTS</summary>';
     d.global_shots.forEach(function(u) { html += richShotImg(u); });
-    if (d.global_shots_caption) html += '<div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 6px; white-space: pre-wrap;">' + richEsc(d.global_shots_caption) + '</div>';
+    if (d.global_shots_caption) html += '<div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 6px; white-space: pre-wrap;">' + richEsc(richShotCaptionText(d.global_shots_caption)) + '</div>';
     html += '</details>';
     blocks += 1;
   }
@@ -9038,23 +9083,23 @@ function updateRichPreview() {
         html += '<table style="width: 100%; border-collapse: collapse; font-size: 0.78rem; margin-top: 6px;">';
         html += '<tr><th colspan="4" style="border: 1px solid rgba(255,255,255,0.2); padding: 4px 6px; text-align: left; background: rgba(255,255,255,0.06);">' + richEsc(sp.filename || f.name) + '</th></tr>';
         html += '<tr>' + ['Video', 'Audio', 'Subtitle', 'Durasi'].map(function(t) { return '<th style="border: 1px solid rgba(255,255,255,0.2); padding: 4px 6px; text-align: left; background: rgba(255,255,255,0.06);">' + t + '</th>'; }).join('') + '</tr>';
-        html += '<tr>' + [sp.video || '-', sp.audio || '-', sp.subs || '-', sp.duration || '-'].map(function(t) { return '<td style="border: 1px solid rgba(255,255,255,0.2); padding: 4px 6px;">' + richEsc(t) + '</td>'; }).join('') + '</tr>';
+        html += '<tr>' + [sp.video || '-', sp.audio || '-', sp.subs || '-', sp.duration || '-'].map(function(t) { return '<td style="border: 1px solid rgba(255,255,255,0.2); padding: 4px 6px; background: rgba(255,255,255,0.05);">' + richEsc(t) + '</td>'; }).join('') + '</tr>';
         html += '</table></details>';
         blocks += 1;
       }
     }
     var miShow = f.mediainfo ? (summarizeMediaInfoText(f.mediainfo.slice(0, 24000), f.name) || f.mediainfo.slice(0, 20000)) : '';
-    chars += f.name.length + f.size.length + miShow.length + (f.shots_caption || '').length;
+    chars += f.name.length + f.size.length + miShow.length + richShotCaptionText(f.shots_caption).length;
     if (f.shots.length) {
       html += '<details style="margin-top: 6px;"><summary style="cursor: pointer; color: #aebbc7; font-size: 0.8rem; letter-spacing: 0.05em;">SHOTS</summary>';
       f.shots.forEach(function(u) { html += richShotImg(u); });
-      if (f.shots_caption) html += '<div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 6px; white-space: pre-wrap;">' + richEsc(f.shots_caption) + '</div>';
+      if (f.shots_caption) html += '<div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 6px; white-space: pre-wrap;">' + richEsc(richShotCaptionText(f.shots_caption)) + '</div>';
       html += '</details>';
       blocks += 1;
     }
     if (miShow) {
-      html += '<details style="margin-top: 6px;"><summary style="cursor: pointer; color: #aebbc7; font-size: 0.8rem; letter-spacing: 0.05em;">MEDIAINFO</summary><pre style="white-space: pre-wrap; font-size: 0.72rem; background: rgba(0,0,0,0.3); padding: 8px; border-radius: 8px; margin-top: 6px;">' + richEsc(miShow) + '</pre></details>';
-      blocks += 1;
+      html += '<details style="margin-top: 6px;"><summary style="cursor: pointer; color: #aebbc7; font-size: 0.8rem; letter-spacing: 0.05em;">MEDIAINFO</summary><div style="font-size: 0.72rem; background: rgba(0,0,0,0.3); padding: 8px; border-radius: 8px; margin-top: 6px;">' + mediaInfoPreviewHtml(miShow) + '</div></details>';
+      blocks += 1 + miShow.split(String.fromCharCode(10)).filter(function(l) { return l.trim(); }).length;
     }
     html += '</blockquote>';
   });
@@ -9065,7 +9110,7 @@ function updateRichPreview() {
   if ((d.join_channel || '').indexOf('http://') === 0 || (d.join_channel || '').indexOf('https://') === 0) joinBtns.push('<a href="' + richEsc(d.join_channel) + '" target="_blank" style="display: inline-block; padding: 6px 18px; margin: 2px 4px; border-radius: 999px; background: rgba(56,189,248,0.2); border: 1px solid rgba(56,189,248,0.5); color: #38bdf8; font-weight: 700; text-decoration: none;">Join Channel</a>');
   if ((d.join_group || '').indexOf('http://') === 0 || (d.join_group || '').indexOf('https://') === 0) joinBtns.push('<a href="' + richEsc(d.join_group) + '" target="_blank" style="display: inline-block; padding: 6px 18px; margin: 2px 4px; border-radius: 999px; background: rgba(56,189,248,0.2); border: 1px solid rgba(56,189,248,0.5); color: #38bdf8; font-weight: 700; text-decoration: none;">Join Group</a>');
   if (joinBtns.length) { html += '<div style="text-align: center; margin: 10px 0;">' + joinBtns.join('') + '</div>'; blocks += 1; }
-  if (d.hashtags) html += '<div style="margin-top: 10px; color: #6ab3f3;">' + richEsc(d.hashtags) + '</div>';
+  if (d.hashtags) { html += '<div style="text-align: center; color: #aebbc7; margin: 8px 0 2px 0;">────────────</div>'; blocks += 1; html += '<div style="margin-top: 10px; color: #6ab3f3;">' + richEsc(d.hashtags) + '</div>'; }
   body.innerHTML = html || '<span style="color: #7f8b97;">Isi judul &amp; file untuk melihat preview...</span>';
   var counter = document.getElementById('richCounter');
   if (counter) counter.textContent = blocks + ' blok • ±' + chars + ' karakter teks (batas Telegram 500 blok / 32768 karakter)';
@@ -12589,7 +12634,7 @@ function adminConsoleUI() {
             <span id="richGlobalShotStatus" style="font-size: 0.7rem; color: var(--text-dim);"></span>
             <input type="file" id="richGlobalShotInput" accept="image/*" multiple style="display: none;" onchange="handleRichGlobalShotFiles(this)">
           </div>
-          <input type="text" id="richGlobalShotsCaption" class="form-input-pro" placeholder="Caption SHOTS Global (opsional), mis. nama file sumber screenshot" style="margin-top: 6px;" oninput="updateRichPreview()">
+          <textarea id="richGlobalShotsCaption" class="form-input-pro" rows="2" placeholder="Caption SHOTS Global (opsional): ketik nama file sumber screenshot — prefix 🎬 Screenshots otomatis" style="margin-top: 6px; resize: vertical;" oninput="updateRichPreview()"></textarea>
         </div>
 
         <div style="margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center;">
