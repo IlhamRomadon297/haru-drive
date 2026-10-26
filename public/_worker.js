@@ -8202,6 +8202,7 @@ function openRichReleaseModal() {
   if (!window._richFiles.length) addRichFileRow();
   refreshRichDraftUi();
   m.style.display = 'flex';
+  m.style.zIndex = '9999';
   updateRichHeaderPreview();
   updateRichPreview();
   refreshRichQueueNote();
@@ -8508,6 +8509,7 @@ function restoreRichRelease() {
   if (pill) pill.style.display = 'none';
   var m = document.getElementById('richReleaseModal');
   if (m) m.style.display = 'flex';
+  if (m) m.style.zIndex = '9999';
 }
 
 function toggleRichFullscreen() {
@@ -8578,7 +8580,65 @@ function richLangName(raw) {
     'nl': 'Dutch', 'nld': 'Dutch', 'dut': 'Dutch', 'dutch': 'Dutch',
     'tr': 'Turkish', 'tur': 'Turkish', 'turkish': 'Turkish',
     'pl': 'Polish', 'pol': 'Polish', 'polish': 'Polish',
-    'uk': 'Ukrainian', 'ukr': 'Ukrainian', 'ukrainian': 'Ukrainian'
+    'uk': 'Ukrainian', 'ukr': 'Ukrainian', 'ukrainian': 'Ukrainian',
+    'cs': 'Czech', 'ces': 'Czech', 'czech': 'Czech',
+    'da': 'Danish', 'dan': 'Danish', 'danish': 'Danish',
+    'el': 'Greek', 'ell': 'Greek', 'gre': 'Greek', 'greek': 'Greek',
+    'fi': 'Finnish', 'fin': 'Finnish', 'finnish': 'Finnish',
+    'fil': 'Filipino', 'filipino': 'Filipino',
+    'he': 'Hebrew', 'heb': 'Hebrew', 'hebrew': 'Hebrew', 'iw': 'Hebrew',
+    'hr': 'Croatian', 'hrv': 'Croatian', 'croatian': 'Croatian',
+    'hu': 'Hungarian', 'hun': 'Hungarian', 'hungarian': 'Hungarian',
+    'nb': 'Norwegian', 'nob': 'Norwegian', 'nn': 'Norwegian', 'nno': 'Norwegian', 'no': 'Norwegian', 'nor': 'Norwegian', 'norwegian': 'Norwegian',
+    'ro': 'Romanian', 'ron': 'Romanian', 'rum': 'Romanian', 'romanian': 'Romanian',
+    'sv': 'Swedish', 'swe': 'Swedish', 'swedish': 'Swedish',
+    'ta': 'Tamil', 'tam': 'Tamil', 'tamil': 'Tamil',
+    'te': 'Telugu', 'tel': 'Telugu', 'telugu': 'Telugu',
+    'af': 'Afrikaans', 'afr': 'Afrikaans', 'afrikaans': 'Afrikaans',
+    'sq': 'Albanian', 'sqi': 'Albanian', 'alb': 'Albanian', 'albanian': 'Albanian',
+    'hy': 'Armenian', 'hye': 'Armenian', 'armenian': 'Armenian',
+    'az': 'Azerbaijani', 'aze': 'Azerbaijani', 'azerbaijani': 'Azerbaijani',
+    'eu': 'Basque', 'eus': 'Basque', 'baq': 'Basque', 'basque': 'Basque',
+    'be': 'Belarusian', 'bel': 'Belarusian', 'belarusian': 'Belarusian',
+    'bn': 'Bengali', 'ben': 'Bengali', 'bengali': 'Bengali',
+    'bs': 'Bosnian', 'bos': 'Bosnian', 'bosnian': 'Bosnian',
+    'bg': 'Bulgarian', 'bul': 'Bulgarian', 'bulgarian': 'Bulgarian',
+    'ca': 'Catalan', 'cat': 'Catalan', 'catalan': 'Catalan',
+    'cy': 'Welsh', 'cym': 'Welsh', 'welsh': 'Welsh',
+    'eo': 'Esperanto', 'epo': 'Esperanto', 'esperanto': 'Esperanto',
+    'et': 'Estonian', 'est': 'Estonian', 'estonian': 'Estonian',
+    'fa': 'Persian', 'fas': 'Persian', 'per': 'Persian', 'persian': 'Persian',
+    'ga': 'Irish', 'gle': 'Irish', 'irish': 'Irish',
+    'gl': 'Galician', 'glg': 'Galician', 'galician': 'Galician',
+    'gu': 'Gujarati', 'guj': 'Gujarati', 'gujarati': 'Gujarati',
+    'is': 'Icelandic', 'isl': 'Icelandic', 'ice': 'Icelandic', 'icelandic': 'Icelandic',
+    'ka': 'Georgian', 'kat': 'Georgian', 'geo': 'Georgian', 'georgian': 'Georgian',
+    'kk': 'Kazakh', 'kaz': 'Kazakh', 'kazakh': 'Kazakh',
+    'km': 'Khmer', 'khm': 'Khmer', 'khmer': 'Khmer',
+    'kn': 'Kannada', 'kan': 'Kannada', 'kannada': 'Kannada',
+    'ky': 'Kyrgyz', 'kir': 'Kyrgyz', 'kyrgyz': 'Kyrgyz',
+    'lo': 'Lao', 'lao': 'Lao',
+    'lv': 'Latvian', 'lav': 'Latvian', 'latvian': 'Latvian',
+    'lt': 'Lithuanian', 'lit': 'Lithuanian', 'lithuanian': 'Lithuanian',
+    'mk': 'Macedonian', 'mkd': 'Macedonian', 'mac': 'Macedonian', 'macedonian': 'Macedonian',
+    'ml': 'Malayalam', 'mal': 'Malayalam', 'malayalam': 'Malayalam',
+    'mr': 'Marathi', 'mar': 'Marathi', 'marathi': 'Marathi',
+    'mn': 'Mongolian', 'mon': 'Mongolian', 'mongolian': 'Mongolian',
+    'my': 'Burmese', 'mya': 'Burmese', 'burmese': 'Burmese',
+    'ne': 'Nepali', 'nep': 'Nepali', 'nepali': 'Nepali',
+    'ps': 'Pashto', 'pus': 'Pashto', 'pashto': 'Pashto',
+    'pa': 'Punjabi', 'pan': 'Punjabi', 'punjabi': 'Punjabi',
+    'sr': 'Serbian', 'srp': 'Serbian', 'serbian': 'Serbian',
+    'sk': 'Slovak', 'slk': 'Slovak', 'slo': 'Slovak', 'slovak': 'Slovak',
+    'sl': 'Slovenian', 'slv': 'Slovenian', 'slovenian': 'Slovenian',
+    'so': 'Somali', 'som': 'Somali', 'somali': 'Somali',
+    'sw': 'Swahili', 'swa': 'Swahili', 'swahili': 'Swahili',
+    'tl': 'Tagalog', 'tgl': 'Tagalog', 'tagalog': 'Tagalog',
+    'tg': 'Tajik', 'tgk': 'Tajik', 'tajik': 'Tajik',
+    'ur': 'Urdu', 'urd': 'Urdu',
+    'uz': 'Uzbek', 'uzb': 'Uzbek', 'uzbek': 'Uzbek',
+    'zu': 'Zulu', 'zul': 'Zulu', 'zulu': 'Zulu',
+    'yue': 'Cantonese', 'cantonese': 'Cantonese', 'cmn': 'Mandarin', 'mandarin': 'Mandarin'
   };
   if (codeMap[low] !== undefined) return codeMap[low];
   var dash = low.indexOf('-');
@@ -8654,6 +8714,26 @@ function setRichField(i, fidx, value) {
   if (window._richFiles[i]) window._richFiles[i][RICH_FIELD_NAMES[fidx]] = value;
   if (fidx === 4) { refreshRichAutoLangs(); return; }
   updateRichPreview();
+}
+
+function addRichLinkPreset(i, btn) {
+  var f = window._richFiles[i];
+  if (!f) return;
+  var label = btn ? (btn.getAttribute('data-preset') || '') : '';
+  var rawLines = String(f.links || '').split(String.fromCharCode(10));
+  var lines = [];
+  for (var r = 0; r < rawLines.length; r++) { if (rawLines[r].trim() !== '') lines.push(rawLines[r]); }
+  var exists = false;
+  for (var k = 0; k < lines.length; k++) {
+    var head = lines[k].split('|')[0].trim().toLowerCase();
+    if (head === label.toLowerCase()) { exists = true; break; }
+  }
+  if (!exists) lines.push(label + ' | ');
+  f.links = lines.join(String.fromCharCode(10));
+  renderRichFileRows();
+  updateRichPreview();
+  var ta = document.getElementById('richLinks' + i);
+  if (ta) { ta.focus(); ta.selectionStart = ta.value.length; ta.selectionEnd = ta.value.length; }
 }
 
 function pickRichShots(i) {
@@ -8746,7 +8826,8 @@ function renderRichFileRows() {
     html += '<button type="button" class="nav-btn" style="font-size: 0.7rem; padding: 2px 10px; color: #f87171; border-color: rgba(248,113,113,0.4);" onclick="removeRichFileRow(' + i + ')">Hapus</button></div>';
     html += '<input type="text" class="form-input-pro" placeholder="Nama file, mis. Avatar.Seven.Havens.2026.S01E07.1080p.ATV.WEB-DL.mkv" value="' + richEsc(f.name) + '" oninput="setRichField(' + i + ', 0, this.value)" style="margin-bottom: 8px;">';
     html += '<input type="text" class="form-input-pro" placeholder="Ukuran, mis. 1.11 GB" value="' + richEsc(f.size) + '" oninput="setRichField(' + i + ', 1, this.value)" style="margin-bottom: 8px;">';
-    html += '<textarea class="form-input-pro" rows="2" placeholder="Link download, satu per baris: Label | URL" oninput="setRichField(' + i + ', 2, this.value)" style="margin-bottom: 8px; resize: vertical;">' + richEsc(f.links) + '</textarea>';
+    html += '<textarea id="richLinks' + i + '" class="form-input-pro" rows="2" placeholder="Link download, satu per baris: Label | URL" oninput="setRichField(' + i + ', 2, this.value)" style="margin-bottom: 8px; resize: vertical;">' + richEsc(f.links) + '</textarea>';
+    html += '<div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px;"><button type="button" class="nav-btn" style="font-size: 0.72rem; padding: 4px 10px;" data-preset="HaruDrive" onclick="addRichLinkPreset(' + i + ', this)">+ HaruDrive</button><button type="button" class="nav-btn" style="font-size: 0.72rem; padding: 4px 10px;" data-preset="Transfer.it" onclick="addRichLinkPreset(' + i + ', this)">+ Transfer.it</button><button type="button" class="nav-btn" style="font-size: 0.72rem; padding: 4px 10px;" data-preset="" onclick="addRichLinkPreset(' + i + ', this)">+ Custom</button></div>';
     html += '<textarea class="form-input-pro" rows="2" placeholder="SHOTS: URL gambar screenshot, satu per baris" oninput="setRichField(' + i + ', 3, this.value)" style="margin-bottom: 8px; resize: vertical;">' + richEsc(f.shots) + '</textarea>';
     html += '<textarea class="form-input-pro" rows="2" placeholder="Caption SHOTS (opsional): ketik nama file sumber screenshot — prefix 🎬 Screenshots otomatis" oninput="setRichField(' + i + ', 5, this.value)" style="margin-bottom: 8px; resize: vertical;">' + richEsc(f.shots_caption || '') + '</textarea>';
     html += '<div style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap;">';
