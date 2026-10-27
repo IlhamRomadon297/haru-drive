@@ -11527,6 +11527,7 @@ function hdCreateSubAdapter(el) {
   var adapter = {
     el: el,
     overlay: null,
+    ownContainer: null,
     canvas: null,
     srtLayer: null,
     mode: 'none',
@@ -11547,8 +11548,11 @@ function hdCreateSubAdapter(el) {
     canvasH: 0,
     mount: function(overlay) {
       adapter.overlay = overlay;
+      try { overlay.style.position = 'relative'; } catch (e0) {}
+      adapter.buildCanvas(overlay);
+    },
+    buildCanvas: function(container) {
       try {
-        try { overlay.style.position = 'relative'; } catch (e0) {}
         var cv = document.createElement('canvas');
         cv.style.position = 'absolute';
         cv.style.left = '0';
@@ -11556,7 +11560,7 @@ function hdCreateSubAdapter(el) {
         cv.style.width = '100%';
         cv.style.height = '100%';
         cv.style.pointerEvents = 'none';
-        overlay.appendChild(cv);
+        container.appendChild(cv);
         adapter.canvas = cv;
         var layer = document.createElement('div');
         layer.style.position = 'absolute';
@@ -11576,9 +11580,27 @@ function hdCreateSubAdapter(el) {
         layer.style.lineHeight = '1.35';
         layer.style.color = '#fff';
         layer.style.textShadow = '0 2px 4px rgba(0,0,0,0.9), 0 0 2px rgba(0,0,0,0.9)';
-        overlay.appendChild(layer);
+        container.appendChild(layer);
         adapter.srtLayer = layer;
       } catch (e) {}
+    },
+    ensureOwnCanvas: function() {
+      if (adapter.canvas && adapter.srtLayer) return;
+      var wrap = document.getElementById('moviPlayerWrap');
+      if (!wrap) return;
+      try { wrap.style.position = 'relative'; } catch (e0) {}
+      var box = document.createElement('div');
+      box.style.position = 'absolute';
+      box.style.left = '0';
+      box.style.top = '0';
+      box.style.width = '100%';
+      box.style.height = '100%';
+      box.style.pointerEvents = 'none';
+      box.style.zIndex = '10';
+      wrap.appendChild(box);
+      adapter.ownContainer = box;
+      adapter.overlay = box;
+      adapter.buildCanvas(box);
     },
     configure: function(track, extradata) {
       adapter.clear();
@@ -11614,6 +11636,7 @@ function hdCreateSubAdapter(el) {
         }
         adapter.mode = 'text';
         adapter.cues = [];
+        try { adapter.ensureOwnCanvas(); } catch (e2) {}
         hdSubDebug.mode = 'text';
         hdSubDebugSync();
       } catch (e) {}
@@ -11628,7 +11651,10 @@ function hdCreateSubAdapter(el) {
         var workerBlob = results[1];
         adapter.jassubStarting = false;
         if (adapter.mode !== 'ass') return;
-        if (!adapter.canvas) { hdSubDebug.jassub = 'broken'; hdSubDebug.jassubError = 'ass mode but no canvas'; try { console.warn('[HaruDrive] jassub tidak dimulai: mode ass tanpa canvas'); } catch (e2) {} hdSubDebugSync(); return; }
+        if (!adapter.canvas) {
+          try { adapter.ensureOwnCanvas(); } catch (e2) {}
+          if (!adapter.canvas) { adapter.onJassubBroken('ass mode but no canvas'); return; }
+        }
         try {
           adapter.jassub = new JASSUB({
             canvas: adapter.canvas,
@@ -11778,6 +11804,8 @@ function hdCreateSubAdapter(el) {
     },
     destroy: function() {
       try { if (adapter.jassub) adapter.jassub.destroy(); } catch (e) {}
+      try { if (adapter.ownContainer && adapter.ownContainer.parentNode) adapter.ownContainer.parentNode.removeChild(adapter.ownContainer); } catch (e2) {}
+      adapter.ownContainer = null;
       adapter.jassub = null;
       adapter.canvas = null;
       adapter.srtLayer = null;
