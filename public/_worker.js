@@ -4752,7 +4752,8 @@ function htmlPage(content, env, pageMode = 'public') {
       flex-wrap: wrap;
     }
     @media (max-width: 768px) {
-      #richReleaseBody { padding: 14px !important; max-height: 62dvh !important; }
+      #richReleaseBody { padding: 14px !important; padding-bottom: 20px !important; flex: 1 1 auto !important; min-height: 0 !important; max-height: none !important; }
+      #richReleaseModal .modal-card { height: 96dvh !important; max-height: 96dvh !important; }
       #richReleaseModal .modal-footer .nav-btn { flex: 1 1 40%; text-align: center; }
       #richLangGrid, #richDestGrid, #richTagGrid, #richJoinGrid, #richMetaGrid { grid-template-columns: 1fr !important; }
     }
@@ -12772,7 +12773,7 @@ function adminConsoleUI() {
         </div>
       </div>
       <div id="richQueueNote" style="display: none; font-size: 0.72rem; color: #fbbf24; padding: 0 16px 10px 16px;"></div>
-      <div class="modal-footer" style="justify-content: flex-end; gap: 8px;">
+      <div class="modal-footer" style="justify-content: flex-end; gap: 8px; flex-shrink: 0;">
         <button class="nav-btn" onclick="closeRichReleaseModal()">Batal</button>
         <button class="nav-btn" id="richSaveDraftBtn" style="font-weight: 600;" onclick="saveRichDraft()">💾 Simpan Draft</button>
         <button class="nav-btn" id="richUpdateBtn" style="display: none; background: #a855f7; color: white; border: none; font-weight: 600;" onclick="updateRichRelease()">🔄 Perbarui Pesan Terkirim</button>
