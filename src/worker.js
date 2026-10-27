@@ -999,6 +999,20 @@ export default {
       } catch(e) { return new Response(JSON.stringify({ stats: [] }), { headers: { 'Content-Type': 'application/json' } }); }
     }
 
+    // API: Guest download usage today (admin only, own counters)
+    if (url.pathname === '/api/admin/dl-usage') {
+      const uCookie = request.headers.get('Cookie') || '';
+      if (!uCookie.includes('harudrive_auth=true')) return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } });
+      try {
+        const day = dlDayStr(Date.now());
+        const totals = await env.harudrive_db.prepare('SELECT COUNT(*) AS c, COUNT(DISTINCT ip) AS ips FROM dl_limits WHERE day = ?').bind(day).first().catch(() => null);
+        const top = await env.harudrive_db.prepare('SELECT ip, COUNT(*) AS files FROM dl_limits WHERE day = ? GROUP BY ip ORDER BY files DESC LIMIT 10').bind(day).all().catch(() => ({ results: [] }));
+        const topRows = top.results || [];
+        const atCap = topRows.filter(function (r) { return (r.files || 0) >= GUEST_DL_MAX_FILES; }).map(function (r) { return r.ip; });
+        return new Response(JSON.stringify({ day: day, total_files: totals ? (totals.c || 0) : 0, total_ips: totals ? (totals.ips || 0) : 0, top: topRows, at_cap: atCap }), { headers: { 'Content-Type': 'application/json' } });
+      } catch (e) { return new Response(JSON.stringify({ day: dlDayStr(Date.now()), total_files: 0, total_ips: 0, top: [], at_cap: [] }), { headers: { 'Content-Type': 'application/json' } }); }
+    }
+
     // API: Verify Admin PIN & 2FA Device Token (Stateless HMAC)
     if (url.pathname === '/api/admin/verify' && request.method === 'POST') {
       try {
@@ -2842,6 +2856,21 @@ export default {
       let pathAfterPrefix = url.pathname.replace(/^\/(file|d|raw)\//, '');
       const shortId = pathAfterPrefix.split('/')[0];
 
+      // Guest daily file limit: 100 distinct files/day per IP (admins bypass).
+      // Counts first GET per (ip, file, day); later Range requests for the same
+      // file pass freely so playback never breaks mid-stream.
+      if (request.method === 'GET' && !isLoggedIn) {
+        const dlIp = clientIpOf(request);
+        const dlCheck = await checkGuestDlAllowed(env, dlIp, shortId);
+        if (!dlCheck.allowed) {
+          return new Response(JSON.stringify({ error: 'Batas streaming/download harian untuk tamu tercapai (100 file/hari). Coba lagi besok.' }), {
+            status: 429,
+            headers: { 'Content-Type': 'application/json', 'Retry-After': String(dlCheck.retrySec) }
+          });
+        }
+        if (dlCheck.isNew) { await recordGuestDl(env, dlIp, shortId, dlCheck.day); }
+      }
+
       // Resolve shortId -> determine backend by content type (shared links carry no reliable mode).
       // A Google Drive ID is strictly alphanumeric with _ and - (length 25 to 50),
       // and NEVER contains file extensions, slashes, spaces, or non-ASCII characters (see top-level isPureGDriveId).
@@ -3571,6 +3600,44 @@ async function generateShortId(path) {
   return base64.substring(0, 8);
 }
 
+// ---- Guest daily download/stream limit: 100 distinct files/day per IP ----
+// Admins (login cookie) bypass it entirely. Counts DISTINCT files, not HTTP
+// requests: one movie stream issues dozens of Range requests, so counting
+// requests would break normal watching. First GET per (ip, file, UTC day) is
+// recorded; later requests for the same file pass freely (playback never
+// breaks mid-stream). Rows older than 7 days are pruned on record.
+const GUEST_DL_MAX_FILES = 100;
+const GUEST_DL_KEEP_DAYS = 7;
+function dlDayStr(now) {
+  const d = new Date(now);
+  return d.getUTCFullYear() + '-' + String(d.getUTCMonth() + 1).padStart(2, '0') + '-' + String(d.getUTCDate()).padStart(2, '0');
+}
+async function checkGuestDlAllowed(env, ip, fileId) {
+  if (!env || !env.harudrive_db) return { allowed: true };
+  const day = dlDayStr(Date.now());
+  try {
+    const seen = await env.harudrive_db.prepare('SELECT 1 AS one FROM dl_limits WHERE ip = ? AND file_id = ? AND day = ?').bind(ip, fileId, day).first().catch(() => null);
+    if (seen) return { allowed: true };
+    const row = await env.harudrive_db.prepare('SELECT COUNT(*) AS c FROM dl_limits WHERE ip = ? AND day = ?').bind(ip, day).first().catch(() => null);
+    const used = row ? (row.c || 0) : 0;
+    if (used >= GUEST_DL_MAX_FILES) {
+      const now = Date.now();
+      const nd = new Date(now);
+      const nextMid = Date.UTC(nd.getUTCFullYear(), nd.getUTCMonth(), nd.getUTCDate() + 1);
+      return { allowed: false, retrySec: Math.ceil((nextMid - now) / 1000), used: used };
+    }
+    return { allowed: true, isNew: true, day: day };
+  } catch (e) { return { allowed: true }; }
+}
+async function recordGuestDl(env, ip, fileId, day) {
+  if (!env || !env.harudrive_db) return;
+  try {
+    await env.harudrive_db.prepare('CREATE TABLE IF NOT EXISTS dl_limits (ip TEXT, file_id TEXT, day TEXT, created INTEGER, PRIMARY KEY (ip, file_id, day))').run().catch(() => {});
+    await env.harudrive_db.prepare('INSERT OR IGNORE INTO dl_limits (ip, file_id, day, created) VALUES (?, ?, ?, ?)').bind(ip, fileId, day, Date.now()).run().catch(() => {});
+    const cutoff = dlDayStr(Date.now() - GUEST_DL_KEEP_DAYS * 24 * 60 * 60 * 1000);
+    await env.harudrive_db.prepare('DELETE FROM dl_limits WHERE day < ?').bind(cutoff).run().catch(() => {});
+  } catch (e) {}
+}
 // ---- Admin brute-force guards: PIN lockout + OTP resend limits ----
 // PIN: 5 wrong guesses from one IP -> that IP is locked out for 3 hours.
 // OTP sends: 60s cooldown between sends + max 5 sends per hour per IP.
@@ -5756,7 +5823,8 @@ function updateStorageModeUI(){
     sInp.placeholder = isGDrive ? 'Search Lokal (Ctrl+K)...' : 'Global Search (Ctrl+K)...';
   }
 }
-async function updateBandwidthIndicator(){ try{ const res=await fetch('/api/bandwidth'); if(!res.ok) return; const data=await res.json(); const stats=data.stats||[]; const hf=stats.find(function(s){return s.mode==='hf';}); const gd=stats.find(function(s){return s.mode==='gdrive';}); const fmt=function(b){ if(!b) return '-'; const v=Number(b); if(v>=1099511627776) return (v/1099511627776).toFixed(2)+' TB'; if(v>=1073741824) return (v/1073741824).toFixed(2)+' GB'; if(v>=1048576) return (v/1048576).toFixed(2)+' MB'; if(v>=1024) return (v/1024).toFixed(2)+' KB'; return v+' B'; }; const elHf=document.getElementById('bwHf'); if(elHf) elHf.textContent='HF: ' + (hf? fmt(hf.bytes) + ' ('+hf.requests+' req)':'-'); const elGd=document.getElementById('bwGDrive'); if(elGd) elGd.textContent='GDrive: ' + (gd? fmt(gd.bytes) + ' ('+gd.requests+' req)':'-'); const elUp=document.getElementById('bwUpdated'); if(elUp && stats.length){ const maxUpdated=Math.max.apply(null, stats.map(function(s){return s.updated||0;})); if(maxUpdated) elUp.textContent='Updated: ' + new Date(maxUpdated).toLocaleString(); } }catch(e){} }
+async function updateBandwidthIndicator(){ try{ const res=await fetch('/api/bandwidth'); if(!res.ok) return; const data=await res.json(); const stats=data.stats||[]; const hf=stats.find(function(s){return s.mode==='hf';}); const gd=stats.find(function(s){return s.mode==='gdrive';}); const fmt=function(b){ if(!b) return '-'; const v=Number(b); if(v>=1099511627776) return (v/1099511627776).toFixed(2)+' TB'; if(v>=1073741824) return (v/1073741824).toFixed(2)+' GB'; if(v>=1048576) return (v/1048576).toFixed(2)+' MB'; if(v>=1024) return (v/1024).toFixed(2)+' KB'; return v+' B'; }; const elHf=document.getElementById('bwHf'); if(elHf) elHf.textContent='HF: ' + (hf? fmt(hf.bytes) + ' ('+hf.requests+' req)':'-'); const elGd=document.getElementById('bwGDrive'); if(elGd) elGd.textContent='GDrive: ' + (gd? fmt(gd.bytes) + ' ('+gd.requests+' req)':'-'); const elUp=document.getElementById('bwUpdated'); if(elUp && stats.length){ const maxUpdated=Math.max.apply(null, stats.map(function(s){return s.updated||0;})); if(maxUpdated) elUp.textContent='Updated: ' + new Date(maxUpdated).toLocaleString(); }
+    try{ const res2=await fetch('/api/admin/dl-usage'); if(res2.ok){ const u=await res2.json(); const elG=document.getElementById('bwGuest'); if(elG){ let t='Tamu hari ini: ' + (u.total_files||0) + ' file / ' + (u.total_ips||0) + ' IP'; if(u.at_cap && u.at_cap.length){ t += ' (' + u.at_cap.length + ' kena limit)'; } elG.textContent=t; } } }catch(e2){} }catch(e){} }
 let activeFilter = 'all';
 const selectedFiles = new Set();
 let currentPage = 1;
@@ -13095,6 +13163,8 @@ function adminConsoleUI() {
       <span id="bwHf" style="color:#818cf8">HF: -</span>
       <span style="color:var(--border)">|</span>
       <span id="bwGDrive" style="color:#34d399">GDrive: -</span>
+      <span style="color:var(--border)">|</span>
+      <span id="bwGuest" style="color:#f472b6">Tamu: -</span>
       <span id="bwUpdated" style="color:var(--text-dim); font-size:0.7rem; margin-left:auto;"></span>
     </div>
 
