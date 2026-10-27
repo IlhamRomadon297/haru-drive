@@ -11170,7 +11170,7 @@ function hdEnsureJassubUmd() {
   });
 }
 var hdJassubWorkerBlob = null;
-var hdSubDebug = { installed: false, installError: '', mode: '', codec: '', headSeen: false, jassub: 'idle', jassubError: '' };
+var hdSubDebug = { installed: false, installError: '', mode: '', codec: '', headSeen: false, jassub: 'idle', jassubError: '', pkt: 0, dlg: 0, canvas: 'no' };
 function hdSubDebugSync() {
   try {
     if (typeof window === 'undefined' || !window.location || window.location.search.indexOf('hdsubdebug=1') < 0) return;
@@ -11193,7 +11193,7 @@ function hdSubDebugSync() {
       document.body.appendChild(badge);
     }
     var nl = String.fromCharCode(10);
-    badge.textContent = 'SUBDEBUG installed=' + (hdSubDebug.installed ? 'yes' : 'no') + nl + 'mode=' + hdSubDebug.mode + ' codec=' + hdSubDebug.codec + ' head=' + (hdSubDebug.headSeen ? 'yes' : 'no') + nl + 'jassub=' + hdSubDebug.jassub + nl + 'installErr=' + hdSubDebug.installError + nl + 'jassubErr=' + hdSubDebug.jassubError;
+    badge.textContent = 'SUBDEBUG installed=' + (hdSubDebug.installed ? 'yes' : 'no') + nl + 'mode=' + hdSubDebug.mode + ' codec=' + hdSubDebug.codec + ' head=' + (hdSubDebug.headSeen ? 'yes' : 'no') + nl + 'jassub=' + hdSubDebug.jassub + ' canvas=' + hdSubDebug.canvas + ' dlg=' + hdSubDebug.dlg + ' pkt=' + hdSubDebug.pkt + nl + 'installErr=' + hdSubDebug.installError + nl + 'jassubErr=' + hdSubDebug.jassubError;
   } catch (e) {}
 }
 function hdJassubWorkerBlobUrl() {
@@ -11562,6 +11562,7 @@ function hdCreateSubAdapter(el) {
         cv.style.pointerEvents = 'none';
         container.appendChild(cv);
         adapter.canvas = cv;
+        hdSubDebug.canvas = 'yes';
         var layer = document.createElement('div');
         layer.style.position = 'absolute';
         layer.style.left = '0';
@@ -11737,6 +11738,9 @@ function hdCreateSubAdapter(el) {
         if (adapter.mode === 'ass') {
           adapter.dialogues.push(hdAssDialogue(text, start, end));
           adapter.dirty = true;
+          hdSubDebug.pkt = (hdSubDebug.pkt || 0) + 1;
+          hdSubDebug.dlg = adapter.dialogues.length;
+          hdSubDebugSync();
           return;
         }
         adapter.cues.push({ start: start, end: end, html: hdSubHtml(text) });
@@ -11808,6 +11812,7 @@ function hdCreateSubAdapter(el) {
       adapter.ownContainer = null;
       adapter.jassub = null;
       adapter.canvas = null;
+      hdSubDebug.canvas = 'no';
       adapter.srtLayer = null;
       adapter.overlay = null;
       adapter.dialogues = [];
