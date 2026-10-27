@@ -11147,12 +11147,55 @@ function hdEnsureJassub() {
     hdJassubModule = mod.default || mod.JASSUB || mod;
     return hdJassubModule;
   }).catch(function(err) {
+    return hdEnsureJassubUmd().catch(function() { throw err; });
+  }).catch(function(err) {
     hdJassubLoading = null;
     throw err;
   });
   return hdJassubLoading;
 }
+function hdEnsureJassubUmd() {
+  return new Promise(function(resolve, reject) {
+    try {
+      var s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/jassub@1.7.13/dist/jassub.umd.js';
+      s.onload = function() {
+        var mod = window.JASSUB || window.jassub;
+        if (mod) { hdJassubModule = mod.default || mod.JASSUB || mod; resolve(hdJassubModule); }
+        else reject(new Error('umd global missing'));
+      };
+      s.onerror = function() { reject(new Error('umd script failed')); };
+      document.head.appendChild(s);
+    } catch (e) { reject(e); }
+  });
+}
 var hdJassubWorkerBlob = null;
+var hdSubDebug = { installed: false, installError: '', mode: '', codec: '', headSeen: false, jassub: 'idle', jassubError: '' };
+function hdSubDebugSync() {
+  try {
+    if (typeof window === 'undefined' || !window.location || window.location.search.indexOf('hdsubdebug=1') < 0) return;
+    var badge = document.getElementById('hdSubDebugBadge');
+    if (!badge) {
+      badge = document.createElement('div');
+      badge.id = 'hdSubDebugBadge';
+      badge.style.position = 'fixed';
+      badge.style.left = '8px';
+      badge.style.top = '8px';
+      badge.style.zIndex = '99999';
+      badge.style.background = 'rgba(0,0,0,0.75)';
+      badge.style.color = '#fff';
+      badge.style.fontSize = '11px';
+      badge.style.fontFamily = 'monospace';
+      badge.style.padding = '6px 8px';
+      badge.style.borderRadius = '6px';
+      badge.style.pointerEvents = 'none';
+      badge.style.whiteSpace = 'pre-wrap';
+      document.body.appendChild(badge);
+    }
+    var nl = String.fromCharCode(10);
+    badge.textContent = 'SUBDEBUG installed=' + (hdSubDebug.installed ? 'yes' : 'no') + nl + 'mode=' + hdSubDebug.mode + ' codec=' + hdSubDebug.codec + ' head=' + (hdSubDebug.headSeen ? 'yes' : 'no') + nl + 'jassub=' + hdSubDebug.jassub + nl + 'installErr=' + hdSubDebug.installError + nl + 'jassubErr=' + hdSubDebug.jassubError;
+  } catch (e) {}
+}
 function hdJassubWorkerBlobUrl() {
   if (hdJassubWorkerBlob) return Promise.resolve(hdJassubWorkerBlob);
   return fetch('https://cdn.jsdelivr.net/npm/jassub@1.7.13/dist/jassub-worker.js').then(function(res) {
@@ -11541,11 +11584,13 @@ function hdCreateSubAdapter(el) {
       adapter.clear();
       adapter.mode = 'none';
       try {
-        if (!track) return;
+        if (!track) { hdSubDebug.mode = 'none'; hdSubDebugSync(); return; }
         adapter.lastLang = track.language || '';
         if (track.subtitleType === 'image') {
           adapter.mode = 'image';
           try { console.warn('[HaruDrive] subtitle gambar (PGS/DVB) dilewati mode ASS'); } catch (e) {}
+          hdSubDebug.mode = 'image';
+          hdSubDebugSync();
           return;
         }
         var head = '';
@@ -11554,6 +11599,8 @@ function hdCreateSubAdapter(el) {
         }
         var codec = (track.codec || '').toLowerCase();
         var isAss = codec === 'ass' || codec === 'ssa' || head.indexOf('[Script Info]') === 0 || head.indexOf('[V4+ Styles]') >= 0 || head.indexOf('[V4 Styles]') >= 0;
+        hdSubDebug.codec = codec;
+        hdSubDebug.headSeen = head.length > 0;
         if (isAss) {
           adapter.mode = 'ass';
           adapter.header = head;
@@ -11561,20 +11608,27 @@ function hdCreateSubAdapter(el) {
           adapter.dirty = true;
           adapter.startJassub();
           adapter.maybeLoadFonts();
+          hdSubDebug.mode = 'ass';
+          hdSubDebugSync();
           return;
         }
         adapter.mode = 'text';
         adapter.cues = [];
+        hdSubDebug.mode = 'text';
+        hdSubDebugSync();
       } catch (e) {}
     },
     startJassub: function() {
       if (adapter.jassub || adapter.jassubStarting) return;
       adapter.jassubStarting = true;
+      hdSubDebug.jassub = 'starting';
+      hdSubDebugSync();
       Promise.all([hdEnsureJassub(), hdJassubWorkerBlobUrl()]).then(function(results) {
         var JASSUB = results[0];
         var workerBlob = results[1];
         adapter.jassubStarting = false;
-        if (adapter.mode !== 'ass' || !adapter.canvas) return;
+        if (adapter.mode !== 'ass') return;
+        if (!adapter.canvas) { hdSubDebug.jassub = 'broken'; hdSubDebug.jassubError = 'ass mode but no canvas'; try { console.warn('[HaruDrive] jassub tidak dimulai: mode ass tanpa canvas'); } catch (e2) {} hdSubDebugSync(); return; }
         try {
           adapter.jassub = new JASSUB({
             canvas: adapter.canvas,
@@ -11584,17 +11638,19 @@ function hdCreateSubAdapter(el) {
             modernWasmUrl: 'https://cdn.jsdelivr.net/npm/jassub@1.7.13/dist/jassub-worker-modern.wasm'
           });
           if (adapter.jassub.ready && adapter.jassub.ready.then) {
-            adapter.jassub.ready.then(function() { adapter.jassubReady = true; adapter.maybeLoadFonts(); }).catch(function() { adapter.onJassubBroken(); });
+            adapter.jassub.ready.then(function() { adapter.jassubReady = true; hdSubDebug.jassub = 'ready'; hdSubDebugSync(); adapter.maybeLoadFonts(); }).catch(function() { adapter.onJassubBroken('ready rejected'); });
           } else {
             adapter.jassubReady = true;
+            hdSubDebug.jassub = 'ready';
+            hdSubDebugSync();
             adapter.maybeLoadFonts();
           }
         } catch (e) {
-          adapter.onJassubBroken();
+          adapter.onJassubBroken('construct failed: ' + (e && e.message ? e.message : String(e)));
         }
-      }).catch(function() {
+      }).catch(function(err) {
         adapter.jassubStarting = false;
-        adapter.onJassubBroken();
+        adapter.onJassubBroken('load failed: ' + (err && err.message ? err.message : String(err)));
       });
     },
     maybeLoadFonts: function() {
@@ -11614,9 +11670,13 @@ function hdCreateSubAdapter(el) {
         }
       }).catch(function() {});
     },
-    onJassubBroken: function() {
+    onJassubBroken: function(reason) {
       if (adapter.broken) return;
       adapter.broken = true;
+      hdSubDebug.jassub = 'broken';
+      if (reason) hdSubDebug.jassubError = reason;
+      try { console.warn('[HaruDrive] jassub broken, fallback native: ' + (reason || '')); } catch (e2) {}
+      hdSubDebugSync();
       try {
         var lang = adapter.lastLang;
         var el2 = adapter.el;
@@ -11730,14 +11790,21 @@ function hdCreateSubAdapter(el) {
 }
 function hdInstallSubAdapter(el) {
   if (hdJassubModule) {
-    try { el.setSubtitleRenderer(hdCreateSubAdapter(el)); } catch (e) {}
+    try { el.setSubtitleRenderer(hdCreateSubAdapter(el)); hdSubDebug.installed = true; hdSubDebug.installError = ''; } catch (e) { hdSubDebug.installError = 'install: ' + (e && e.message ? e.message : String(e)); try { console.warn('[HaruDrive] sub adapter install failed: ' + hdSubDebug.installError); } catch (e2) {} }
+    hdSubDebugSync();
     return;
   }
   hdEnsureJassub().then(function() {
     try {
-      if (moviState.el === el && el.setSubtitleRenderer) el.setSubtitleRenderer(hdCreateSubAdapter(el));
-    } catch (e) {}
-  }).catch(function() {});
+      if (moviState.el === el && el.setSubtitleRenderer) { el.setSubtitleRenderer(hdCreateSubAdapter(el)); hdSubDebug.installed = true; hdSubDebug.installError = ''; }
+      else if (moviState.el !== el) { hdSubDebug.installError = 'stale element'; }
+    } catch (e) { hdSubDebug.installError = 'install: ' + (e && e.message ? e.message : String(e)); try { console.warn('[HaruDrive] sub adapter install failed: ' + hdSubDebug.installError); } catch (e2) {} }
+    hdSubDebugSync();
+  }).catch(function(err) {
+    hdSubDebug.installError = 'jassub import: ' + (err && err.message ? err.message : String(err));
+    try { console.warn('[HaruDrive] sub adapter install failed: ' + hdSubDebug.installError); } catch (e2) {}
+    hdSubDebugSync();
+  });
 }
 function startMoviPlayer() {
   var wrap = document.getElementById('moviPlayerWrap');
