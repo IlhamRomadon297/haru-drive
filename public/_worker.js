@@ -4615,6 +4615,7 @@ function htmlPage(content, env, pageMode = 'public') {
       max-height: 55vh;
     }
     .modal-card.video-card.video-maximized { width: 100%; max-width: none; height: 100%; max-height: none; border-radius: 12px; }
+    movi-player::part(subtitle) { font-family: 'Netflix Sans', 'Plus Jakarta Sans', sans-serif; font-weight: 500; }
     .video-card.video-maximized .video-container-wrap { flex: 1 1 auto; min-height: 0; max-height: none; aspect-ratio: auto; }
     .video-card.video-maximized .modal-header { flex-shrink: 0; }
     .video-card.video-maximized .modal-body { flex-shrink: 0; }
@@ -10869,6 +10870,341 @@ function buildMoviPlaylist(fileId) {
   if (!found || items.length < 2) return [];
   return items;
 }
+var hdJassubModule = null;
+var hdJassubLoading = null;
+var hdTextDecoder = null;
+function hdEnsureJassub() {
+  if (hdJassubModule) return Promise.resolve(hdJassubModule);
+  if (hdJassubLoading) return hdJassubLoading;
+  hdJassubLoading = import('https://cdn.jsdelivr.net/npm/jassub@1.7.13/dist/jassub.es.js').then(function(mod) {
+    hdJassubModule = mod.default || mod.JASSUB || mod;
+    return hdJassubModule;
+  }).catch(function(err) {
+    hdJassubLoading = null;
+    throw err;
+  });
+  return hdJassubLoading;
+}
+function hdDecodeBytes(data) {
+  try {
+    if (typeof data === 'string') return data;
+    if (!hdTextDecoder) hdTextDecoder = new TextDecoder('utf-8');
+    var u8 = data instanceof Uint8Array ? data : new Uint8Array(data);
+    var txt = hdTextDecoder.decode(u8);
+    if (txt.charCodeAt(0) === 0xFEFF) txt = txt.slice(1);
+    return txt;
+  } catch (e) { return ''; }
+}
+function hdAssTime(sec) {
+  if (!isFinite(sec) || sec < 0) sec = 0;
+  var h = Math.floor(sec / 3600);
+  var m = Math.floor((sec % 3600) / 60);
+  var s = Math.floor(sec % 60);
+  var cc = Math.floor((sec - Math.floor(sec)) * 100);
+  var mm = m < 10 ? '0' + m : '' + m;
+  var ss = s < 10 ? '0' + s : '' + s;
+  var ccs = cc < 10 ? '0' + cc : '' + cc;
+  return h + ':' + mm + ':' + ss + '.' + ccs;
+}
+function hdIsDigits(x) {
+  if (!x) return false;
+  for (var i = 0; i < x.length; i++) {
+    var c = x.charAt(i);
+    if (c < '0' || c > '9') return false;
+  }
+  return true;
+}
+function hdLooksLikeTime(x) {
+  if (!x) return false;
+  var p = x.split(':');
+  return p.length === 3 && p[2].indexOf('.') >= 0 && hdIsDigits(p[0]) && hdIsDigits(p[1]);
+}
+function hdAssDialogue(text, startSec, endSec) {
+  var t = text.split(String.fromCharCode(13)).join('').split(String.fromCharCode(0)).join('');
+  if (t.indexOf('Dialogue:') === 0) {
+    t = t.slice(9);
+    if (t.charAt(0) === ' ') t = t.slice(1);
+  }
+  var p = t.split(',');
+  if (p.length >= 9 && hdIsDigits(p[0]) && hdIsDigits(p[1])) p = p.slice(1);
+  var start = hdAssTime(startSec);
+  var end = hdAssTime(endSec);
+  if (p.length >= 10 && hdLooksLikeTime(p[1]) && hdLooksLikeTime(p[2])) {
+    p[1] = start;
+    p[2] = end;
+    return 'Dialogue: ' + p.join(',');
+  }
+  if (p.length >= 8) {
+    return 'Dialogue: ' + p[0] + ',' + start + ',' + end + ',' + p.slice(1).join(',');
+  }
+  return 'Dialogue: 0,' + start + ',' + end + ',Default,,0,0,0,,' + t;
+}
+function hdStripSubTags(raw) {
+  var out = '';
+  var i = 0;
+  var bs = String.fromCharCode(92);
+  while (i < raw.length) {
+    var c = raw.charAt(i);
+    if (c === '{' && raw.charAt(i + 1) === bs) {
+      var close = raw.indexOf('}', i + 2);
+      if (close < 0) break;
+      i = close + 1;
+      continue;
+    }
+    if (c === '<') {
+      var gt = raw.indexOf('>', i + 1);
+      if (gt < 0) { out += '&lt;'; i++; continue; }
+      var inner = raw.slice(i + 1, gt).toLowerCase();
+      if (inner === 'b' || inner === '/b' || inner === 'i' || inner === '/i' || inner === 'u' || inner === '/u') {
+        out += raw.slice(i, gt + 1);
+      }
+      i = gt + 1;
+      continue;
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}
+function hdSubHtml(raw) {
+  return hdStripSubTags(raw).split('&').join('&amp;');
+}
+function hdCreateSubAdapter(el) {
+  var adapter = {
+    el: el,
+    overlay: null,
+    canvas: null,
+    srtLayer: null,
+    mode: 'none',
+    header: '',
+    dialogues: [],
+    cues: [],
+    delay: 0,
+    dirty: false,
+    jassub: null,
+    jassubReady: false,
+    jassubStarting: false,
+    broken: false,
+    lastLang: '',
+    lastSrtHtml: null,
+    canvasW: 0,
+    canvasH: 0,
+    mount: function(overlay) {
+      adapter.overlay = overlay;
+      try {
+        try { overlay.style.position = 'relative'; } catch (e0) {}
+        var cv = document.createElement('canvas');
+        cv.style.position = 'absolute';
+        cv.style.left = '0';
+        cv.style.top = '0';
+        cv.style.width = '100%';
+        cv.style.height = '100%';
+        cv.style.pointerEvents = 'none';
+        overlay.appendChild(cv);
+        adapter.canvas = cv;
+        var layer = document.createElement('div');
+        layer.style.position = 'absolute';
+        layer.style.left = '0';
+        layer.style.right = '0';
+        layer.style.bottom = '0';
+        layer.style.display = 'none';
+        layer.style.flexDirection = 'column';
+        layer.style.alignItems = 'center';
+        layer.style.justifyContent = 'flex-end';
+        layer.style.padding = '0 12px 5%';
+        layer.style.textAlign = 'center';
+        layer.style.pointerEvents = 'none';
+        layer.style.fontFamily = "'Netflix Sans', 'Plus Jakarta Sans', sans-serif";
+        layer.style.fontWeight = '500';
+        layer.style.fontSize = 'clamp(16px, 2.6vw, 28px)';
+        layer.style.lineHeight = '1.35';
+        layer.style.color = '#fff';
+        layer.style.textShadow = '0 2px 4px rgba(0,0,0,0.9), 0 0 2px rgba(0,0,0,0.9)';
+        overlay.appendChild(layer);
+        adapter.srtLayer = layer;
+      } catch (e) {}
+    },
+    configure: function(track, extradata) {
+      adapter.clear();
+      adapter.mode = 'none';
+      try {
+        if (!track) return;
+        adapter.lastLang = track.language || '';
+        if (track.subtitleType === 'image') {
+          adapter.mode = 'image';
+          try { console.warn('[HaruDrive] subtitle gambar (PGS/DVB) dilewati mode ASS'); } catch (e) {}
+          return;
+        }
+        var head = '';
+        if (extradata) {
+          try { head = hdDecodeBytes(extradata).trim(); } catch (e) { head = ''; }
+        }
+        var codec = (track.codec || '').toLowerCase();
+        var isAss = codec === 'ass' || codec === 'ssa' || head.indexOf('[Script Info]') === 0 || head.indexOf('[V4+ Styles]') >= 0 || head.indexOf('[V4 Styles]') >= 0;
+        if (isAss) {
+          adapter.mode = 'ass';
+          adapter.header = head;
+          adapter.dialogues = [];
+          adapter.dirty = true;
+          adapter.startJassub();
+          return;
+        }
+        adapter.mode = 'text';
+        adapter.cues = [];
+      } catch (e) {}
+    },
+    startJassub: function() {
+      if (adapter.jassub || adapter.jassubStarting) return;
+      adapter.jassubStarting = true;
+      hdEnsureJassub().then(function(JASSUB) {
+        adapter.jassubStarting = false;
+        if (adapter.mode !== 'ass' || !adapter.canvas) return;
+        try {
+          adapter.jassub = new JASSUB({
+            canvas: adapter.canvas,
+            subContent: adapter.buildAssDoc(),
+            workerUrl: 'https://cdn.jsdelivr.net/npm/jassub@1.7.13/dist/jassub-worker.js',
+            wasmUrl: 'https://cdn.jsdelivr.net/npm/jassub@1.7.13/dist/jassub-worker.wasm',
+            modernWasmUrl: 'https://cdn.jsdelivr.net/npm/jassub@1.7.13/dist/jassub-worker-modern.wasm'
+          });
+          if (adapter.jassub.ready && adapter.jassub.ready.then) {
+            adapter.jassub.ready.then(function() { adapter.jassubReady = true; }).catch(function() { adapter.onJassubBroken(); });
+          } else {
+            adapter.jassubReady = true;
+          }
+        } catch (e) {
+          adapter.onJassubBroken();
+        }
+      }).catch(function() {
+        adapter.jassubStarting = false;
+        adapter.onJassubBroken();
+      });
+    },
+    onJassubBroken: function() {
+      if (adapter.broken) return;
+      adapter.broken = true;
+      try {
+        var lang = adapter.lastLang;
+        var el2 = adapter.el;
+        if (el2 && el2.setSubtitleRenderer) {
+          el2.setSubtitleRenderer(null);
+          if (lang) {
+            try { el2.selectSubtitleLang(lang); } catch (e2) {}
+          }
+        }
+      } catch (e) {}
+    },
+    buildAssDoc: function() {
+      var nl = String.fromCharCode(10);
+      var doc = adapter.header;
+      if (doc.indexOf('[Events]') >= 0) {
+        if (doc && doc.slice(-1) !== nl) doc += nl;
+        return doc + adapter.dialogues.join(nl);
+      }
+      if (doc && doc.slice(-1) !== nl) doc += nl;
+      doc += '[Events]' + nl + 'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text' + nl;
+      doc += adapter.dialogues.join(nl);
+      return doc;
+    },
+    pushPacket: function(packet) {
+      try {
+        if (!packet || adapter.mode === 'none' || adapter.mode === 'image') return;
+        var start = packet.timestamp || 0;
+        var dur = packet.duration || 0;
+        var end = start + (dur > 0 ? dur : 3);
+        var text = hdDecodeBytes(packet.data);
+        if (!text) return;
+        if (adapter.mode === 'ass') {
+          adapter.dialogues.push(hdAssDialogue(text, start, end));
+          adapter.dirty = true;
+          return;
+        }
+        adapter.cues.push({ start: start, end: end, html: hdSubHtml(text) });
+      } catch (e) {}
+    },
+    render: function(t, vw, vh) {
+      try {
+        if (adapter.mode === 'ass') {
+          if (adapter.canvas && adapter.overlay) {
+            var ow = adapter.overlay.clientWidth || 0;
+            var oh = adapter.overlay.clientHeight || 0;
+            if (ow > 0 && oh > 0 && (adapter.canvasW !== ow || adapter.canvasH !== oh)) {
+              adapter.canvasW = ow;
+              adapter.canvasH = oh;
+              adapter.canvas.width = ow;
+              adapter.canvas.height = oh;
+            }
+          }
+          if (adapter.dirty && adapter.jassub && adapter.jassubReady) {
+            try { adapter.jassub.setTrack(adapter.buildAssDoc()); adapter.dirty = false; } catch (e) {}
+          }
+          if (adapter.jassub && adapter.jassubReady) {
+            try { adapter.jassub.setCurrentTime(t - adapter.delay); } catch (e) {}
+          }
+          return;
+        }
+        if (adapter.mode === 'text') {
+          var layer = adapter.srtLayer;
+          if (!layer) return;
+          var kept = [];
+          for (var i = 0; i < adapter.cues.length; i++) {
+            var c = adapter.cues[i];
+            if (c.end + adapter.delay >= t - 60) kept.push(c);
+          }
+          adapter.cues = kept;
+          var html = '';
+          for (var j = 0; j < kept.length; j++) {
+            var c2 = kept[j];
+            if (t >= c2.start + adapter.delay && t < c2.end + adapter.delay) {
+              if (html) html += '<br>';
+              html += c2.html.split(String.fromCharCode(10)).join('<br>');
+            }
+          }
+          if (html !== adapter.lastSrtHtml) {
+            adapter.lastSrtHtml = html;
+            if (html) { layer.innerHTML = html; layer.style.display = 'flex'; }
+            else { layer.innerHTML = ''; layer.style.display = 'none'; }
+          }
+          return;
+        }
+      } catch (e) {}
+    },
+    setDelay: function(sec) {
+      if (typeof sec === 'number' && isFinite(sec)) adapter.delay = sec;
+    },
+    clear: function() {
+      adapter.dialogues = [];
+      adapter.cues = [];
+      adapter.dirty = true;
+      adapter.lastSrtHtml = null;
+      try { if (adapter.jassub) adapter.jassub.freeTrack(); } catch (e) {}
+      try {
+        if (adapter.srtLayer) { adapter.srtLayer.innerHTML = ''; adapter.srtLayer.style.display = 'none'; }
+      } catch (e) {}
+    },
+    destroy: function() {
+      try { if (adapter.jassub) adapter.jassub.destroy(); } catch (e) {}
+      adapter.jassub = null;
+      adapter.canvas = null;
+      adapter.srtLayer = null;
+      adapter.overlay = null;
+      adapter.dialogues = [];
+      adapter.cues = [];
+    }
+  };
+  return adapter;
+}
+function hdInstallSubAdapter(el) {
+  if (hdJassubModule) {
+    try { el.setSubtitleRenderer(hdCreateSubAdapter(el)); } catch (e) {}
+    return;
+  }
+  hdEnsureJassub().then(function() {
+    try {
+      if (moviState.el === el && el.setSubtitleRenderer) el.setSubtitleRenderer(hdCreateSubAdapter(el));
+    } catch (e) {}
+  }).catch(function() {});
+}
 function startMoviPlayer() {
   var wrap = document.getElementById('moviPlayerWrap');
   if (!wrap) return;
@@ -10891,6 +11227,10 @@ function startMoviPlayer() {
   el.setAttribute('persist', 'volume muted speed audiolang subtitlelang');
   el.setAttribute('persistkey', 'harudrive');
   el.setAttribute('subtitlepicker', '');
+  el.setAttribute('subtitlecolor', '#FFFFFF');
+  el.setAttribute('subtitlebg', '0');
+  el.setAttribute('subtitleedge', 'shadow');
+  el.setAttribute('subtitlesize', '1.1');
   if (moviState.playlist && moviState.playlist.length > 1) {
     el.setAttribute('playlist', JSON.stringify(moviState.playlist));
     el.setAttribute('autoadvance', '');
@@ -10899,6 +11239,7 @@ function startMoviPlayer() {
   el.style.height = '100%';
   el.style.display = 'block';
   moviState.el = el;
+  hdInstallSubAdapter(el);
   if (moviState.savedTime > 0) {
     (function(saved) {
       el.addEventListener('loadedmetadata', function() {
