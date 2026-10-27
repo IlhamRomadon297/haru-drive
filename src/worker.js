@@ -1005,12 +1005,12 @@ export default {
       if (!uCookie.includes('harudrive_auth=true')) return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } });
       try {
         const day = dlDayStr(Date.now());
-        const totals = await env.harudrive_db.prepare('SELECT COUNT(*) AS c, COUNT(DISTINCT ip) AS ips FROM dl_limits WHERE day = ?').bind(day).first().catch(() => null);
-        const top = await env.harudrive_db.prepare('SELECT ip, COUNT(*) AS files FROM dl_limits WHERE day = ? GROUP BY ip ORDER BY files DESC LIMIT 10').bind(day).all().catch(() => ({ results: [] }));
+        const totals = await env.harudrive_db.prepare('SELECT COUNT(*) AS c, COUNT(DISTINCT ip) AS ips, SUM(size) AS bytes FROM dl_limits WHERE day = ?').bind(day).first().catch(() => null);
+        const top = await env.harudrive_db.prepare('SELECT ip, COUNT(*) AS files, SUM(size) AS bytes FROM dl_limits WHERE day = ? GROUP BY ip ORDER BY files DESC LIMIT 10').bind(day).all().catch(() => ({ results: [] }));
         const topRows = top.results || [];
         const atCap = topRows.filter(function (r) { return (r.files || 0) >= GUEST_DL_MAX_FILES; }).map(function (r) { return r.ip; });
-        return new Response(JSON.stringify({ day: day, total_files: totals ? (totals.c || 0) : 0, total_ips: totals ? (totals.ips || 0) : 0, top: topRows, at_cap: atCap }), { headers: { 'Content-Type': 'application/json' } });
-      } catch (e) { return new Response(JSON.stringify({ day: dlDayStr(Date.now()), total_files: 0, total_ips: 0, top: [], at_cap: [] }), { headers: { 'Content-Type': 'application/json' } }); }
+        return new Response(JSON.stringify({ day: day, total_files: totals ? (totals.c || 0) : 0, total_ips: totals ? (totals.ips || 0) : 0, total_bytes: totals ? (totals.bytes || 0) : 0, top: topRows, at_cap: atCap }), { headers: { 'Content-Type': 'application/json' } });
+      } catch (e) { return new Response(JSON.stringify({ day: dlDayStr(Date.now()), total_files: 0, total_ips: 0, total_bytes: 0, top: [], at_cap: [] }), { headers: { 'Content-Type': 'application/json' } }); }
     }
 
     // API: Verify Admin PIN & 2FA Device Token (Stateless HMAC)
@@ -2858,17 +2858,19 @@ export default {
 
       // Guest daily file limit: 100 distinct files/day per IP (admins bypass).
       // Counts first GET per (ip, file, day); later Range requests for the same
-      // file pass freely so playback never breaks mid-stream.
+      // file pass freely so playback never breaks mid-stream. The record is
+      // written at the successful return points below (with total file size).
+      let dlCheck = null;
+      let dlIp = '';
       if (request.method === 'GET' && !isLoggedIn) {
-        const dlIp = clientIpOf(request);
-        const dlCheck = await checkGuestDlAllowed(env, dlIp, shortId);
+        dlIp = clientIpOf(request);
+        dlCheck = await checkGuestDlAllowed(env, dlIp, shortId);
         if (!dlCheck.allowed) {
           return new Response(JSON.stringify({ error: 'Batas streaming/download harian untuk tamu tercapai (100 file/hari). Coba lagi besok.' }), {
             status: 429,
             headers: { 'Content-Type': 'application/json', 'Retry-After': String(dlCheck.retrySec) }
           });
         }
-        if (dlCheck.isNew) { await recordGuestDl(env, dlIp, shortId, dlCheck.day); }
       }
 
       // Resolve shortId -> determine backend by content type (shared links carry no reliable mode).
@@ -2955,6 +2957,7 @@ export default {
         if (request.method === 'HEAD') {
           return new Response(null, { status: gRes.status, headers: gRespHeaders });
         }
+        if (dlCheck && dlCheck.isNew) { await recordGuestDl(env, dlIp, shortId, dlCheck.day, totalSizeFromHeaders(gRes.headers)); }
         return new Response(gRes.body, { status: gRes.status, headers: gRespHeaders });
       }
       let filePath = '';
@@ -3032,6 +3035,7 @@ export default {
         });
       }
 
+      if (dlCheck && dlCheck.isNew) { await recordGuestDl(env, dlIp, shortId, dlCheck.day, totalSizeFromHeaders(hfRes.headers)); }
       return new Response(hfRes.body, {
         status: hfRes.status,
         headers: respHeaders
@@ -3605,7 +3609,9 @@ async function generateShortId(path) {
 // requests: one movie stream issues dozens of Range requests, so counting
 // requests would break normal watching. First GET per (ip, file, UTC day) is
 // recorded; later requests for the same file pass freely (playback never
-// breaks mid-stream). Rows older than 7 days are pruned on record.
+// breaks mid-stream). The record is written only after upstream confirms the
+// file exists, together with its total size (per-guest byte tracker); dead
+// links burn nothing. Rows older than 7 days are pruned on ~1% of records.
 const GUEST_DL_MAX_FILES = 100;
 const GUEST_DL_KEEP_DAYS = 7;
 function dlDayStr(now) {
@@ -3629,13 +3635,27 @@ async function checkGuestDlAllowed(env, ip, fileId) {
     return { allowed: true, isNew: true, day: day };
   } catch (e) { return { allowed: true }; }
 }
-async function recordGuestDl(env, ip, fileId, day) {
+function totalSizeFromHeaders(headers) {
+  try {
+    const cr = headers.get('Content-Range') || '';
+    const total = parseInt((cr.split('/')[1] || '0'), 10);
+    if (total > 0) return total;
+    return parseInt(headers.get('Content-Length') || '0', 10) || 0;
+  } catch (e) { return 0; }
+}
+async function recordGuestDl(env, ip, fileId, day, size) {
   if (!env || !env.harudrive_db) return;
   try {
-    await env.harudrive_db.prepare('CREATE TABLE IF NOT EXISTS dl_limits (ip TEXT, file_id TEXT, day TEXT, created INTEGER, PRIMARY KEY (ip, file_id, day))').run().catch(() => {});
-    await env.harudrive_db.prepare('INSERT OR IGNORE INTO dl_limits (ip, file_id, day, created) VALUES (?, ?, ?, ?)').bind(ip, fileId, day, Date.now()).run().catch(() => {});
-    const cutoff = dlDayStr(Date.now() - GUEST_DL_KEEP_DAYS * 24 * 60 * 60 * 1000);
-    await env.harudrive_db.prepare('DELETE FROM dl_limits WHERE day < ?').bind(cutoff).run().catch(() => {});
+    await env.harudrive_db.prepare('CREATE TABLE IF NOT EXISTS dl_limits (ip TEXT, file_id TEXT, day TEXT, created INTEGER, size INTEGER, PRIMARY KEY (ip, file_id, day))').run().catch(() => {});
+    await env.harudrive_db.prepare('ALTER TABLE dl_limits ADD COLUMN size INTEGER').run().catch(() => {});
+    const sz = size > 0 ? size : 0;
+    await env.harudrive_db.prepare('INSERT OR IGNORE INTO dl_limits (ip, file_id, day, created, size) VALUES (?, ?, ?, ?, ?)').bind(ip, fileId, day, Date.now(), sz).run().catch(async () => {
+      await env.harudrive_db.prepare('INSERT OR IGNORE INTO dl_limits (ip, file_id, day, created) VALUES (?, ?, ?, ?)').bind(ip, fileId, day, Date.now()).run().catch(() => {});
+    });
+    if (Math.random() < 0.01) {
+      const cutoff = dlDayStr(Date.now() - GUEST_DL_KEEP_DAYS * 24 * 60 * 60 * 1000);
+      await env.harudrive_db.prepare('DELETE FROM dl_limits WHERE day < ?').bind(cutoff).run().catch(() => {});
+    }
   } catch (e) {}
 }
 // ---- Admin brute-force guards: PIN lockout + OTP resend limits ----
@@ -5824,7 +5844,7 @@ function updateStorageModeUI(){
   }
 }
 async function updateBandwidthIndicator(){ try{ const res=await fetch('/api/bandwidth'); if(!res.ok) return; const data=await res.json(); const stats=data.stats||[]; const hf=stats.find(function(s){return s.mode==='hf';}); const gd=stats.find(function(s){return s.mode==='gdrive';}); const fmt=function(b){ if(!b) return '-'; const v=Number(b); if(v>=1099511627776) return (v/1099511627776).toFixed(2)+' TB'; if(v>=1073741824) return (v/1073741824).toFixed(2)+' GB'; if(v>=1048576) return (v/1048576).toFixed(2)+' MB'; if(v>=1024) return (v/1024).toFixed(2)+' KB'; return v+' B'; }; const elHf=document.getElementById('bwHf'); if(elHf) elHf.textContent='HF: ' + (hf? fmt(hf.bytes) + ' ('+hf.requests+' req)':'-'); const elGd=document.getElementById('bwGDrive'); if(elGd) elGd.textContent='GDrive: ' + (gd? fmt(gd.bytes) + ' ('+gd.requests+' req)':'-'); const elUp=document.getElementById('bwUpdated'); if(elUp && stats.length){ const maxUpdated=Math.max.apply(null, stats.map(function(s){return s.updated||0;})); if(maxUpdated) elUp.textContent='Updated: ' + new Date(maxUpdated).toLocaleString(); }
-    try{ const res2=await fetch('/api/admin/dl-usage'); if(res2.ok){ const u=await res2.json(); const elG=document.getElementById('bwGuest'); if(elG){ let t='Tamu hari ini: ' + (u.total_files||0) + ' file / ' + (u.total_ips||0) + ' IP'; if(u.at_cap && u.at_cap.length){ t += ' (' + u.at_cap.length + ' kena limit)'; } elG.textContent=t; } } }catch(e2){} }catch(e){} }
+    try{ const res2=await fetch('/api/admin/dl-usage'); if(res2.ok){ const u=await res2.json(); const elG=document.getElementById('bwGuest'); if(elG){ let t='Tamu hari ini: ' + (u.total_files||0) + ' file / ' + (u.total_ips||0) + ' IP / ' + fmt(u.total_bytes||0); if(u.at_cap && u.at_cap.length){ t += ' (' + u.at_cap.length + ' kena limit)'; } elG.textContent=t; } } }catch(e2){} }catch(e){} }
 let activeFilter = 'all';
 const selectedFiles = new Set();
 let currentPage = 1;
@@ -11242,13 +11262,17 @@ function hdReadVint(buf, pos, isSize) {
   if (pos >= buf.length) return null;
   var len = hdVintLen(buf[pos]);
   if (len === 0 || len > 8 || pos + len > buf.length) return null;
+  if (isSize) {
+    var v = buf[pos] & (255 >> len);
+    for (var i = 1; i < len; i++) v = v * 256 + buf[pos + i];
+    var unknown = (buf[pos] & (255 >> len)) === (255 >> len);
+    for (var j = 1; j < len && unknown; j++) if (buf[pos + j] !== 255) unknown = false;
+    if (unknown) return { len: len, value: -1 };
+    return { len: len, value: v };
+  }
   var v = 0;
   for (var i = 0; i < len; i++) v = v * 256 + buf[pos + i];
-  if (!isSize) return { len: len, value: v };
-  var marker = Math.pow(2, 7 * len);
-  var masked = v - marker;
-  if (masked === marker - 1) return { len: len, value: -1 };
-  return { len: len, value: masked };
+  return { len: len, value: v };
 }
 function hdFindAttachedFonts(buf) {
   function readId(p) {
@@ -11740,7 +11764,7 @@ function startMoviPlayer() {
   el.setAttribute('subtitlecolor', '#FFFFFF');
   el.setAttribute('subtitlebg', '0');
   el.setAttribute('subtitleedge', 'shadow');
-  el.setAttribute('subtitlesize', '1.1');
+  el.setAttribute('subtitlesize', '1');
   if (moviState.playlist && moviState.playlist.length > 1) {
     el.setAttribute('playlist', JSON.stringify(moviState.playlist));
     el.setAttribute('autoadvance', '');
