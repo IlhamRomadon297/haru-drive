@@ -10885,6 +10885,17 @@ function hdEnsureJassub() {
   });
   return hdJassubLoading;
 }
+var hdJassubWorkerBlob = null;
+function hdJassubWorkerBlobUrl() {
+  if (hdJassubWorkerBlob) return Promise.resolve(hdJassubWorkerBlob);
+  return fetch('https://cdn.jsdelivr.net/npm/jassub@1.7.13/dist/jassub-worker.js').then(function(res) {
+    if (!res.ok) throw new Error('worker fetch failed');
+    return res.text();
+  }).then(function(text) {
+    hdJassubWorkerBlob = URL.createObjectURL(new Blob([text], { type: 'application/javascript' }));
+    return hdJassubWorkerBlob;
+  });
+}
 function hdDecodeBytes(data) {
   try {
     if (typeof data === 'string') return data;
@@ -11056,14 +11067,16 @@ function hdCreateSubAdapter(el) {
     startJassub: function() {
       if (adapter.jassub || adapter.jassubStarting) return;
       adapter.jassubStarting = true;
-      hdEnsureJassub().then(function(JASSUB) {
+      Promise.all([hdEnsureJassub(), hdJassubWorkerBlobUrl()]).then(function(results) {
+        var JASSUB = results[0];
+        var workerBlob = results[1];
         adapter.jassubStarting = false;
         if (adapter.mode !== 'ass' || !adapter.canvas) return;
         try {
           adapter.jassub = new JASSUB({
             canvas: adapter.canvas,
             subContent: adapter.buildAssDoc(),
-            workerUrl: 'https://cdn.jsdelivr.net/npm/jassub@1.7.13/dist/jassub-worker.js',
+            workerUrl: workerBlob,
             wasmUrl: 'https://cdn.jsdelivr.net/npm/jassub@1.7.13/dist/jassub-worker.wasm',
             modernWasmUrl: 'https://cdn.jsdelivr.net/npm/jassub@1.7.13/dist/jassub-worker-modern.wasm'
           });
@@ -13351,8 +13364,8 @@ function adminConsoleUI() {
 
   <!-- MODAL: PENGATURAN AKSES PUBLIK & MAINTENANCE -->
   <div class="modal-backdrop" id="publicAccessModal" style="display: none;" onclick="if(event.target===this)closePublicAccessModal()">
-    <div class="modal-card glass" style="max-width: 480px; width: 100%; padding: 24px; border-radius: 20px; border: 1px solid var(--border); box-shadow: 0 20px 50px rgba(0,0,0,0.5);">
-      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px;">
+    <div class="modal-card glass" style="max-width: 480px; width: 100%; max-height: 100%; display: flex; flex-direction: column; padding: 24px; border-radius: 20px; border: 1px solid var(--border); box-shadow: 0 20px 50px rgba(0,0,0,0.5);">
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; flex-shrink: 0;">
         <div style="display: flex; align-items: center; gap: 10px;">
           <div style="width: 36px; height: 36px; border-radius: 10px; background: rgba(236,72,153,0.15); display: flex; align-items: center; justify-content: center; color: var(--primary);">
             <svg class="icon icon-sm" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
@@ -13365,14 +13378,14 @@ function adminConsoleUI() {
         <button onclick="closePublicAccessModal()" style="background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 1.3rem; padding: 4px; line-height: 1;">&times;</button>
       </div>
 
-      <div style="display: flex; flex-direction: column; gap: 14px;">
+      <div style="display: flex; flex-direction: column; gap: 14px; overflow-y: auto; min-height: 0; padding-right: 2px;">
         <!-- MASTER TOGGLE CARD -->
         <div style="padding: 14px; border-radius: 14px; background: rgba(255,255,255,0.03); border: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between;">
           <div>
             <div style="font-weight: 700; font-size: 0.9rem; color: var(--text);">Master Akses Publik</div>
             <div style="font-size: 0.76rem; color: var(--text-muted);" id="modalMasterStatusDesc">Mengontrol seluruh akses publik & tamu sekaligus</div>
           </div>
-          <label class="switch-toggle" style="position: relative; display: inline-block; width: 48px; height: 26px; margin: 0;">
+          <label class="switch-toggle" style="position: relative; display: inline-block; width: 48px; height: 26px; margin: 0; flex-shrink: 0;">
             <input type="checkbox" id="toggleMasterAccess" style="opacity: 0; width: 0; height: 0;" onchange="handleMasterAccessChange()">
             <span class="slider-round" style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #374151; transition: .3s; border-radius: 26px;"></span>
           </label>
@@ -13386,7 +13399,7 @@ function adminConsoleUI() {
               <div style="font-weight: 600; font-size: 0.84rem; color: var(--text);">🌐 Halaman Indeks Utama (/)</div>
               <div style="font-size: 0.74rem; color: var(--text-muted);">Izinkan publik melihat beranda file/folder</div>
             </div>
-            <label class="switch-toggle" style="position: relative; display: inline-block; width: 42px; height: 22px; margin: 0;">
+            <label class="switch-toggle" style="position: relative; display: inline-block; width: 42px; height: 22px; margin: 0; flex-shrink: 0;">
               <input type="checkbox" id="toggleIndexAccess" style="opacity: 0; width: 0; height: 0;">
               <span class="slider-round round-sm" style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #374151; transition: .3s; border-radius: 22px;"></span>
             </label>
@@ -13398,7 +13411,7 @@ function adminConsoleUI() {
               <div style="font-weight: 600; font-size: 0.84rem; color: var(--text);">📁 Tautan Tamu & Download (/folder/, /d/)</div>
               <div style="font-size: 0.74rem; color: var(--text-muted);">Izinkan tamu membuka tautan share & mendownload</div>
             </div>
-            <label class="switch-toggle" style="position: relative; display: inline-block; width: 42px; height: 22px; margin: 0;">
+            <label class="switch-toggle" style="position: relative; display: inline-block; width: 42px; height: 22px; margin: 0; flex-shrink: 0;">
               <input type="checkbox" id="toggleGuestAccess" style="opacity: 0; width: 0; height: 0;">
               <span class="slider-round round-sm" style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #374151; transition: .3s; border-radius: 22px;"></span>
             </label>
@@ -13415,7 +13428,7 @@ function adminConsoleUI() {
               <div style="font-weight: 600; font-size: 0.84rem; color: var(--text);">⚡ Google Drive Storage</div>
               <div style="font-size: 0.74rem; color: var(--text-muted);">Aktifkan akses folder & download dari Google Drive</div>
             </div>
-            <label class="switch-toggle" style="position: relative; display: inline-block; width: 42px; height: 22px; margin: 0;">
+            <label class="switch-toggle" style="position: relative; display: inline-block; width: 42px; height: 22px; margin: 0; flex-shrink: 0;">
               <input type="checkbox" id="toggleStorageGDrive" style="opacity: 0; width: 0; height: 0;">
               <span class="slider-round round-sm" style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #374151; transition: .3s; border-radius: 22px;"></span>
             </label>
@@ -13427,7 +13440,7 @@ function adminConsoleUI() {
               <div style="font-weight: 600; font-size: 0.84rem; color: var(--text);">🤗 Hugging Face Storage</div>
               <div style="font-size: 0.74rem; color: var(--text-muted);">Aktifkan akses folder & streaming dari Hugging Face</div>
             </div>
-            <label class="switch-toggle" style="position: relative; display: inline-block; width: 42px; height: 22px; margin: 0;">
+            <label class="switch-toggle" style="position: relative; display: inline-block; width: 42px; height: 22px; margin: 0; flex-shrink: 0;">
               <input type="checkbox" id="toggleStorageHF" style="opacity: 0; width: 0; height: 0;">
               <span class="slider-round round-sm" style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #374151; transition: .3s; border-radius: 22px;"></span>
             </label>
