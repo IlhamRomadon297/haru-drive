@@ -11788,9 +11788,28 @@ function hdCreateSubAdapter(el) {
   };
   return adapter;
 }
+function hdInstallSubAdapterRetry(el) {
+  try {
+    if (moviState.el === el && el.setSubtitleRenderer) { el.setSubtitleRenderer(hdCreateSubAdapter(el)); hdSubDebug.installed = true; hdSubDebug.installError = ''; }
+    else if (moviState.el !== el) { hdSubDebug.installError = 'stale element'; }
+    else { hdSubDebug.installError = 'renderer method still missing after upgrade'; }
+  } catch (e) { hdSubDebug.installError = 'install: ' + (e && e.message ? e.message : String(e)); try { console.warn('[HaruDrive] sub adapter install failed: ' + hdSubDebug.installError); } catch (e2) {} }
+  hdSubDebugSync();
+}
+function hdInstallSubAdapterWaitUpgrade(el) {
+  hdSubDebug.installError = 'waiting for movi-player upgrade';
+  hdSubDebugSync();
+  try {
+    customElements.whenDefined('movi-player').then(function() { hdInstallSubAdapterRetry(el); });
+  } catch (e) { hdSubDebug.installError = 'whenDefined failed'; hdSubDebugSync(); }
+}
 function hdInstallSubAdapter(el) {
   if (hdJassubModule) {
-    try { el.setSubtitleRenderer(hdCreateSubAdapter(el)); hdSubDebug.installed = true; hdSubDebug.installError = ''; } catch (e) { hdSubDebug.installError = 'install: ' + (e && e.message ? e.message : String(e)); try { console.warn('[HaruDrive] sub adapter install failed: ' + hdSubDebug.installError); } catch (e2) {} }
+    try {
+      if (el.setSubtitleRenderer) { el.setSubtitleRenderer(hdCreateSubAdapter(el)); hdSubDebug.installed = true; hdSubDebug.installError = ''; }
+      else if (typeof customElements !== 'undefined' && customElements.whenDefined) { hdInstallSubAdapterWaitUpgrade(el); }
+      else { hdSubDebug.installError = 'renderer method missing'; }
+    } catch (e) { hdSubDebug.installError = 'install: ' + (e && e.message ? e.message : String(e)); try { console.warn('[HaruDrive] sub adapter install failed: ' + hdSubDebug.installError); } catch (e2) {} }
     hdSubDebugSync();
     return;
   }
@@ -11798,6 +11817,8 @@ function hdInstallSubAdapter(el) {
     try {
       if (moviState.el === el && el.setSubtitleRenderer) { el.setSubtitleRenderer(hdCreateSubAdapter(el)); hdSubDebug.installed = true; hdSubDebug.installError = ''; }
       else if (moviState.el !== el) { hdSubDebug.installError = 'stale element'; }
+      else if (typeof customElements !== 'undefined' && customElements.whenDefined) { hdInstallSubAdapterWaitUpgrade(el); }
+      else { hdSubDebug.installError = 'renderer method missing'; }
     } catch (e) { hdSubDebug.installError = 'install: ' + (e && e.message ? e.message : String(e)); try { console.warn('[HaruDrive] sub adapter install failed: ' + hdSubDebug.installError); } catch (e2) {} }
     hdSubDebugSync();
   }).catch(function(err) {
