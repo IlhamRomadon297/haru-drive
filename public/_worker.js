@@ -4614,6 +4614,10 @@ function htmlPage(content, env, pageMode = 'public') {
       aspect-ratio: 16 / 9;
       max-height: 55vh;
     }
+    .modal-card.video-card.video-maximized { width: 100%; max-width: none; height: 100%; max-height: none; border-radius: 12px; }
+    .video-card.video-maximized .video-container-wrap { flex: 1 1 auto; min-height: 0; max-height: none; aspect-ratio: auto; }
+    .video-card.video-maximized .modal-header { flex-shrink: 0; }
+    .video-card.video-maximized .modal-body { flex-shrink: 0; }
     .movi-player-wrap { height: 100%; width: 100%; }
 
     .modal-header {
@@ -10776,7 +10780,58 @@ function closeVideoModal() {
   moviState.failed = false;
   if (wrap) wrap.innerHTML = '';
   hideMoviRetry();
+  var card = videoCardEl();
+  if (card) card.classList.remove('video-maximized');
+  var maxBtn = document.getElementById('videoMaxBtn');
+  if (maxBtn) maxBtn.textContent = '⛶';
+  var pill = document.getElementById('videoMinimizedPill');
+  if (pill) pill.style.display = 'none';
   if (modal) modal.style.display = 'none';
+}
+
+function videoCardEl() {
+  var m = document.getElementById('videoModal');
+  return m ? m.querySelector('.video-card') : null;
+}
+function toggleVideoMaximize() {
+  var card = videoCardEl();
+  if (!card) return;
+  var on = card.classList.toggle('video-maximized');
+  var btn = document.getElementById('videoMaxBtn');
+  if (btn) btn.textContent = on ? '🗗' : '⛶';
+}
+function minimizeVideoModal() {
+  var m = document.getElementById('videoModal');
+  if (m) m.style.display = 'none';
+  var pill = document.getElementById('videoMinimizedPill');
+  if (!pill) {
+    pill = document.createElement('div');
+    pill.id = 'videoMinimizedPill';
+    pill.style.cssText = 'display: none; position: fixed; right: 16px; bottom: max(16px, env(safe-area-inset-bottom)); z-index: 10006; background: #6366f1; color: #fff; border: 1px solid rgba(255,255,255,0.35); border-radius: 999px; padding: 10px 14px; font-size: 0.84rem; font-weight: 700; cursor: pointer; box-shadow: 0 12px 30px rgba(0,0,0,0.55); max-width: calc(100vw - 32px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;';
+    pill.onclick = function() { restoreVideoModal(); };
+    document.body.appendChild(pill);
+  }
+  pill.innerHTML = '';
+  var label = document.createElement('span');
+  var t = document.getElementById('videoModalTitle');
+  label.textContent = '▶ ' + (t ? t.textContent : 'Video');
+  pill.appendChild(label);
+  var x = document.createElement('button');
+  x.textContent = '✕';
+  x.style.cssText = 'margin-left: 10px; background: transparent; border: none; color: #fff; font-weight: 700; cursor: pointer; font-size: 0.84rem;';
+  x.onclick = function(ev) { if (ev && ev.stopPropagation) ev.stopPropagation(); closeVideoModal(); };
+  pill.appendChild(x);
+  pill.style.display = 'block';
+}
+function restoreVideoModal() {
+  var pill = document.getElementById('videoMinimizedPill');
+  if (pill) pill.style.display = 'none';
+  var m = document.getElementById('videoModal');
+  if (m) m.style.display = 'flex';
+  try {
+    var el = moviState.el;
+    if (el && el.paused) { var p = el.play(); if (p && p.catch) p.catch(function() {}); }
+  } catch (e) {}
 }
 
 var moviState = { url: '', fileName: '', playlist: [], el: null, attempts: 0, savedTime: 0, failed: false, started: false, startTime: 0, lastTime: -1, lastAdvance: 0, retryTimer: null, stallTimer: null };
@@ -11945,9 +12000,13 @@ function publicUI() {
     <div class="modal-card video-card">
       <div class="modal-header">
         <span class="modal-title" id="videoModalTitle">Video Player</span>
+        <div style="display: flex; gap: 6px; align-items: center; flex-shrink: 0;">
+        <button class="btn-close-circle" title="Minimize" onclick="minimizeVideoModal()">—</button>
+        <button class="btn-close-circle" id="videoMaxBtn" title="Maximize / ukuran normal" onclick="toggleVideoMaximize()">⛶</button>
         <button class="btn-close-circle" onclick="closeVideoModal()">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
+        </div>
       </div>
       <div class="video-container-wrap">
         <div id="moviPlayerWrap" style="width:100%;height:100%;"></div>
@@ -12070,9 +12129,13 @@ function publicIndexUI(isLoggedIn = false) {
     <div class="modal-card video-card">
       <div class="modal-header">
         <span class="modal-title" id="videoModalTitle">Video Player</span>
+        <div style="display: flex; gap: 6px; align-items: center; flex-shrink: 0;">
+        <button class="btn-close-circle" title="Minimize" onclick="minimizeVideoModal()">—</button>
+        <button class="btn-close-circle" id="videoMaxBtn" title="Maximize / ukuran normal" onclick="toggleVideoMaximize()">⛶</button>
         <button class="btn-close-circle" onclick="closeVideoModal()">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
+        </div>
       </div>
       <div class="video-container-wrap">
         <div id="moviPlayerWrap" style="width:100%;height:100%;"></div>
@@ -13048,9 +13111,13 @@ function adminConsoleUI() {
     <div class="modal-card video-card">
       <div class="modal-header">
         <span class="modal-title" id="videoModalTitle">Video Player</span>
+        <div style="display: flex; gap: 6px; align-items: center; flex-shrink: 0;">
+        <button class="btn-close-circle" title="Minimize" onclick="minimizeVideoModal()">—</button>
+        <button class="btn-close-circle" id="videoMaxBtn" title="Maximize / ukuran normal" onclick="toggleVideoMaximize()">⛶</button>
         <button class="btn-close-circle" onclick="closeVideoModal()">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
+        </div>
       </div>
       <div class="video-container-wrap">
         <div id="moviPlayerWrap" style="width:100%;height:100%;"></div>
