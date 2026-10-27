@@ -6461,6 +6461,8 @@ function renderFileList() {
     filtered = sorted;
   }
 
+  hdVideoFiles = filtered.filter(function(f) { return f.mimeType && f.mimeType.indexOf('video/') === 0; }).map(function(f) { return { id: f.id, name: f.name }; });
+
   const totalPages = Math.max(1, Math.ceil(filtered.length / FILE_PAGE_SIZE));
   if (currentPage > totalPages) currentPage = totalPages;
   if (currentPage < 1) currentPage = 1;
@@ -10705,9 +10707,12 @@ function playVideo(fileId, fileName) {
   const _vmode = getStorageMode();
   const videoUrl = window.location.origin + '/d/' + fileId + '/' + encodeURIComponent(fileName || 'video') + (_vmode === 'gdrive' ? '?mode=gdrive' : '');
   ensureMoviScript();
+  moviState.url = videoUrl;
+  moviState.fileName = fileName || 'Video';
+  moviState.playlist = buildMoviPlaylist(fileId);
   moviState.attempts = 0;
   moviState.savedTime = 0;
-  startMoviPlayer(videoUrl);
+  startMoviPlayer();
 
   if (extContainer) {
     const rawNoProto = videoUrl.includes('://') ? videoUrl.split('://')[1] : videoUrl;
@@ -10766,18 +10771,21 @@ function closeVideoModal() {
   clearMoviWatchers();
   moviState.el = null;
   moviState.url = '';
+  moviState.fileName = '';
+  moviState.playlist = [];
   moviState.failed = false;
   if (wrap) wrap.innerHTML = '';
   hideMoviRetry();
   if (modal) modal.style.display = 'none';
 }
 
-var moviState = { url: '', el: null, attempts: 0, savedTime: 0, failed: false, started: false, startTime: 0, lastTime: -1, lastAdvance: 0, retryTimer: null, stallTimer: null };
+var moviState = { url: '', fileName: '', playlist: [], el: null, attempts: 0, savedTime: 0, failed: false, started: false, startTime: 0, lastTime: -1, lastAdvance: 0, retryTimer: null, stallTimer: null };
+var hdVideoFiles = [];
 function ensureMoviScript() {
   if (document.querySelector('script[data-movi-player]')) return;
   var s = document.createElement('script');
   s.setAttribute('type', 'module');
-  s.setAttribute('src', 'https://cdn.jsdelivr.net/npm/movi-player@0.3.5/dist/element.js');
+  s.setAttribute('src', 'https://cdn.jsdelivr.net/npm/movi-player@0.4.1/dist/element.js');
   s.setAttribute('data-movi-player', '1');
   document.head.appendChild(s);
 }
@@ -10792,12 +10800,25 @@ function moviSavePosition() {
     if (typeof t === 'number' && isFinite(t) && t > 0) moviState.savedTime = t;
   } catch (e) {}
 }
-function startMoviPlayer(url) {
+function buildMoviPlaylist(fileId) {
+  var mode = getStorageMode();
+  var list = hdVideoFiles || [];
+  var items = [];
+  var i;
+  var found = false;
+  for (i = 0; i < list.length; i++) {
+    var u = window.location.origin + '/d/' + list[i].id + '/' + encodeURIComponent(list[i].name || 'video') + (mode === 'gdrive' ? '?mode=gdrive' : '');
+    items.push({ src: u, title: list[i].name || 'video' });
+    if (list[i].id === fileId) found = true;
+  }
+  if (!found || items.length < 2) return [];
+  return items;
+}
+function startMoviPlayer() {
   var wrap = document.getElementById('moviPlayerWrap');
   if (!wrap) return;
   clearMoviWatchers();
   hideMoviRetry();
-  moviState.url = url;
   moviState.failed = false;
   moviState.started = false;
   moviState.startTime = Date.now();
@@ -10805,12 +10826,23 @@ function startMoviPlayer(url) {
   moviState.lastAdvance = Date.now();
   wrap.innerHTML = '';
   var el = document.createElement('movi-player');
-  el.setAttribute('src', url);
+  el.setAttribute('src', moviState.url);
   el.setAttribute('controls', '');
+  el.setAttribute('title', moviState.fileName || 'Video');
+  el.setAttribute('showtitle', '');
+  el.setAttribute('titlemode', 'both');
+  el.setAttribute('theme', 'dark');
+  el.setAttribute('themecolor', '#6366f1 #ec4899');
+  el.setAttribute('persist', 'volume muted speed audiolang subtitlelang');
+  el.setAttribute('persistkey', 'harudrive');
+  el.setAttribute('subtitlepicker', '');
+  if (moviState.playlist && moviState.playlist.length > 1) {
+    el.setAttribute('playlist', JSON.stringify(moviState.playlist));
+    el.setAttribute('autoadvance', '');
+  }
   el.style.width = '100%';
   el.style.height = '100%';
   el.style.display = 'block';
-  wrap.appendChild(el);
   moviState.el = el;
   if (moviState.savedTime > 0) {
     (function(saved) {
@@ -10820,6 +10852,20 @@ function startMoviPlayer(url) {
     })(moviState.savedTime);
   }
   el.addEventListener('error', function() { handleMoviFailure('network'); });
+  el.addEventListener('errordisplay', function() { handleMoviFailure('decode'); });
+  el.addEventListener('itemchange', function(e) {
+    if (moviState.failed) return;
+    try {
+      var item = e.detail && e.detail.item;
+      if (item) {
+        if (item.src) moviState.url = item.src;
+        if (item.title) moviState.fileName = item.title;
+        moviState.savedTime = 0;
+        var t = document.getElementById('videoModalTitle');
+        if (t && item.title) t.textContent = item.title;
+      }
+    } catch (err) {}
+  });
   el.addEventListener('playing', function() {
     if (moviState.failed) return;
     moviState.started = true;
@@ -10851,6 +10897,7 @@ function startMoviPlayer(url) {
       if (moviState.started && now - moviState.lastAdvance > 15000) { handleMoviFailure('stall'); }
     } catch (e) {}
   }, 5000);
+  wrap.appendChild(el);
 }
 function handleMoviFailure(kind) {
   if (moviState.failed) return;
@@ -10868,12 +10915,12 @@ function handleMoviFailure(kind) {
   }
   var delay = moviState.attempts === 1 ? 2000 : (moviState.attempts === 2 ? 5000 : 10000);
   showMoviRetry(msg + ' Mencoba lagi otomatis dalam ' + (delay / 1000) + ' detik.', true);
-  moviState.retryTimer = setTimeout(function() { startMoviPlayer(moviState.url); }, delay);
+  moviState.retryTimer = setTimeout(function() { startMoviPlayer(); }, delay);
 }
 function retryMoviNow() {
   clearMoviWatchers();
   if (moviState.attempts > 3) moviState.attempts = 0;
-  startMoviPlayer(moviState.url);
+  startMoviPlayer();
 }
 function showMoviRetry(msg, showNow) {
   var ext = document.getElementById('externalPlayersContainer');
