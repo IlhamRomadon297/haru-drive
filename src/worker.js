@@ -229,12 +229,14 @@ export default {
           if (!verifyPin(body.admin_pin || body.pin) && !isLoggedIn) {
             return new Response(JSON.stringify({ error: 'PIN Admin Salah / Tidak Terotentikasi!' }), { status: 403 });
           }
+          const existing = await getPublicAccessConfig(env);
           const updated = {
             public_access: body.public_access === 'closed' ? 'closed' : 'open',
             public_index: body.public_index === '0' ? '0' : '1',
             guest_access: body.guest_access === '0' ? '0' : '1',
             storage_gdrive: body.storage_gdrive === '0' ? '0' : '1',
-            storage_hf: body.storage_hf === '0' ? '0' : '1'
+            storage_hf: body.storage_hf === '0' ? '0' : '1',
+            public_password: body.public_password === undefined ? existing.public_password : (body.public_password === '0' ? '0' : '1')
           };
           await setPublicAccessConfig(env, updated);
           return new Response(JSON.stringify({ success: true, ...updated }), {
@@ -273,6 +275,25 @@ export default {
           status: 200,
           headers: { 'Content-Type': 'text/html;charset=UTF-8' }
         });
+      }
+
+      // 1b. PASSWORD SWITCH: When on ('1'), guests must log in (APP_PASSWORD) to browse/download.
+      // Admin routes are never affected: the outer condition already excludes them, and this
+      // block only matches public routes.
+      if (accessConfig.public_password === '1') {
+        const isPublicRoute = url.pathname === '/' || url.pathname === '/api/list' || url.pathname === '/api/folders' || url.pathname === '/api/search' || url.pathname.startsWith('/folder/') || url.pathname.startsWith('/file/') || url.pathname.startsWith('/d/') || url.pathname.startsWith('/raw/');
+        if (isPublicRoute) {
+          if (url.pathname.startsWith('/api/')) {
+            return new Response(JSON.stringify({ error: 'Login required. Public password is enabled.' }), {
+              status: 401,
+              headers: { 'Content-Type': 'application/json' }
+            });
+          }
+          return new Response(null, {
+            status: 302,
+            headers: { 'Location': '/login?redirect=' + encodeURIComponent(url.pathname + url.search) }
+          });
+        }
       }
 
       // 2. PUBLIC INDEX SWITCH: When off ('0'), shut down root index (/)
@@ -3502,11 +3523,11 @@ async function generateShortId(path) {
 }
 
 async function getPublicAccessConfig(env) {
-  const def = { public_access: 'open', public_index: '1', guest_access: '1', storage_gdrive: '1', storage_hf: '1' };
+  const def = { public_access: 'open', public_index: '1', guest_access: '1', storage_gdrive: '1', storage_hf: '1', public_password: '0' };
   if (!env || !env.harudrive_db) return def;
   try {
     // Pure SELECT read without executing CREATE TABLE on every HTTP request
-    const rows = await env.harudrive_db.prepare("SELECT key, value FROM meta WHERE key IN ('public_access', 'public_index', 'guest_access', 'storage_gdrive', 'storage_hf')").all().catch(() => ({ results: [] }));
+    const rows = await env.harudrive_db.prepare("SELECT key, value FROM meta WHERE key IN ('public_access', 'public_index', 'guest_access', 'storage_gdrive', 'storage_hf', 'public_password')").all().catch(() => ({ results: [] }));
     if (rows && rows.results) {
       for (const r of rows.results) {
         if (r.key in def && r.value !== null && r.value !== undefined) def[r.key] = String(r.value);
@@ -3522,7 +3543,7 @@ async function setPublicAccessConfig(env, cfg) {
   if (!env || !env.harudrive_db) return false;
   try {
     await env.harudrive_db.prepare('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)').run().catch(() => {});
-    const keys = ['public_access', 'public_index', 'guest_access', 'storage_gdrive', 'storage_hf'];
+    const keys = ['public_access', 'public_index', 'guest_access', 'storage_gdrive', 'storage_hf', 'public_password'];
     for (const k of keys) {
       if (k in cfg) {
         await env.harudrive_db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)").bind(k, String(cfg[k])).run();
@@ -5928,7 +5949,7 @@ async function initAdminConsole() {
 }
 
 // Public & Guest System Access Management
-let currentAccessConfig = { public_access: 'open', public_index: '1', guest_access: '1', storage_gdrive: '1', storage_hf: '1' };
+let currentAccessConfig = { public_access: 'open', public_index: '1', guest_access: '1', storage_gdrive: '1', storage_hf: '1', public_password: '0' };
 
 async function fetchPublicAccessStatus() {
   try {
@@ -5941,7 +5962,8 @@ async function fetchPublicAccessStatus() {
         public_index: data.public_index || '1',
         guest_access: data.guest_access || '1',
         storage_gdrive: data.storage_gdrive !== undefined ? String(data.storage_gdrive) : '1',
-        storage_hf: data.storage_hf !== undefined ? String(data.storage_hf) : '1'
+        storage_hf: data.storage_hf !== undefined ? String(data.storage_hf) : '1',
+        public_password: data.public_password !== undefined ? String(data.public_password) : '0'
       };
       updatePublicAccessNavbarUI();
       updateStorageModeUI();
@@ -5959,7 +5981,7 @@ function updatePublicAccessNavbarUI() {
     dot.style.boxShadow = isOpen ? '0 0 8px #10b981' : '0 0 8px #ef4444';
   }
   if (label) {
-    label.textContent = isOpen ? 'Akses: Terbuka' : 'Akses: Ditutup';
+    label.textContent = !isOpen ? 'Akses: Ditutup' : (currentAccessConfig.public_password === '1' ? 'Akses: Password' : 'Akses: Terbuka');
   }
   if (btn) {
     btn.style.borderColor = isOpen ? 'rgba(16,185,129,0.35)' : 'rgba(239,68,68,0.4)';
@@ -5974,12 +5996,14 @@ function openPublicAccessModal() {
   const gToggle = document.getElementById('toggleGuestAccess');
   const gdToggle = document.getElementById('toggleStorageGDrive');
   const hfToggle = document.getElementById('toggleStorageHF');
+  const pwToggle = document.getElementById('togglePublicPassword');
   
   if (mToggle) mToggle.checked = (currentAccessConfig.public_access === 'open');
   if (iToggle) iToggle.checked = (currentAccessConfig.public_index === '1');
   if (gToggle) gToggle.checked = (currentAccessConfig.guest_access === '1');
   if (gdToggle) gdToggle.checked = (currentAccessConfig.storage_gdrive === '1');
   if (hfToggle) hfToggle.checked = (currentAccessConfig.storage_hf === '1');
+  if (pwToggle) pwToggle.checked = (currentAccessConfig.public_password === '1');
   
   handleMasterAccessChange();
   if (modal) modal.style.display = 'flex';
@@ -6012,6 +6036,7 @@ async function savePublicAccessConfig() {
   const gToggle = document.getElementById('toggleGuestAccess');
   const gdToggle = document.getElementById('toggleStorageGDrive');
   const hfToggle = document.getElementById('toggleStorageHF');
+  const pwToggle = document.getElementById('togglePublicPassword');
   const pin = localStorage.getItem('harudrive_admin_pin') || getCookie('harudrive_admin_pin') || '';
 
   if (btn) { btn.disabled = true; btn.textContent = '⏳ Menyimpan...'; }
@@ -6022,7 +6047,8 @@ async function savePublicAccessConfig() {
     public_index: iToggle && iToggle.checked ? '1' : '0',
     guest_access: gToggle && gToggle.checked ? '1' : '0',
     storage_gdrive: gdToggle && gdToggle.checked ? '1' : '0',
-    storage_hf: hfToggle && hfToggle.checked ? '1' : '0'
+    storage_hf: hfToggle && hfToggle.checked ? '1' : '0',
+    public_password: pwToggle && pwToggle.checked ? '1' : '0'
   };
 
   try {
@@ -6038,7 +6064,8 @@ async function savePublicAccessConfig() {
         public_index: payload.public_index,
         guest_access: payload.guest_access,
         storage_gdrive: payload.storage_gdrive,
-        storage_hf: payload.storage_hf
+        storage_hf: payload.storage_hf,
+        public_password: payload.public_password
       };
       updatePublicAccessNavbarUI();
       updateStorageModeUI();
@@ -10980,6 +11007,235 @@ function hdStripSubTags(raw) {
 function hdSubHtml(raw) {
   return hdStripSubTags(raw).split('&').join('&amp;');
 }
+var HD_FONT_MAX_FILES = 24;
+var HD_FONT_MAX_EACH = 16777216;
+var HD_FONT_MAX_TOTAL = 33554432;
+var HD_FONT_HEAD_CAP = 33554432;
+var HD_FONT_CHUNK = 4194304;
+function hdVintLen(b) {
+  for (var i = 0; i < 8; i++) {
+    if (b & (128 >> i)) return i + 1;
+  }
+  return 0;
+}
+function hdReadVint(buf, pos, isSize) {
+  if (pos >= buf.length) return null;
+  var len = hdVintLen(buf[pos]);
+  if (len === 0 || len > 8 || pos + len > buf.length) return null;
+  var v = 0;
+  for (var i = 0; i < len; i++) v = v * 256 + buf[pos + i];
+  if (!isSize) return { len: len, value: v };
+  var marker = Math.pow(2, 7 * len);
+  var masked = v - marker;
+  if (masked === marker - 1) return { len: len, value: -1 };
+  return { len: len, value: masked };
+}
+function hdFindAttachedFonts(buf) {
+  function readId(p) {
+    if (p >= buf.length) return null;
+    var len = hdVintLen(buf[p]);
+    if (len === 0 || len > 4 || p + len > buf.length) return null;
+    var v = 0;
+    for (var i = 0; i < len; i++) v = v * 256 + buf[p + i];
+    return { len: len, value: v };
+  }
+  function readSize(p) {
+    return hdReadVint(buf, p, true);
+  }
+  function textAt(start, len) {
+    var s = '';
+    for (var i = 0; i < len; i++) s += String.fromCharCode(buf[start + i]);
+    return s;
+  }
+  function skipTo(p) {
+    var idR = readId(p);
+    if (!idR) return null;
+    var szR = readSize(p + idR.len);
+    if (!szR) return null;
+    var dataStart = p + idR.len + szR.len;
+    if (szR.value === -1) return { id: idR.value, dataStart: dataStart, dataEnd: -1, next: -1 };
+    var dataEnd = dataStart + szR.value;
+    return { id: idR.value, dataStart: dataStart, dataEnd: dataEnd, next: dataEnd };
+  }
+  var pos = 0;
+  var segEnd = -1;
+  var segKnown = false;
+  while (pos < buf.length) {
+    var el = skipTo(pos);
+    if (!el) return null;
+    if (el.id === 0x1A45DFA3) {
+      if (el.dataEnd === -1) return false;
+      if (el.dataEnd > buf.length) return null;
+      pos = el.next;
+      continue;
+    }
+    if (el.id === 0x18538067) {
+      segEnd = el.dataEnd === -1 ? buf.length : el.dataEnd;
+      segKnown = el.dataEnd !== -1;
+      pos = el.dataStart;
+      break;
+    }
+    if (el.dataEnd === -1) return false;
+    if (el.dataEnd > buf.length) return null;
+    pos = el.next;
+  }
+  if (segEnd === -1) return null;
+  if (segEnd > buf.length) return null;
+  while (pos < segEnd) {
+    var el2 = skipTo(pos);
+    if (!el2) return null;
+    if (el2.id === 0x1941A469) {
+      var attEnd = el2.dataEnd === -1 ? segEnd : el2.dataEnd;
+      if (attEnd > buf.length) return null;
+      var files = [];
+      var fp = el2.dataStart;
+      while (fp < attEnd) {
+        var fel = skipTo(fp);
+        if (!fel) return null;
+        if (fel.dataEnd === -1) return false;
+        if (fel.dataEnd > buf.length) return null;
+        if (fel.id === 0x61A7) {
+          var one = { name: '', mime: '', data: null };
+          var cp = fel.dataStart;
+          while (cp < fel.dataEnd) {
+            var cel = skipTo(cp);
+            if (!cel) return null;
+            if (cel.dataEnd === -1) return false;
+            if (cel.dataEnd > buf.length) return null;
+            if (cel.id === 0x466E) one.name = textAt(cel.dataStart, cel.dataEnd - cel.dataStart);
+            if (cel.id === 0x4660) one.mime = textAt(cel.dataStart, cel.dataEnd - cel.dataStart);
+            if (cel.id === 0x465C) one.data = buf.slice(cel.dataStart, cel.dataEnd);
+            cp = cel.next;
+          }
+          if (one.data) files.push(one);
+        }
+        fp = fel.next;
+      }
+      return { files: files };
+    }
+    if (el2.dataEnd === -1) return false;
+    if (el2.dataEnd > buf.length) return null;
+    pos = el2.next;
+  }
+  return segKnown ? { files: [] } : null;
+}
+function hdMkvFileIdFromUrl(url) {
+  if (!url) return '';
+  var i = url.indexOf('/d/');
+  if (i < 0) return '';
+  var rest = url.substring(i + 3);
+  var j = rest.indexOf('/');
+  if (j <= 0) return '';
+  return rest.substring(0, j);
+}
+var hdFontDbPromise = null;
+function hdFontDb() {
+  if (hdFontDbPromise) return hdFontDbPromise;
+  hdFontDbPromise = new Promise(function(resolve, reject) {
+    try {
+      var req = indexedDB.open('harudrive-fonts', 1);
+      req.onupgradeneeded = function() {
+        try { req.result.createObjectStore('fonts', { keyPath: 'id' }); } catch (e) {}
+      };
+      req.onsuccess = function() { resolve(req.result); };
+      req.onerror = function() { reject(req.error || new Error('idb open failed')); };
+    } catch (e) { reject(e); }
+  });
+  hdFontDbPromise.catch(function() { hdFontDbPromise = null; });
+  return hdFontDbPromise;
+}
+function hdFontCacheGet(id) {
+  return hdFontDb().then(function(db) {
+    return new Promise(function(resolve) {
+      try {
+        var tx = db.transaction('fonts', 'readonly');
+        var req = tx.objectStore('fonts').get(id);
+        req.onsuccess = function() { resolve(req.result ? req.result.fonts : null); };
+        req.onerror = function() { resolve(null); };
+      } catch (e) { resolve(null); }
+    });
+  }).catch(function() { return null; });
+}
+function hdFontCachePut(id, fonts) {
+  return hdFontDb().then(function(db) {
+    return new Promise(function(resolve) {
+      try {
+        var tx = db.transaction('fonts', 'readwrite');
+        tx.objectStore('fonts').put({ id: id, fonts: fonts, saved: Date.now() });
+        tx.oncomplete = function() { resolve(true); };
+        tx.onerror = function() { resolve(false); };
+        tx.onabort = function() { resolve(false); };
+      } catch (e) { resolve(false); }
+    });
+  }).catch(function() { return false; });
+}
+function hdFontIsUsable(name, mime) {
+  var n = (name || '').toLowerCase();
+  var m = (mime || '').toLowerCase();
+  if (m.indexOf('font/') === 0) return true;
+  if (n.length >= 4 && n.substring(n.length - 4) === '.ttf') return true;
+  if (n.length >= 4 && n.substring(n.length - 4) === '.otf') return true;
+  if (n.length >= 5 && n.substring(n.length - 5) === '.woff') return true;
+  if (n.length >= 6 && n.substring(n.length - 6) === '.woff2') return true;
+  if (n.length >= 4 && n.substring(n.length - 4) === '.ttc') return true;
+  return false;
+}
+function hdFetchMkvHeadFonts(url) {
+  var buf = new Uint8Array(0);
+  function append(next) {
+    var merged = new Uint8Array(buf.length + next.length);
+    merged.set(buf, 0);
+    merged.set(next, buf.length);
+    buf = merged;
+  }
+  function finish() {
+    var r = hdFindAttachedFonts(buf);
+    if (!r) return { list: [], complete: false };
+    if (r === false) return { list: [], complete: false };
+    var list = [];
+    var total = 0;
+    for (var i = 0; i < r.files.length; i++) {
+      var f = r.files[i];
+      if (!f.data || !hdFontIsUsable(f.name, f.mime)) continue;
+      if (f.data.length > HD_FONT_MAX_EACH) continue;
+      if (list.length >= HD_FONT_MAX_FILES) break;
+      if (total + f.data.length > HD_FONT_MAX_TOTAL) break;
+      list.push({ name: f.name, data: f.data });
+      total += f.data.length;
+    }
+    return { list: list, complete: true };
+  }
+  function step(start) {
+    if (start >= HD_FONT_HEAD_CAP) return Promise.resolve(finish());
+    var end = start + HD_FONT_CHUNK - 1;
+    return fetch(url, { headers: { Range: 'bytes=' + start + '-' + end } }).then(function(res) {
+      if (res.status === 416) return finish();
+      if (res.status !== 206) return { list: [], complete: false };
+      return res.arrayBuffer().then(function(ab) {
+        append(new Uint8Array(ab));
+        var r = hdFindAttachedFonts(buf);
+        if (r && r !== false) return finish();
+        if (r === false) return { list: [], complete: false };
+        return step(start + HD_FONT_CHUNK);
+      });
+    });
+  }
+  return step(0).catch(function() { return { list: [], complete: false }; });
+}
+function hdExtractMkvFonts(url) {
+  var fid = hdMkvFileIdFromUrl(url);
+  if (!fid) return Promise.resolve([]);
+  return hdFontCacheGet(fid).then(function(cached) {
+    if (cached) return cached;
+    return hdFetchMkvHeadFonts(url).then(function(r) {
+      var list = r.list || [];
+      if (r.complete) {
+        hdFontCachePut(fid, list).catch(function() {});
+      }
+      return list;
+    });
+  }).catch(function() { return []; });
+}
 function hdCreateSubAdapter(el) {
   var adapter = {
     el: el,
@@ -10997,6 +11253,8 @@ function hdCreateSubAdapter(el) {
     jassubStarting: false,
     broken: false,
     lastLang: '',
+    fontsLoadedFor: '',
+    fontNames: {},
     lastSrtHtml: null,
     canvasW: 0,
     canvasH: 0,
@@ -11058,6 +11316,7 @@ function hdCreateSubAdapter(el) {
           adapter.dialogues = [];
           adapter.dirty = true;
           adapter.startJassub();
+          adapter.maybeLoadFonts();
           return;
         }
         adapter.mode = 'text';
@@ -11081,9 +11340,10 @@ function hdCreateSubAdapter(el) {
             modernWasmUrl: 'https://cdn.jsdelivr.net/npm/jassub@1.7.13/dist/jassub-worker-modern.wasm'
           });
           if (adapter.jassub.ready && adapter.jassub.ready.then) {
-            adapter.jassub.ready.then(function() { adapter.jassubReady = true; }).catch(function() { adapter.onJassubBroken(); });
+            adapter.jassub.ready.then(function() { adapter.jassubReady = true; adapter.maybeLoadFonts(); }).catch(function() { adapter.onJassubBroken(); });
           } else {
             adapter.jassubReady = true;
+            adapter.maybeLoadFonts();
           }
         } catch (e) {
           adapter.onJassubBroken();
@@ -11092,6 +11352,23 @@ function hdCreateSubAdapter(el) {
         adapter.jassubStarting = false;
         adapter.onJassubBroken();
       });
+    },
+    maybeLoadFonts: function() {
+      if (adapter.broken || !adapter.jassub || !adapter.jassubReady || adapter.mode !== 'ass') return;
+      var url = '';
+      try { url = (typeof moviState !== 'undefined' && moviState.url) ? moviState.url : ''; } catch (e) {}
+      var fid = hdMkvFileIdFromUrl(url);
+      if (!fid || adapter.fontsLoadedFor === fid) return;
+      adapter.fontsLoadedFor = fid;
+      hdExtractMkvFonts(url).then(function(fonts) {
+        if (!adapter.jassub || adapter.fontsLoadedFor !== fid) return;
+        for (var i = 0; i < fonts.length; i++) {
+          var nm = (fonts[i].name || '').toLowerCase();
+          if (nm && adapter.fontNames[nm]) continue;
+          if (nm) adapter.fontNames[nm] = true;
+          try { adapter.jassub.addFont(fonts[i].data); } catch (e2) {}
+        }
+      }).catch(function() {});
     },
     onJassubBroken: function() {
       if (adapter.broken) return;
@@ -13413,6 +13690,18 @@ function adminConsoleUI() {
             </div>
             <label class="switch-toggle" style="position: relative; display: inline-block; width: 42px; height: 22px; margin: 0; flex-shrink: 0;">
               <input type="checkbox" id="toggleGuestAccess" style="opacity: 0; width: 0; height: 0;">
+              <span class="slider-round round-sm" style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #374151; transition: .3s; border-radius: 22px;"></span>
+            </label>
+          </div>
+
+          <!-- Password Toggle -->
+          <div style="padding: 12px 14px; border-radius: 12px; background: rgba(255,255,255,0.02); border: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between;">
+            <div>
+              <div style="font-weight: 600; font-size: 0.84rem; color: var(--text);">🔒 Password Akses Publik</div>
+              <div style="font-size: 0.74rem; color: var(--text-muted);">Aktif: tamu wajib login (password) untuk browsing & download. Nonaktif: akses publik bebas tanpa password. Admin tidak pernah terpengaruh.</div>
+            </div>
+            <label class="switch-toggle" style="position: relative; display: inline-block; width: 42px; height: 22px; margin: 0; flex-shrink: 0;">
+              <input type="checkbox" id="togglePublicPassword" style="opacity: 0; width: 0; height: 0;">
               <span class="slider-round round-sm" style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #374151; transition: .3s; border-radius: 22px;"></span>
             </label>
           </div>
