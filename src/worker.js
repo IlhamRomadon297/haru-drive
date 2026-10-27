@@ -3619,9 +3619,7 @@ function htmlPage(content, env, pageMode = 'public') {
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
   
-  <link rel="stylesheet" href="https://cdn.plyr.io/3.7.8/plyr.css" />
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://cdn.plyr.io/3.7.8/plyr.polyfilled.js"></script>
 
   <style>
     :root {
@@ -4616,7 +4614,7 @@ function htmlPage(content, env, pageMode = 'public') {
       aspect-ratio: 16 / 9;
       max-height: 55vh;
     }
-    .plyr--video { height: 100%; width: 100%; }
+    .movi-player-wrap { height: 100%; width: 100%; }
 
     .modal-header {
       display: flex;
@@ -5594,7 +5592,6 @@ function goToPage(n) {
   renderFileList();
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
-let plyrPlayerInstance = null;
 const isPageAdmin = document.body.getAttribute('data-mode') === 'admin';
 let selectedUploadFile = null;
 
@@ -10700,22 +10697,17 @@ function copyStreamDirectLink(url) {
 function playVideo(fileId, fileName) {
   const modal = document.getElementById('videoModal');
   const title = document.getElementById('videoModalTitle');
-  const video = document.getElementById('plyrPlayer');
+  const wrap = document.getElementById('moviPlayerWrap');
   const extContainer = document.getElementById('externalPlayersContainer');
-  if (!modal || !video) return;
+  if (!modal || !wrap) return;
 
   title.textContent = fileName || 'Video Player';
   const _vmode = getStorageMode();
   const videoUrl = window.location.origin + '/d/' + fileId + '/' + encodeURIComponent(fileName || 'video') + (_vmode === 'gdrive' ? '?mode=gdrive' : '');
-  video.src = videoUrl;
-
-  if (plyrPlayerInstance) {
-    plyrPlayerInstance.destroy();
-  }
-  plyrPlayerInstance = new Plyr(video, {
-    autoplay: false,
-    controls: ['play-large', 'play', 'progress', 'current-time', 'duration', 'mute', 'volume', 'captions', 'settings', 'pip', 'airplay', 'fullscreen']
-  });
+  ensureMoviScript();
+  moviState.attempts = 0;
+  moviState.savedTime = 0;
+  startMoviPlayer(videoUrl);
 
   if (extContainer) {
     const rawNoProto = videoUrl.includes('://') ? videoUrl.split('://')[1] : videoUrl;
@@ -10770,15 +10762,136 @@ function playVideo(fileId, fileName) {
 
 function closeVideoModal() {
   const modal = document.getElementById('videoModal');
-  const video = document.getElementById('plyrPlayer');
-  if (plyrPlayerInstance) {
-    plyrPlayerInstance.stop();
-  }
-  if (video) {
-    video.pause();
-    video.src = '';
-  }
+  const wrap = document.getElementById('moviPlayerWrap');
+  clearMoviWatchers();
+  moviState.el = null;
+  moviState.url = '';
+  moviState.failed = false;
+  if (wrap) wrap.innerHTML = '';
+  hideMoviRetry();
   if (modal) modal.style.display = 'none';
+}
+
+var moviState = { url: '', el: null, attempts: 0, savedTime: 0, failed: false, started: false, startTime: 0, lastTime: -1, lastAdvance: 0, retryTimer: null, stallTimer: null };
+function ensureMoviScript() {
+  if (document.querySelector('script[data-movi-player]')) return;
+  var s = document.createElement('script');
+  s.setAttribute('type', 'module');
+  s.setAttribute('src', 'https://cdn.jsdelivr.net/npm/movi-player@0.3.5/dist/element.js');
+  s.setAttribute('data-movi-player', '1');
+  document.head.appendChild(s);
+}
+function clearMoviWatchers() {
+  if (moviState.retryTimer) { clearTimeout(moviState.retryTimer); moviState.retryTimer = null; }
+  if (moviState.stallTimer) { clearInterval(moviState.stallTimer); moviState.stallTimer = null; }
+}
+function moviSavePosition() {
+  try {
+    var el = moviState.el;
+    var t = el ? el.currentTime : 0;
+    if (typeof t === 'number' && isFinite(t) && t > 0) moviState.savedTime = t;
+  } catch (e) {}
+}
+function startMoviPlayer(url) {
+  var wrap = document.getElementById('moviPlayerWrap');
+  if (!wrap) return;
+  clearMoviWatchers();
+  hideMoviRetry();
+  moviState.url = url;
+  moviState.failed = false;
+  moviState.started = false;
+  moviState.startTime = Date.now();
+  moviState.lastTime = -1;
+  moviState.lastAdvance = Date.now();
+  wrap.innerHTML = '';
+  var el = document.createElement('movi-player');
+  el.setAttribute('src', url);
+  el.setAttribute('controls', '');
+  el.style.width = '100%';
+  el.style.height = '100%';
+  el.style.display = 'block';
+  wrap.appendChild(el);
+  moviState.el = el;
+  if (moviState.savedTime > 0) {
+    (function(saved) {
+      el.addEventListener('loadedmetadata', function() {
+        try { el.currentTime = saved; } catch (e) {}
+      });
+    })(moviState.savedTime);
+  }
+  el.addEventListener('error', function() { handleMoviFailure('network'); });
+  el.addEventListener('playing', function() {
+    if (moviState.failed) return;
+    moviState.started = true;
+    moviState.attempts = 0;
+    hideMoviRetry();
+  });
+  el.addEventListener('timeupdate', function() {
+    if (moviState.failed) return;
+    try {
+      var t = el.currentTime;
+      if (typeof t === 'number' && isFinite(t) && t > moviState.lastTime) {
+        moviState.started = true;
+        moviState.lastTime = t;
+        moviState.lastAdvance = Date.now();
+        moviState.savedTime = t;
+        moviState.attempts = 0;
+        hideMoviRetry();
+      }
+    } catch (e) {}
+  });
+  moviState.stallTimer = setInterval(function() {
+    if (moviState.failed) return;
+    try {
+      var cur = el.currentTime;
+      if (typeof cur !== 'number' || !isFinite(cur)) return;
+      if (el.paused) return;
+      var now = Date.now();
+      if (!moviState.started && now - moviState.startTime > 60000) { handleMoviFailure('stall'); return; }
+      if (moviState.started && now - moviState.lastAdvance > 15000) { handleMoviFailure('stall'); }
+    } catch (e) {}
+  }, 5000);
+}
+function handleMoviFailure(kind) {
+  if (moviState.failed) return;
+  moviState.failed = true;
+  moviSavePosition();
+  clearMoviWatchers();
+  moviState.attempts += 1;
+  var msg = '';
+  if (kind === 'decode') { msg = 'File tidak bisa dibaca (format atau file rusak).'; }
+  else if (kind === 'unsupported') { msg = 'Format tidak didukung pemutar web.'; }
+  else { msg = 'Koneksi terputus atau lambat sehingga video berhenti memuat.'; }
+  if (moviState.attempts > 3) {
+    showMoviRetry(msg + ' Sudah 3x dicoba. Silakan pakai tombol external player di bawah.', false);
+    return;
+  }
+  var delay = moviState.attempts === 1 ? 2000 : (moviState.attempts === 2 ? 5000 : 10000);
+  showMoviRetry(msg + ' Mencoba lagi otomatis dalam ' + (delay / 1000) + ' detik.', true);
+  moviState.retryTimer = setTimeout(function() { startMoviPlayer(moviState.url); }, delay);
+}
+function retryMoviNow() {
+  clearMoviWatchers();
+  if (moviState.attempts > 3) moviState.attempts = 0;
+  startMoviPlayer(moviState.url);
+}
+function showMoviRetry(msg, showNow) {
+  var ext = document.getElementById('externalPlayersContainer');
+  if (!ext || !ext.parentNode) return;
+  var box = document.getElementById('moviRetryBox');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'moviRetryBox';
+    box.style.cssText = 'margin: 0 0 10px; padding: 12px 14px; border-radius: 12px; background: rgba(248, 113, 113, 0.12); border: 1px solid rgba(248, 113, 113, 0.4); color: #fecaca; font-size: 0.82rem; line-height: 1.5; text-align: center;';
+    ext.parentNode.insertBefore(box, ext.parentNode.firstChild);
+  }
+  box.style.display = 'block';
+  var btnLabel = showNow ? 'Coba Lagi Sekarang' : 'Coba Lagi';
+  box.innerHTML = '<div style="margin-bottom: 8px;">' + msg + '</div><button type="button" onclick="retryMoviNow()" style="padding: 8px 16px; background: linear-gradient(135deg, #6366f1, #8b5cf6); border: none; color: #fff; border-radius: 10px; font-weight: 700; cursor: pointer; font-size: 0.82rem;">' + btnLabel + '</button>';
+}
+function hideMoviRetry() {
+  var box = document.getElementById('moviRetryBox');
+  if (box) box.style.display = 'none';
 }
 function downloadFile(fileId) {
   window.location.href = '/d/' + fileId;
@@ -11780,7 +11893,7 @@ function publicUI() {
     <span id="toastCopiedText">31 links copied</span>
   </div>
 
-  <!-- THEATER PLYR VIDEO MODAL -->
+  <!-- THEATER MOVI VIDEO MODAL -->
   <div id="videoModal" class="modal-backdrop" style="display: none;">
     <div class="modal-card video-card">
       <div class="modal-header">
@@ -11790,7 +11903,7 @@ function publicUI() {
         </button>
       </div>
       <div class="video-container-wrap">
-        <video id="plyrPlayer" playsinline controls></video>
+        <div id="moviPlayerWrap" style="width:100%;height:100%;"></div>
       </div>
       <div class="modal-body" style="padding: 12px 18px 14px;">
         <div style="font-size: 0.72rem; font-weight: 700; color: var(--text-dim); text-transform: uppercase; margin-bottom: 6px;">Buka di External Player:</div>
@@ -11915,7 +12028,7 @@ function publicIndexUI(isLoggedIn = false) {
         </button>
       </div>
       <div class="video-container-wrap">
-        <video id="plyrPlayer" playsinline controls></video>
+        <div id="moviPlayerWrap" style="width:100%;height:100%;"></div>
       </div>
       <div class="modal-body" style="padding: 12px 18px 14px;">
         <div style="font-size: 0.72rem; font-weight: 700; color: var(--text-dim); text-transform: uppercase; margin-bottom: 6px;">Buka di External Player:</div>
@@ -12883,7 +12996,7 @@ function adminConsoleUI() {
     </div>
   </div>
 
-  <!-- THEATER PLYR VIDEO MODAL -->
+  <!-- THEATER MOVI VIDEO MODAL -->
   <div id="videoModal" class="modal-backdrop" style="display: none;" onclick="if(event.target===this)closeVideoModal()">
     <div class="modal-card video-card">
       <div class="modal-header">
@@ -12893,7 +13006,7 @@ function adminConsoleUI() {
         </button>
       </div>
       <div class="video-container-wrap">
-        <video id="plyrPlayer" playsinline controls></video>
+        <div id="moviPlayerWrap" style="width:100%;height:100%;"></div>
       </div>
       <div class="modal-body" style="padding: 12px 18px 14px;">
         <div style="font-size: 0.72rem; font-weight: 700; color: var(--text-dim); text-transform: uppercase; margin-bottom: 6px;">Buka di External Player:</div>
