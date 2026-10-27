@@ -172,7 +172,16 @@ export default {
         const formData = await request.formData();
         const password = formData.get('password');
         const redirectParam = formData.get('redirect') || url.searchParams.get('redirect') || '/';
+        const loginIp = clientIpOf(request);
+        const loginLock = await getPinLock(env, loginIp);
+        if (loginLock && loginLock.locked_until && Date.now() < loginLock.locked_until) {
+          const retryMin = Math.ceil((loginLock.locked_until - Date.now()) / 60000);
+          return new Response(htmlPage(loginUI('Terlalu banyak percobaan salah. Coba lagi dalam ' + retryMin + ' menit.', redirectParam), env, 'login'), {
+            headers: { 'Content-Type': 'text/html;charset=UTF-8' }
+          });
+        }
         if (password === APP_PASSWORD) {
+          await clearPinLock(env, loginIp);
           return new Response('Logged in', {
             status: 302,
             headers: {
@@ -181,6 +190,7 @@ export default {
             }
           });
         } else {
+          await recordPinFailure(env, loginIp);
           return new Response(htmlPage(loginUI('Password salah. Silakan coba lagi.', redirectParam), env, 'login'), {
             headers: { 'Content-Type': 'text/html;charset=UTF-8' }
           });
@@ -200,6 +210,31 @@ export default {
           'Set-Cookie': 'harudrive_auth=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT'
         }
       });
+    }
+
+    // ---- PIN brute-force guard: every POST carrying admin_pin/pin ----
+    // Runs before routing so all PIN endpoints share one per-IP counter, whether or
+    // not the caller holds a login cookie (endpoints like /verify still demand the
+    // PIN even when logged in). Correct PINs pass through untouched; only wrong
+    // guesses count. Missing D1 = fail open.
+    if (request.method === 'POST' && url.pathname !== '/login' && url.pathname !== '/logout') {
+      const peekedPin = await peekPinFromRequest(request).catch(() => null);
+      if (peekedPin !== null) {
+        const guardIp = clientIpOf(request);
+        const guardLock = await getPinLock(env, guardIp);
+        if (guardLock && guardLock.locked_until && Date.now() < guardLock.locked_until) {
+          const retrySec = Math.ceil((guardLock.locked_until - Date.now()) / 1000);
+          return new Response(JSON.stringify({ error: 'Terlalu banyak percobaan PIN yang salah. Coba lagi dalam ' + Math.ceil(retrySec / 60) + ' menit.' }), {
+            status: 429,
+            headers: { 'Content-Type': 'application/json', 'Retry-After': String(retrySec) }
+          });
+        }
+        if (!verifyPin(peekedPin)) {
+          await recordPinFailure(env, guardIp);
+        } else {
+          await clearPinLock(env, guardIp);
+        }
+      }
     }
 
     // Handle CORS preflight OPTIONS
@@ -1009,6 +1044,12 @@ export default {
           }), { status: 400, headers: { 'Content-Type': 'application/json' } });
         }
 
+        const otpIp = clientIpOf(request);
+        const otpAllow = await checkOtpSendAllowed(env, otpIp);
+        if (!otpAllow.allowed) {
+          const waitTxt = otpAllow.reason === 'cooldown' ? ('Tunggu ' + otpAllow.retrySec + ' detik sebelum minta OTP lagi.') : ('Batas kirim OTP tercapai (5x per jam). Coba lagi dalam ' + Math.ceil(otpAllow.retrySec / 60) + ' menit.');
+          return new Response(JSON.stringify({ error: waitTxt }), { status: 429, headers: { 'Content-Type': 'application/json', 'Retry-After': String(otpAllow.retrySec) } });
+        }
         // 2. Device not trusted -> Generate OTP and Stateless OTP Challenge Token
         const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
         const now = Date.now();
@@ -1025,6 +1066,7 @@ export default {
         const clientIp = request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || '';
         const clientUa = request.headers.get('User-Agent') || '';
         const emailResult = await sendResendOtpEmail(env, ADMIN_EMAIL, otpCode, { ip: clientIp, ua: clientUa });
+        if (emailResult.success) { await recordOtpSend(env, otpIp); }
 
         return new Response(JSON.stringify({
           success: true,
@@ -1113,6 +1155,12 @@ export default {
           return new Response(JSON.stringify({ error: 'ADMIN_EMAIL belum disetel di Cloudflare Secret.' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
         }
 
+        const otpIp = clientIpOf(request);
+        const otpAllow = await checkOtpSendAllowed(env, otpIp);
+        if (!otpAllow.allowed) {
+          const waitTxt = otpAllow.reason === 'cooldown' ? ('Tunggu ' + otpAllow.retrySec + ' detik sebelum minta OTP lagi.') : ('Batas kirim OTP tercapai (5x per jam). Coba lagi dalam ' + Math.ceil(otpAllow.retrySec / 60) + ' menit.');
+          return new Response(JSON.stringify({ error: waitTxt }), { status: 429, headers: { 'Content-Type': 'application/json', 'Retry-After': String(otpAllow.retrySec) } });
+        }
         const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
         const now = Date.now();
         const expiresAt = now + 10 * 60 * 1000;
@@ -1128,6 +1176,7 @@ export default {
         const clientIp = request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || '';
         const clientUa = request.headers.get('User-Agent') || '';
         const emailResult = await sendResendOtpEmail(env, ADMIN_EMAIL, otpCode, { ip: clientIp, ua: clientUa });
+        if (emailResult.success) { await recordOtpSend(env, otpIp); }
 
         return new Response(JSON.stringify({
           success: true,
@@ -3522,6 +3571,109 @@ async function generateShortId(path) {
   return base64.substring(0, 8);
 }
 
+// ---- Admin brute-force guards: PIN lockout + OTP resend limits ----
+// PIN: 5 wrong guesses from one IP -> that IP is locked out for 3 hours.
+// OTP sends: 60s cooldown between sends + max 5 sends per hour per IP.
+// Missing D1 = fail open (guards silently skip, PIN/OTP checks still apply).
+const PIN_MAX_FAILS = 5;
+const PIN_LOCK_MS = 3 * 60 * 60 * 1000;
+const OTP_RESEND_COOLDOWN_MS = 60 * 1000;
+const OTP_RESEND_MAX = 5;
+const OTP_RESEND_WINDOW_MS = 60 * 60 * 1000;
+function clientIpOf(request) {
+  const fwd = request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || '';
+  const first = fwd.split(',')[0].trim();
+  return first || 'unknown';
+}
+async function getPinLock(env, ip) {
+  if (!env || !env.harudrive_db) return null;
+  try {
+    const row = await env.harudrive_db.prepare('SELECT fails, locked_until FROM pin_locks WHERE ip = ?').bind(ip).first();
+    return row || null;
+  } catch (e) { return null; }
+}
+async function recordPinFailure(env, ip) {
+  if (!env || !env.harudrive_db) return;
+  try {
+    await env.harudrive_db.prepare('CREATE TABLE IF NOT EXISTS pin_locks (ip TEXT PRIMARY KEY, fails INTEGER, locked_until INTEGER, updated INTEGER)').run().catch(() => {});
+    const row = await getPinLock(env, ip);
+    let fails = 1;
+    let lockedUntil = 0;
+    if (row) {
+      if (row.locked_until && Date.now() >= row.locked_until) {
+        fails = 1;
+        lockedUntil = 0;
+      } else {
+        fails = (row.fails || 0) + 1;
+        lockedUntil = fails >= PIN_MAX_FAILS ? Date.now() + PIN_LOCK_MS : (row.locked_until || 0);
+      }
+    }
+    await env.harudrive_db.prepare('INSERT OR REPLACE INTO pin_locks (ip, fails, locked_until, updated) VALUES (?, ?, ?, ?)').bind(ip, fails, lockedUntil, Date.now()).run().catch(() => {});
+  } catch (e) {}
+}
+async function clearPinLock(env, ip) {
+  if (!env || !env.harudrive_db) return;
+  try {
+    const row = await getPinLock(env, ip);
+    if (row && (row.fails || row.locked_until)) {
+      await env.harudrive_db.prepare('DELETE FROM pin_locks WHERE ip = ?').bind(ip).run().catch(() => {});
+    }
+  } catch (e) {}
+}
+async function checkOtpSendAllowed(env, ip) {
+  if (!env || !env.harudrive_db) return { allowed: true };
+  try {
+    const row = await env.harudrive_db.prepare('SELECT count, window_start, last_sent FROM otp_limits WHERE ip = ?').bind(ip).first().catch(() => null);
+    const now = Date.now();
+    if (!row) return { allowed: true };
+    if (row.last_sent && now - row.last_sent < OTP_RESEND_COOLDOWN_MS) {
+      return { allowed: false, retrySec: Math.ceil((OTP_RESEND_COOLDOWN_MS - (now - row.last_sent)) / 1000), reason: 'cooldown' };
+    }
+    if (row.window_start && now - row.window_start < OTP_RESEND_WINDOW_MS && (row.count || 0) >= OTP_RESEND_MAX) {
+      return { allowed: false, retrySec: Math.ceil((OTP_RESEND_WINDOW_MS - (now - row.window_start)) / 1000), reason: 'hourly' };
+    }
+    return { allowed: true };
+  } catch (e) { return { allowed: true }; }
+}
+async function recordOtpSend(env, ip) {
+  if (!env || !env.harudrive_db) return;
+  try {
+    await env.harudrive_db.prepare('CREATE TABLE IF NOT EXISTS otp_limits (ip TEXT PRIMARY KEY, count INTEGER, window_start INTEGER, last_sent INTEGER)').run().catch(() => {});
+    const now = Date.now();
+    const row = await env.harudrive_db.prepare('SELECT count, window_start FROM otp_limits WHERE ip = ?').bind(ip).first().catch(() => null);
+    let count = 1;
+    let win = now;
+    if (row && row.window_start && now - row.window_start < OTP_RESEND_WINDOW_MS) {
+      count = (row.count || 0) + 1;
+      win = row.window_start;
+    }
+    await env.harudrive_db.prepare('INSERT OR REPLACE INTO otp_limits (ip, count, window_start, last_sent) VALUES (?, ?, ?, ?)').bind(ip, count, win, now).run().catch(() => {});
+  } catch (e) {}
+}
+async function peekPinFromRequest(request) {
+  const ct = request.headers.get('Content-Type') || '';
+  try {
+    if (ct.indexOf('application/json') !== -1) {
+      const body = await request.clone().json().catch(() => null);
+      if (body && (body.admin_pin !== undefined || body.pin !== undefined)) {
+        let v = body.admin_pin;
+        if (v === undefined || v === null || v === '') v = body.pin;
+        if (v === undefined || v === null) return null;
+        return String(v);
+      }
+      return null;
+    }
+    if (ct.indexOf('multipart/form-data') !== -1 || ct.indexOf('application/x-www-form-urlencoded') !== -1) {
+      const form = await request.clone().formData().catch(() => null);
+      if (form) {
+        const v = form.get('admin_pin');
+        if (v !== null && v !== undefined) return String(v);
+      }
+      return null;
+    }
+  } catch (e) {}
+  return null;
+}
 async function getPublicAccessConfig(env) {
   const def = { public_access: 'open', public_index: '1', guest_access: '1', storage_gdrive: '1', storage_hf: '1', public_password: '0' };
   if (!env || !env.harudrive_db) return def;
