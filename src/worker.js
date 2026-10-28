@@ -11159,13 +11159,37 @@ function hdSubDebugSync() {
       badge.style.borderRadius = '6px';
       badge.style.pointerEvents = 'auto';
       badge.style.cursor = 'pointer';
+      badge.style.whiteSpace = 'pre-wrap';
       badge.title = 'Klik untuk sembunyikan/tampilkan teks debug';
-      badge.addEventListener('click', function() { try { hdSubDebug.collapsed = !hdSubDebug.collapsed; hdSubDebugSync(); } catch (e) {} });
+      badge.addEventListener('click', function() { try { hdSubDebug.collapsed = true; hdSubDebugSync(); } catch (e) {} });
       document.body.appendChild(badge);
     }
+    var toggle = document.getElementById('hdSubDebugToggle');
+    if (!toggle) {
+      toggle = document.createElement('div');
+      toggle.id = 'hdSubDebugToggle';
+      toggle.style.position = 'fixed';
+      toggle.style.right = '8px';
+      toggle.style.bottom = '8px';
+      toggle.style.zIndex = '99999';
+      toggle.style.background = 'rgba(0,0,0,0.55)';
+      toggle.style.color = '#fff';
+      toggle.style.fontSize = '11px';
+      toggle.style.fontFamily = 'monospace';
+      toggle.style.padding = '4px 8px';
+      toggle.style.borderRadius = '6px';
+      toggle.style.pointerEvents = 'auto';
+      toggle.style.cursor = 'pointer';
+      toggle.title = 'Klik untuk ON/OFF teks debug';
+      toggle.addEventListener('click', function() { try { hdSubDebug.collapsed = (hdSubDebug.collapsed === false) ? true : false; hdSubDebugSync(); } catch (e) {} });
+      document.body.appendChild(toggle);
+    }
     var nl = String.fromCharCode(10);
-    if (hdSubDebug.collapsed) { badge.textContent = 'SUBDEBUG (klik untuk tampilkan)'; return; }
-    badge.textContent = 'SUBDEBUG installed=' + (hdSubDebug.installed ? 'yes' : 'no') + nl + 'mode=' + hdSubDebug.mode + ' codec=' + hdSubDebug.codec + ' head=' + (hdSubDebug.headSeen ? 'yes' : 'no') + nl + 'jassub=' + hdSubDebug.jassub + ' canvas=' + hdSubDebug.canvas + ' dlg=' + hdSubDebug.dlg + ' pkt=' + hdSubDebug.pkt + nl + 'clk=' + hdSubDebug.clk + ' cv=' + hdSubDebug.cv + ' blk=' + hdSubDebug.blank + ' drw=' + hdSubDebug.drw + ' maxA=' + hdSubDebug.maxA + ' sty=' + hdSubDebug.sty + ' dlgT=' + hdSubDebug.firstT + '..' + hdSubDebug.lastT + nl + 'last=' + hdSubDebug.lastDraw + nl + 'pkt0=' + hdSubDebug.pkt0 + nl + 'cvSrc=' + hdSubDebug.cvSrc + nl + 'fs=' + (hdSubDebug.fsMove || 'none') + nl + 'installErr=' + hdSubDebug.installError + nl + 'jassubErr=' + hdSubDebug.jassubError;
+    var showBadge = hdSubDebug.collapsed === false;
+    toggle.textContent = showBadge ? 'SUBDEBUG: ON' : 'SUBDEBUG: OFF';
+    if (!showBadge) { badge.style.display = 'none'; return; }
+    badge.style.display = '';
+    badge.textContent = 'SUBDEBUG installed=' + (hdSubDebug.installed ? 'yes' : 'no') + nl + 'mode=' + hdSubDebug.mode + ' codec=' + hdSubDebug.codec + ' head=' + (hdSubDebug.headSeen ? 'yes' : 'no') + nl + 'jassub=' + hdSubDebug.jassub + ' canvas=' + hdSubDebug.canvas + ' dlg=' + hdSubDebug.dlg + ' pkt=' + hdSubDebug.pkt + nl + 'clk=' + hdSubDebug.clk + ' cv=' + hdSubDebug.cv + ' blk=' + hdSubDebug.blank + ' drw=' + hdSubDebug.drw + ' maxA=' + hdSubDebug.maxA + ' sty=' + hdSubDebug.sty + ' dlgT=' + hdSubDebug.firstT + '..' + hdSubDebug.lastT + nl + 'last=' + hdSubDebug.lastDraw + nl + 'pkt0=' + hdSubDebug.pkt0 + nl + 'cvSrc=' + hdSubDebug.cvSrc + nl + 'fs=' + (hdSubDebug.fsMove || 'none') + ' fsSeen=' + (hdSubDebug.fsSeen ? 'yes' : 'no') + ' pseudoSeen=' + (hdSubDebug.pseudoSeen ? 'yes' : 'no') + ' fsReq=' + (hdSubDebug.fsReq || 0) + nl + 'installErr=' + hdSubDebug.installError + nl + 'jassubErr=' + hdSubDebug.jassubError;
   } catch (e) {}
 }
 function hdDecodeBytes(data) {
@@ -12213,6 +12237,9 @@ function hdCreateSubAdapter(el) {
               if (wr) { if (!pw) pw = wr.clientWidth; if (!ph) ph = wr.clientHeight; }
             }
             if (document.fullscreenElement === moviState.el) { pw = window.innerWidth || pw; ph = window.innerHeight || ph; }
+            var pseudoFs = false;
+            try { pseudoFs = !!(moviState.el && moviState.el.classList && moviState.el.classList.contains('movi-pseudo-fullscreen')); } catch (e) {}
+            if (pseudoFs) { pw = window.innerWidth || pw; ph = window.innerHeight || ph; }
             if (!pw) pw = vw || 1280;
             if (!ph) ph = vh || 720;
             if (adapter.canvasW !== pw || adapter.canvasH !== ph) {
@@ -12406,15 +12433,20 @@ function hdSubFullscreenSync() {
   try {
     var cv = adapter.canvas, layer = adapter.srtLayer;
     if (!cv) return;
-    var fs = document.fullscreenElement;
+    var el = moviState.el;
+    var pseudo = false;
+    try { pseudo = !!(el && el.classList && el.classList.contains('movi-pseudo-fullscreen')); } catch (e) {}
+    if (pseudo) hdSubDebug.pseudoSeen = true;
+    if (document.fullscreenElement) hdSubDebug.fsSeen = true;
+    var inFs = !!document.fullscreenElement || pseudo;
     var sr = null;
-    try { sr = moviState.el ? moviState.el.shadowRoot : null; } catch (e) {}
-    if (fs && sr) {
+    try { sr = el ? el.shadowRoot : null; } catch (e) {}
+    if (inFs && sr) {
       if (cv.parentNode !== sr) { try { sr.appendChild(cv); } catch (e) {} }
       if (layer && layer.parentNode !== sr) { try { sr.appendChild(layer); } catch (e) {} }
       hdSubDebug.cvSrc = 'shadow-fs';
       hdSubDebug.fsMove = 'shadow';
-    } else if (adapter.ownContainer && cv.parentNode !== adapter.ownContainer) {
+    } else if (!inFs && adapter.ownContainer && cv.parentNode !== adapter.ownContainer) {
       try { adapter.ownContainer.appendChild(cv); } catch (e) {}
       if (layer) { try { adapter.ownContainer.appendChild(layer); } catch (e) {} }
       hdSubDebug.cvSrc = 'box';
@@ -12424,13 +12456,14 @@ function hdSubFullscreenSync() {
 }
 function hdSubPollStart(el) {
   try { if (hdSubPollTimer) clearInterval(hdSubPollTimer); } catch (e) {}
-  if (!hdSubFsBound) { try { document.addEventListener('fullscreenchange', hdSubFullscreenSync); hdSubFsBound = true; } catch (e) {} }
+  if (!hdSubFsBound) { try { document.addEventListener('fullscreenchange', hdSubFullscreenSync); document.addEventListener('movi-fullscreen-request', function() { try { hdSubDebug.fsReq = (hdSubDebug.fsReq || 0) + 1; } catch (e) {} }); hdSubFsBound = true; } catch (e) {} }
   hdSubPollTimer = setInterval(function() {
     try {
       var cur = moviState.el;
       if (!cur) return;
       hdSubReconcile(cur);
       hdAssWatchdogTick(cur);
+      hdSubFullscreenSync();
       hdSubDebugSync();
     } catch (e2) {}
   }, 1000);
