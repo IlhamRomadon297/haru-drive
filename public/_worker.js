@@ -11826,13 +11826,15 @@ function hdAssDrawEvent(ctx, ev, t, S) {
     var base = hdAssStyleFor(S.styles, ev.style);
     var sx = S.prx > 0 ? S.cw / S.prx : 1;
     var sy = S.pry > 0 ? S.ch / S.pry : 1;
+    var ox = S.ox || 0;
+    var oy = S.oy || 0;
     var firstTags = {};
     if (ev.lines.length > 0 && ev.lines[0].segments.length > 0) firstTags = ev.lines[0].segments[0].tags;
     var eff = hdAssApplyTransform(firstTags, ev, t);
     var an = eff.an || base.align;
-    var ml = ev.ml >= 0 ? ev.ml : base.ml;
-    var mr = ev.mr >= 0 ? ev.mr : base.mr;
-    var mv = ev.mv >= 0 ? ev.mv : base.mv;
+    var ml = ev.ml > 0 ? ev.ml : base.ml;
+    var mr = ev.mr > 0 ? ev.mr : base.mr;
+    var mv = ev.mv > 0 ? ev.mv : base.mv;
     var lineInfos = [];
     var totalH = 0;
     for (var li = 0; li < ev.lines.length; li++) {
@@ -11859,8 +11861,8 @@ function hdAssDrawEvent(ctx, ev, t, S) {
     var col = (an - 1) % 3;
     var row = Math.floor((an - 1) / 3);
     var halign = col === 0 ? 'left' : (col === 1 ? 'center' : 'right');
-    var ax = col === 0 ? ml * sx : (col === 1 ? S.cw / 2 : S.cw - mr * sx);
-    var ay = row === 0 ? S.ch - mv * sy : (row === 1 ? S.ch / 2 : mv * sy);
+    var ax = col === 0 ? ml * sx + ox : (col === 1 ? ox + S.cw / 2 : ox + S.cw - mr * sx);
+    var ay = row === 0 ? oy + S.ch - mv * sy : (row === 1 ? oy + S.ch / 2 : oy + mv * sy);
     var valign = row === 0 ? 'bottom' : (row === 1 ? 'middle' : 'top');
     var pos = eff.pos || null;
     var move = eff.move || null;
@@ -11872,7 +11874,7 @@ function hdAssDrawEvent(ctx, ev, t, S) {
       if (mp < 0) mp = 0; if (mp > 1) mp = 1;
       pos = [move.x1 + (move.x2 - move.x1) * mp, move.y1 + (move.y2 - move.y1) * mp];
     }
-    if (pos) { ax = pos[0] * sx; ay = pos[1] * sy; }
+    if (pos) { ax = ox + pos[0] * sx; ay = oy + pos[1] * sy; }
     var op = 1;
     var rel = (t - ev.start) * 1000;
     if (eff.fad) {
@@ -11959,9 +11961,9 @@ function hdAssDrawEvent(ctx, ev, t, S) {
           if (sg2.tags.a1 !== undefined) prim = hdAssWithAlpha(prim, hdAssAlpha01(sg2.tags.a1));
           var sec = hdAssParseColor(sg2.tags.c2 || sb2.secondary, 'rgba(255,255,0,1)');
           var outc = hdAssParseColor(sg2.tags.c3 || sb2.outline, 'rgba(0,0,0,1)');
-          var ow = (sg2.tags.bord !== undefined ? sg2.tags.bord : sb2.outlineW) * sx;
-          var sh = (sg2.tags.shad !== undefined ? sg2.tags.shad : sb2.shadow) * sx;
-          var bl = (sg2.tags.blur || 0) * sx;
+          var ow = (sg2.tags.bord !== undefined ? sg2.tags.bord : sb2.outlineW) * (S.scaledBorder === false ? 1 : sx);
+          var sh = (sg2.tags.shad !== undefined ? sg2.tags.shad : sb2.shadow) * (S.scaledBorder === false ? 1 : sx);
+          var bl = (sg2.tags.blur || 0) * (S.scaledBorder === false ? 1 : sx);
           var fill = mode === 'secondary' ? sec : prim;
           if (mode === 'primary' && sh > 0) {
             ctx.shadowColor = boxBack;
@@ -12007,7 +12009,7 @@ function hdAssDrawEvent(ctx, ev, t, S) {
     return drawn;
   } catch (e) { try { ctx.restore(); } catch (e2) {} return false; }
 }
-function hdAssRenderFrame(ad, t) {
+function hdAssRenderFrame(ad, t, vw, vh) {
   var drawn = 0;
   try {
     var cv = ad.canvas;
@@ -12020,7 +12022,13 @@ function hdAssRenderFrame(ad, t) {
       for (var i = 0; i < ad.assEvents.length; i++) { if (ad.assEvents[i].end >= t - 5) kept.push(ad.assEvents[i]); }
       ad.assEvents = kept;
     }
-    var S = { cw: cv.width, ch: cv.height, prx: ad.playResX || 0, pry: ad.playResY || 0, styles: ad.parsedStyles || {} };
+    var cw = cv.width, ch = cv.height, ox = 0, oy = 0;
+    if (vw > 0 && vh > 0 && cv.width > 0 && cv.height > 0) {
+      var va = vw / vh, ca = cv.width / cv.height;
+      if (va > ca) { ch = Math.round(cv.width / va); oy = Math.round((cv.height - ch) / 2); }
+      else { cw = Math.round(cv.height * va); ox = Math.round((cv.width - cw) / 2); }
+    }
+    var S = { cw: cw, ch: ch, ox: ox, oy: oy, prx: ad.playResX || 0, pry: ad.playResY || 0, styles: ad.parsedStyles || {}, scaledBorder: ad.scaledBorder !== false };
     for (var j = 0; j < ad.assEvents.length; j++) {
       var ev = ad.assEvents[j];
       if (hdAssDrawEvent(ctx, ev, t, S)) drawn++;
@@ -12159,8 +12167,9 @@ function hdCreateSubAdapter(el) {
           adapter.assEvents = [];
           var parsed = hdAssParseStyles(head);
           adapter.parsedStyles = parsed.styles;
-          adapter.playResX = parsed.playResX;
-          adapter.playResY = parsed.playResY;
+          adapter.playResX = parsed.playResX || 640;
+          adapter.playResY = parsed.playResY || 360;
+          adapter.scaledBorder = parsed.scaledBorder !== false;
           hdSubDebug.mode = 'ass';
           hdSubDebug.jassub = 'canvas';
           hdSubDebug.sty = (head.indexOf('[V4+ Styles]') >= 0 || head.indexOf('[V4 Styles]') >= 0) ? 'yes' : 'no';
@@ -12231,17 +12240,16 @@ function hdCreateSubAdapter(el) {
           adapter.lastClock = t;
           hdSubDebug.clk = Math.floor(t);
           if (adapter.canvas) {
-            var par = adapter.canvas.parentNode;
-            var pw = par ? par.clientWidth : 0;
-            var ph = par ? par.clientHeight : 0;
+            var pw = 0, ph = 0;
+            try { var br = adapter.canvas.getBoundingClientRect(); if (br) { pw = Math.round(br.width); ph = Math.round(br.height); } } catch (e) {}
+            if (!pw || !ph) {
+              var par = adapter.canvas.parentNode;
+              if (par) { if (!pw) pw = par.clientWidth; if (!ph) ph = par.clientHeight; }
+            }
             if (!pw || !ph) {
               var wr = document.getElementById('moviPlayerWrap');
               if (wr) { if (!pw) pw = wr.clientWidth; if (!ph) ph = wr.clientHeight; }
             }
-            if (document.fullscreenElement === moviState.el) { pw = window.innerWidth || pw; ph = window.innerHeight || ph; }
-            var pseudoFs = false;
-            try { pseudoFs = !!(moviState.el && moviState.el.classList && moviState.el.classList.contains('movi-pseudo-fullscreen')); } catch (e) {}
-            if (pseudoFs) { pw = window.innerWidth || pw; ph = window.innerHeight || ph; }
             if (!pw) pw = vw || 1280;
             if (!ph) ph = vh || 720;
             if (adapter.canvasW !== pw || adapter.canvasH !== ph) {
@@ -12253,7 +12261,7 @@ function hdCreateSubAdapter(el) {
           }
           hdSubDebug.cv = adapter.canvasW + 'x' + adapter.canvasH;
           var dr = 0;
-          try { dr = hdAssRenderFrame(adapter, t); } catch (e) {}
+          try { dr = hdAssRenderFrame(adapter, t, vw, vh); } catch (e) {}
           hdSubDebug.drw = dr;
           return;
         }
