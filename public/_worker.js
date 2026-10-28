@@ -11830,7 +11830,9 @@ function hdCreateSubAdapter(el) {
   };
   return adapter;
 }
+var HD_SUB_ADAPTER_ENABLED = false;
 function hdInstallSubAdapterRetry(el) {
+  if (!HD_SUB_ADAPTER_ENABLED) return;
   try {
     if (moviState.el === el && el.setSubtitleRenderer) { el.setSubtitleRenderer(hdCreateSubAdapter(el)); hdSubDebug.installed = true; hdSubDebug.installError = ''; }
     else if (moviState.el !== el) { hdSubDebug.installError = 'stale element'; }
@@ -11846,6 +11848,7 @@ function hdInstallSubAdapterWaitUpgrade(el) {
   } catch (e) { hdSubDebug.installError = 'whenDefined failed'; hdSubDebugSync(); }
 }
 function hdInstallSubAdapter(el) {
+  if (!HD_SUB_ADAPTER_ENABLED) return;
   if (hdJassubModule) {
     try {
       if (el.setSubtitleRenderer) { el.setSubtitleRenderer(hdCreateSubAdapter(el)); hdSubDebug.installed = true; hdSubDebug.installError = ''; }
