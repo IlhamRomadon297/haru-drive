@@ -11115,6 +11115,7 @@ function ensureMoviScript() {
 function clearMoviWatchers() {
   if (moviState.retryTimer) { clearTimeout(moviState.retryTimer); moviState.retryTimer = null; }
   if (moviState.stallTimer) { clearInterval(moviState.stallTimer); moviState.stallTimer = null; }
+  hdSubPollStop();
 }
 function moviSavePosition() {
   try {
@@ -11170,7 +11171,7 @@ function hdEnsureJassubUmd() {
   });
 }
 var hdJassubWorkerBlob = null;
-var hdSubDebug = { installed: false, installError: '', mode: '', codec: '', headSeen: false, jassub: 'idle', jassubError: '', pkt: 0, dlg: 0, canvas: 'no', clk: 0, cv: '0x0', sty: '?', firstT: '', lastT: '' };
+var hdSubDebug = { installed: false, installError: '', mode: '', codec: '', headSeen: false, jassub: 'idle', jassubError: '', pkt: 0, dlg: 0, canvas: 'no', clk: 0, cv: '0x0', sty: '?', firstT: '', lastT: '', blank: 0 };
 function hdSubDebugSync() {
   try {
     if (typeof window === 'undefined' || !window.location || window.location.search.indexOf('hdsubdebug=1') < 0) return;
@@ -11193,7 +11194,7 @@ function hdSubDebugSync() {
       document.body.appendChild(badge);
     }
     var nl = String.fromCharCode(10);
-    badge.textContent = 'SUBDEBUG installed=' + (hdSubDebug.installed ? 'yes' : 'no') + nl + 'mode=' + hdSubDebug.mode + ' codec=' + hdSubDebug.codec + ' head=' + (hdSubDebug.headSeen ? 'yes' : 'no') + nl + 'jassub=' + hdSubDebug.jassub + ' canvas=' + hdSubDebug.canvas + ' dlg=' + hdSubDebug.dlg + ' pkt=' + hdSubDebug.pkt + nl + 'clk=' + hdSubDebug.clk + ' cv=' + hdSubDebug.cv + ' sty=' + hdSubDebug.sty + ' dlgT=' + hdSubDebug.firstT + '..' + hdSubDebug.lastT + nl + 'installErr=' + hdSubDebug.installError + nl + 'jassubErr=' + hdSubDebug.jassubError;
+    badge.textContent = 'SUBDEBUG installed=' + (hdSubDebug.installed ? 'yes' : 'no') + nl + 'mode=' + hdSubDebug.mode + ' codec=' + hdSubDebug.codec + ' head=' + (hdSubDebug.headSeen ? 'yes' : 'no') + nl + 'jassub=' + hdSubDebug.jassub + ' canvas=' + hdSubDebug.canvas + ' dlg=' + hdSubDebug.dlg + ' pkt=' + hdSubDebug.pkt + nl + 'clk=' + hdSubDebug.clk + ' cv=' + hdSubDebug.cv + ' blk=' + hdSubDebug.blank + ' sty=' + hdSubDebug.sty + ' dlgT=' + hdSubDebug.firstT + '..' + hdSubDebug.lastT + nl + 'installErr=' + hdSubDebug.installError + nl + 'jassubErr=' + hdSubDebug.jassubError;
   } catch (e) {}
 }
 function hdJassubWorkerBlobUrl() {
@@ -11607,14 +11608,16 @@ function hdCreateSubAdapter(el) {
     configure: function(track, extradata) {
       adapter.clear();
       adapter.mode = 'none';
+      adapter.broken = false;
+      hdSubDebug.blank = 0;
       try {
         if (!track) { hdSubDebug.mode = 'none'; hdSubDebugSync(); return; }
         adapter.lastLang = track.language || '';
         if (track.subtitleType === 'image') {
-          adapter.mode = 'image';
-          try { console.warn('[HaruDrive] subtitle gambar (PGS/DVB) dilewati mode ASS'); } catch (e) {}
+          adapter.mode = 'none';
           hdSubDebug.mode = 'image';
           hdSubDebugSync();
+          if (HD_SUB_ADAPTER_ASS_ONLY) hdSubScheduleUninstall(track.id);
           return;
         }
         var head = '';
@@ -11637,11 +11640,11 @@ function hdCreateSubAdapter(el) {
           hdSubDebugSync();
           return;
         }
-        adapter.mode = 'text';
+        adapter.mode = 'none';
         adapter.cues = [];
-        try { adapter.ensureOwnCanvas(); } catch (e2) {}
-        hdSubDebug.mode = 'text';
+        hdSubDebug.mode = 'none';
         hdSubDebugSync();
+        if (HD_SUB_ADAPTER_ASS_ONLY) hdSubScheduleUninstall(track.id);
       } catch (e) {}
     },
     startJassub: function() {
@@ -11711,7 +11714,12 @@ function hdCreateSubAdapter(el) {
         var el2 = adapter.el;
         if (el2 && el2.setSubtitleRenderer) {
           el2.setSubtitleRenderer(null);
-          if (lang) {
+          hdSubState.installed = false;
+          hdSubDebug.installed = false;
+          var cur = hdSubActiveTrack(el2);
+          if (cur && el2.player && el2.player.selectSubtitleTrack) {
+            try { el2.player.selectSubtitleTrack(cur.id); } catch (e2) {}
+          } else if (lang) {
             try { el2.selectSubtitleLang(lang); } catch (e2) {}
           }
         }
@@ -11816,6 +11824,9 @@ function hdCreateSubAdapter(el) {
       } catch (e) {}
     },
     destroy: function() {
+      try { if (hdCurrentSubAdapter === adapter) hdCurrentSubAdapter = null; } catch (e0) {}
+      hdSubState.installed = false;
+      hdSubDebug.installed = false;
       try { if (adapter.jassub) adapter.jassub.destroy(); } catch (e) {}
       try { if (adapter.ownContainer && adapter.ownContainer.parentNode) adapter.ownContainer.parentNode.removeChild(adapter.ownContainer); } catch (e2) {}
       adapter.ownContainer = null;
@@ -11828,13 +11839,149 @@ function hdCreateSubAdapter(el) {
       adapter.cues = [];
     }
   };
+  hdCurrentSubAdapter = adapter;
   return adapter;
 }
-var HD_SUB_ADAPTER_ENABLED = false;
+var HD_SUB_ADAPTER_ENABLED = true;
+var HD_SUB_ADAPTER_ASS_ONLY = true;
+var hdCurrentSubAdapter = null;
+var hdSubState = { installed: false, silentFor: '', blankStreak: 0 };
+var hdSubPollTimer = null;
+function hdSubActiveTrack(el) {
+  try {
+    var p = el && el.player;
+    if (!p || !p.trackManager || !p.trackManager.getActiveSubtitleTrack) return null;
+    return p.trackManager.getActiveSubtitleTrack();
+  } catch (e) { return null; }
+}
+function hdTrackIsAss(t) {
+  if (!t) return false;
+  var codec = (t.codec || '').toLowerCase();
+  return codec === 'ass' || codec === 'ssa';
+}
+function hdSubUninstallToNative(el) {
+  var t = hdSubActiveTrack(el);
+  try { if (el && el.setSubtitleRenderer) el.setSubtitleRenderer(null); } catch (e) {}
+  hdSubState.installed = false;
+  hdSubDebug.installed = false;
+  hdSubDebugSync();
+  try {
+    if (t && t.id !== undefined && el && el.player && el.player.selectSubtitleTrack) el.player.selectSubtitleTrack(t.id);
+  } catch (e2) {}
+}
+function hdSubScheduleUninstall(trackId) {
+  setTimeout(function() {
+    try {
+      var el3 = hdCurrentSubAdapter ? hdCurrentSubAdapter.el : null;
+      if (!el3 || moviState.el !== el3) return;
+      var cur = hdSubActiveTrack(el3);
+      if (!cur || String(cur.id) !== String(trackId)) return;
+      if (hdSubState.installed) hdSubUninstallToNative(el3);
+    } catch (e) {}
+  }, 0);
+}
+function hdSubReconcile(el) {
+  if (!HD_SUB_ADAPTER_ENABLED) return;
+  if (!el || moviState.el !== el) return;
+  var t = hdSubActiveTrack(el);
+  var wantAss = HD_SUB_ADAPTER_ASS_ONLY ? hdTrackIsAss(t) : true;
+  if (wantAss) {
+    if (t && hdSubState.silentFor && hdSubState.silentFor === String(t.id)) return;
+    if (!hdSubState.installed) hdInstallSubAdapter(el);
+  } else if (hdSubState.installed) {
+    hdSubUninstallToNative(el);
+  }
+}
+function hdAssTimeToSec(str) {
+  try {
+    var parts = (str || '').split(':');
+    if (parts.length !== 3) return -1;
+    var h = parseFloat(parts[0]) || 0;
+    var m = parseFloat(parts[1]) || 0;
+    var s = parseFloat(parts[2]) || 0;
+    return h * 3600 + m * 60 + s;
+  } catch (e) { return -1; }
+}
+function hdAssDialogueCovers(t) {
+  try {
+    var ad = hdCurrentSubAdapter;
+    if (!ad) return false;
+    for (var i = 0; i < ad.dialogues.length; i++) {
+      var f = ad.dialogues[i].split(',');
+      if (f.length < 3) continue;
+      var st = hdAssTimeToSec(f[1]);
+      var en = hdAssTimeToSec(f[2]);
+      if (st >= 0 && en >= 0 && t >= st && t < en) return true;
+    }
+  } catch (e) {}
+  return false;
+}
+function hdAssCanvasBlank() {
+  try {
+    var ad = hdCurrentSubAdapter;
+    if (!ad || !ad.canvas) return -1;
+    var cv = ad.canvas;
+    if (!cv.width || !cv.height) return -1;
+    var ctx = cv.getContext('2d');
+    if (!ctx) return -1;
+    var w = cv.width;
+    var h = cv.height;
+    for (var gy = 0; gy < 4; gy++) {
+      for (var gx = 0; gx < 8; gx++) {
+        var x = Math.floor((gx + 0.5) * w / 8);
+        var y = Math.floor((gy + 0.5) * h / 4);
+        var d = ctx.getImageData(x, y, 1, 1).data;
+        if (d[3] > 10) return false;
+      }
+    }
+    return true;
+  } catch (e) { return -1; }
+}
+function hdAssWatchdogTick(el) {
+  try {
+    var ad = hdCurrentSubAdapter;
+    if (!ad || ad.mode !== 'ass' || !ad.jassubReady || !ad.canvas) return;
+    var t = ad.lastClock;
+    if (typeof t !== 'number' || t <= 0) return;
+    if (!hdAssDialogueCovers(t)) { hdSubState.blankStreak = 0; hdSubDebug.blank = 0; return; }
+    var blank = hdAssCanvasBlank();
+    if (blank === -1) return;
+    if (blank) {
+      hdSubState.blankStreak = (hdSubState.blankStreak || 0) + 1;
+      hdSubDebug.blank = hdSubState.blankStreak;
+      hdSubDebugSync();
+      if (hdSubState.blankStreak >= 3) {
+        hdSubState.blankStreak = 0;
+        hdSubDebug.blank = 0;
+        var cur = hdSubActiveTrack(el);
+        if (cur) hdSubState.silentFor = String(cur.id);
+        try { console.warn('[HaruDrive] ASS canvas diam, fallback native'); } catch (e2) {}
+        hdSubUninstallToNative(el);
+      }
+    } else {
+      hdSubState.blankStreak = 0;
+      hdSubDebug.blank = 0;
+    }
+  } catch (e) {}
+}
+function hdSubPollStart(el) {
+  try { if (hdSubPollTimer) clearInterval(hdSubPollTimer); } catch (e) {}
+  hdSubPollTimer = setInterval(function() {
+    try {
+      var cur = moviState.el;
+      if (!cur) return;
+      hdSubReconcile(cur);
+      hdAssWatchdogTick(cur);
+    } catch (e2) {}
+  }, 1000);
+}
+function hdSubPollStop() {
+  try { if (hdSubPollTimer) { clearInterval(hdSubPollTimer); hdSubPollTimer = null; } } catch (e) {}
+}
 function hdInstallSubAdapterRetry(el) {
   if (!HD_SUB_ADAPTER_ENABLED) return;
   try {
-    if (moviState.el === el && el.setSubtitleRenderer) { el.setSubtitleRenderer(hdCreateSubAdapter(el)); hdSubDebug.installed = true; hdSubDebug.installError = ''; }
+    if (moviState.el === el && el.setSubtitleRenderer) { el.setSubtitleRenderer(hdCreateSubAdapter(el)); hdSubDebug.installed = true; hdSubState.installed = true; hdSubDebug.installError = ''; }
     else if (moviState.el !== el) { hdSubDebug.installError = 'stale element'; }
     else { hdSubDebug.installError = 'renderer method still missing after upgrade'; }
   } catch (e) { hdSubDebug.installError = 'install: ' + (e && e.message ? e.message : String(e)); try { console.warn('[HaruDrive] sub adapter install failed: ' + hdSubDebug.installError); } catch (e2) {} }
@@ -11851,7 +11998,7 @@ function hdInstallSubAdapter(el) {
   if (!HD_SUB_ADAPTER_ENABLED) return;
   if (hdJassubModule) {
     try {
-      if (el.setSubtitleRenderer) { el.setSubtitleRenderer(hdCreateSubAdapter(el)); hdSubDebug.installed = true; hdSubDebug.installError = ''; }
+      if (el.setSubtitleRenderer) { el.setSubtitleRenderer(hdCreateSubAdapter(el)); hdSubDebug.installed = true; hdSubState.installed = true; hdSubDebug.installError = ''; }
       else if (typeof customElements !== 'undefined' && customElements.whenDefined) { hdInstallSubAdapterWaitUpgrade(el); }
       else { hdSubDebug.installError = 'renderer method missing'; }
     } catch (e) { hdSubDebug.installError = 'install: ' + (e && e.message ? e.message : String(e)); try { console.warn('[HaruDrive] sub adapter install failed: ' + hdSubDebug.installError); } catch (e2) {} }
@@ -11860,7 +12007,7 @@ function hdInstallSubAdapter(el) {
   }
   hdEnsureJassub().then(function() {
     try {
-      if (moviState.el === el && el.setSubtitleRenderer) { el.setSubtitleRenderer(hdCreateSubAdapter(el)); hdSubDebug.installed = true; hdSubDebug.installError = ''; }
+      if (moviState.el === el && el.setSubtitleRenderer) { el.setSubtitleRenderer(hdCreateSubAdapter(el)); hdSubDebug.installed = true; hdSubState.installed = true; hdSubDebug.installError = ''; }
       else if (moviState.el !== el) { hdSubDebug.installError = 'stale element'; }
       else if (typeof customElements !== 'undefined' && customElements.whenDefined) { hdInstallSubAdapterWaitUpgrade(el); }
       else { hdSubDebug.installError = 'renderer method missing'; }
@@ -11906,7 +12053,10 @@ function startMoviPlayer() {
   el.style.height = '100%';
   el.style.display = 'block';
   moviState.el = el;
-  hdInstallSubAdapter(el);
+  hdSubState.installed = false;
+  hdSubState.silentFor = '';
+  hdSubState.blankStreak = 0;
+  hdSubPollStart(el);
   if (moviState.savedTime > 0) {
     (function(saved) {
       el.addEventListener('loadedmetadata', function() {
