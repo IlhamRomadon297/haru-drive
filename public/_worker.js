@@ -11139,7 +11139,7 @@ function buildMoviPlaylist(fileId) {
   return items;
 }
 var hdTextDecoder = null;
-var hdSubDebug = { installed: false, installError: '', mode: '', codec: '', headSeen: false, jassub: 'idle', jassubError: '', pkt: 0, dlg: 0, canvas: 'no', clk: 0, cv: '0x0', sty: '?', firstT: '', lastT: '', blank: 0, drw: 0, maxA: 0, lastDraw: '' };
+var hdSubDebug = { installed: false, installError: '', mode: '', codec: '', headSeen: false, jassub: 'idle', jassubError: '', pkt: 0, dlg: 0, canvas: 'no', clk: 0, cv: '0x0', sty: '?', firstT: '', lastT: '', blank: 0, drw: 0, maxA: 0, lastDraw: '', pkt0: '', cvSrc: '' };
 function hdSubDebugSync() {
   try {
     if (typeof window === 'undefined' || !window.location || window.location.search.indexOf('hdsubdebug=1') < 0) return;
@@ -11162,7 +11162,7 @@ function hdSubDebugSync() {
       document.body.appendChild(badge);
     }
     var nl = String.fromCharCode(10);
-    badge.textContent = 'SUBDEBUG installed=' + (hdSubDebug.installed ? 'yes' : 'no') + nl + 'mode=' + hdSubDebug.mode + ' codec=' + hdSubDebug.codec + ' head=' + (hdSubDebug.headSeen ? 'yes' : 'no') + nl + 'jassub=' + hdSubDebug.jassub + ' canvas=' + hdSubDebug.canvas + ' dlg=' + hdSubDebug.dlg + ' pkt=' + hdSubDebug.pkt + nl + 'clk=' + hdSubDebug.clk + ' cv=' + hdSubDebug.cv + ' blk=' + hdSubDebug.blank + ' drw=' + hdSubDebug.drw + ' maxA=' + hdSubDebug.maxA + ' sty=' + hdSubDebug.sty + ' dlgT=' + hdSubDebug.firstT + '..' + hdSubDebug.lastT + nl + 'last=' + hdSubDebug.lastDraw + nl + 'installErr=' + hdSubDebug.installError + nl + 'jassubErr=' + hdSubDebug.jassubError;
+    badge.textContent = 'SUBDEBUG installed=' + (hdSubDebug.installed ? 'yes' : 'no') + nl + 'mode=' + hdSubDebug.mode + ' codec=' + hdSubDebug.codec + ' head=' + (hdSubDebug.headSeen ? 'yes' : 'no') + nl + 'jassub=' + hdSubDebug.jassub + ' canvas=' + hdSubDebug.canvas + ' dlg=' + hdSubDebug.dlg + ' pkt=' + hdSubDebug.pkt + nl + 'clk=' + hdSubDebug.clk + ' cv=' + hdSubDebug.cv + ' blk=' + hdSubDebug.blank + ' drw=' + hdSubDebug.drw + ' maxA=' + hdSubDebug.maxA + ' sty=' + hdSubDebug.sty + ' dlgT=' + hdSubDebug.firstT + '..' + hdSubDebug.lastT + nl + 'last=' + hdSubDebug.lastDraw + nl + 'pkt0=' + hdSubDebug.pkt0 + nl + 'cvSrc=' + hdSubDebug.cvSrc + nl + 'installErr=' + hdSubDebug.installError + nl + 'jassubErr=' + hdSubDebug.jassubError;
   } catch (e) {}
 }
 function hdDecodeBytes(data) {
@@ -12029,7 +12029,8 @@ function hdCreateSubAdapter(el) {
     canvasH: 0,
     mount: function(overlay) {
       adapter.overlay = overlay;
-      try { overlay.style.position = 'relative'; } catch (e0) {}
+      try { overlay.style.position = 'relative'; overlay.style.zIndex = '9999'; } catch (e0) {}
+      hdSubDebug.cvSrc = 'overlay';
       adapter.buildCanvas(overlay);
     },
     buildCanvas: function(container) {
@@ -12041,6 +12042,7 @@ function hdCreateSubAdapter(el) {
         cv.style.width = '100%';
         cv.style.height = '100%';
         cv.style.pointerEvents = 'none';
+        cv.style.zIndex = '9999';
         container.appendChild(cv);
         adapter.canvas = cv;
         hdSubDebug.canvas = 'yes';
@@ -12078,10 +12080,11 @@ function hdCreateSubAdapter(el) {
       box.style.width = '100%';
       box.style.height = '100%';
       box.style.pointerEvents = 'none';
-      box.style.zIndex = '10';
+      box.style.zIndex = '9999';
       wrap.appendChild(box);
       adapter.ownContainer = box;
       adapter.overlay = box;
+      hdSubDebug.cvSrc = 'box';
       adapter.buildCanvas(box);
     },
     configure: function(track, extradata) {
@@ -12164,6 +12167,9 @@ function hdCreateSubAdapter(el) {
         if (adapter.mode === 'ass') {
           var ev = hdAssPacketToEvent(text, start, end);
           if (ev) {
+            if (!hdSubDebug.pkt0) {
+              try { hdSubDebug.pkt0 = String(text).split(String.fromCharCode(10)).join('|').substring(0, 160); } catch (e0) {}
+            }
             adapter.assEvents.push(ev);
             hdSubDebug.pkt = (hdSubDebug.pkt || 0) + 1;
             hdSubDebug.dlg = adapter.assEvents.length;
@@ -12354,6 +12360,8 @@ function hdAssWatchdogTick(el) {
     if (!ad || ad.mode !== 'ass' || !ad.canvas) return;
     var t = ad.lastClock;
     if (typeof t !== 'number' || t <= 0) return;
+    if (t === hdSubState.lastWatchClock) return;
+    hdSubState.lastWatchClock = t;
     if (!hdAssEventCovers(t)) { hdSubState.blankStreak = 0; hdSubDebug.blank = 0; return; }
     var blank = hdAssCanvasBlank();
     if (blank === -1) return;
