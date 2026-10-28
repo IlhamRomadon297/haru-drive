@@ -12069,6 +12069,7 @@ function hdCreateSubAdapter(el) {
     mount: function(overlay) {
       adapter.overlay = overlay;
       adapter.moviOverlay = overlay;
+      hdSubCurrentAdapter = adapter;
       try { adapter.ensureOwnCanvas(); } catch (e0) {}
       try { hdSubFullscreenSync(); } catch (e2) {}
       if (!adapter.canvas) {
@@ -12430,11 +12431,14 @@ function hdAssWatchdogTick(el) {
   } catch (e) {}
 }
 var hdSubFsBound = false;
+var hdSubCurrentAdapter = null;
 function hdSubFullscreenSync() {
   try {
-    var cv = adapter.canvas, layer = adapter.srtLayer;
+    var ad = hdSubCurrentAdapter;
+    if (!ad) return;
+    var cv = ad.canvas, layer = ad.srtLayer;
     if (!cv) return;
-    var el = moviState.el;
+    var el = ad.el || moviState.el;
     var pseudo = false;
     try { pseudo = !!(el && el.classList && el.classList.contains('movi-pseudo-fullscreen')); } catch (e) {}
     if (pseudo) hdSubDebug.pseudoSeen = true;
@@ -12447,9 +12451,9 @@ function hdSubFullscreenSync() {
       if (layer && layer.parentNode !== sr) { try { sr.appendChild(layer); } catch (e) {} }
       hdSubDebug.cvSrc = 'shadow';
       if (inFs) hdSubDebug.fsMove = 'shadow';
-    } else if (adapter.ownContainer && cv.parentNode !== adapter.ownContainer) {
-      try { adapter.ownContainer.appendChild(cv); } catch (e) {}
-      if (layer) { try { adapter.ownContainer.appendChild(layer); } catch (e) {} }
+    } else if (ad.ownContainer && cv.parentNode !== ad.ownContainer) {
+      try { ad.ownContainer.appendChild(cv); } catch (e) {}
+      if (layer) { try { ad.ownContainer.appendChild(layer); } catch (e) {} }
       hdSubDebug.cvSrc = 'box';
       hdSubDebug.fsMove = 'box';
     }
