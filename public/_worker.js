@@ -11138,40 +11138,8 @@ function buildMoviPlaylist(fileId) {
   if (!found || items.length < 2) return [];
   return items;
 }
-var hdJassubModule = null;
-var hdJassubLoading = null;
 var hdTextDecoder = null;
-function hdEnsureJassub() {
-  if (hdJassubModule) return Promise.resolve(hdJassubModule);
-  if (hdJassubLoading) return hdJassubLoading;
-  hdJassubLoading = import('https://cdn.jsdelivr.net/npm/jassub@1.7.13/dist/jassub.es.js').then(function(mod) {
-    hdJassubModule = mod.default || mod.JASSUB || mod;
-    return hdJassubModule;
-  }).catch(function(err) {
-    return hdEnsureJassubUmd().catch(function() { throw err; });
-  }).catch(function(err) {
-    hdJassubLoading = null;
-    throw err;
-  });
-  return hdJassubLoading;
-}
-function hdEnsureJassubUmd() {
-  return new Promise(function(resolve, reject) {
-    try {
-      var s = document.createElement('script');
-      s.src = 'https://cdn.jsdelivr.net/npm/jassub@1.7.13/dist/jassub.umd.js';
-      s.onload = function() {
-        var mod = window.JASSUB || window.jassub;
-        if (mod) { hdJassubModule = mod.default || mod.JASSUB || mod; resolve(hdJassubModule); }
-        else reject(new Error('umd global missing'));
-      };
-      s.onerror = function() { reject(new Error('umd script failed')); };
-      document.head.appendChild(s);
-    } catch (e) { reject(e); }
-  });
-}
-var hdJassubWorkerBlob = null;
-var hdSubDebug = { installed: false, installError: '', mode: '', codec: '', headSeen: false, jassub: 'idle', jassubError: '', pkt: 0, dlg: 0, canvas: 'no', clk: 0, cv: '0x0', sty: '?', firstT: '', lastT: '', blank: 0 };
+var hdSubDebug = { installed: false, installError: '', mode: '', codec: '', headSeen: false, jassub: 'idle', jassubError: '', pkt: 0, dlg: 0, canvas: 'no', clk: 0, cv: '0x0', sty: '?', firstT: '', lastT: '', blank: 0, drw: 0 };
 function hdSubDebugSync() {
   try {
     if (typeof window === 'undefined' || !window.location || window.location.search.indexOf('hdsubdebug=1') < 0) return;
@@ -11194,18 +11162,8 @@ function hdSubDebugSync() {
       document.body.appendChild(badge);
     }
     var nl = String.fromCharCode(10);
-    badge.textContent = 'SUBDEBUG installed=' + (hdSubDebug.installed ? 'yes' : 'no') + nl + 'mode=' + hdSubDebug.mode + ' codec=' + hdSubDebug.codec + ' head=' + (hdSubDebug.headSeen ? 'yes' : 'no') + nl + 'jassub=' + hdSubDebug.jassub + ' canvas=' + hdSubDebug.canvas + ' dlg=' + hdSubDebug.dlg + ' pkt=' + hdSubDebug.pkt + nl + 'clk=' + hdSubDebug.clk + ' cv=' + hdSubDebug.cv + ' blk=' + hdSubDebug.blank + ' sty=' + hdSubDebug.sty + ' dlgT=' + hdSubDebug.firstT + '..' + hdSubDebug.lastT + nl + 'installErr=' + hdSubDebug.installError + nl + 'jassubErr=' + hdSubDebug.jassubError;
+    badge.textContent = 'SUBDEBUG installed=' + (hdSubDebug.installed ? 'yes' : 'no') + nl + 'mode=' + hdSubDebug.mode + ' codec=' + hdSubDebug.codec + ' head=' + (hdSubDebug.headSeen ? 'yes' : 'no') + nl + 'jassub=' + hdSubDebug.jassub + ' canvas=' + hdSubDebug.canvas + ' dlg=' + hdSubDebug.dlg + ' pkt=' + hdSubDebug.pkt + nl + 'clk=' + hdSubDebug.clk + ' cv=' + hdSubDebug.cv + ' blk=' + hdSubDebug.blank + ' drw=' + hdSubDebug.drw + ' sty=' + hdSubDebug.sty + ' dlgT=' + hdSubDebug.firstT + '..' + hdSubDebug.lastT + nl + 'installErr=' + hdSubDebug.installError + nl + 'jassubErr=' + hdSubDebug.jassubError;
   } catch (e) {}
-}
-function hdJassubWorkerBlobUrl() {
-  if (hdJassubWorkerBlob) return Promise.resolve(hdJassubWorkerBlob);
-  return fetch('https://cdn.jsdelivr.net/npm/jassub@1.7.13/dist/jassub-worker.js').then(function(res) {
-    if (!res.ok) throw new Error('worker fetch failed');
-    return res.text();
-  }).then(function(text) {
-    hdJassubWorkerBlob = URL.createObjectURL(new Blob([text], { type: 'application/javascript' }));
-    return hdJassubWorkerBlob;
-  });
 }
 function hdDecodeBytes(data) {
   try {
@@ -11240,26 +11198,6 @@ function hdLooksLikeTime(x) {
   if (!x) return false;
   var p = x.split(':');
   return p.length === 3 && p[2].indexOf('.') >= 0 && hdIsDigits(p[0]) && hdIsDigits(p[1]);
-}
-function hdAssDialogue(text, startSec, endSec) {
-  var t = text.split(String.fromCharCode(13)).join('').split(String.fromCharCode(0)).join('');
-  if (t.indexOf('Dialogue:') === 0) {
-    t = t.slice(9);
-    if (t.charAt(0) === ' ') t = t.slice(1);
-  }
-  var p = t.split(',');
-  if (p.length >= 9 && hdIsDigits(p[0]) && hdIsDigits(p[1])) p = p.slice(1);
-  var start = hdAssTime(startSec);
-  var end = hdAssTime(endSec);
-  if (p.length >= 10 && hdLooksLikeTime(p[1]) && hdLooksLikeTime(p[2])) {
-    p[1] = start;
-    p[2] = end;
-    return 'Dialogue: ' + p.join(',');
-  }
-  if (p.length >= 8) {
-    return 'Dialogue: ' + p[0] + ',' + start + ',' + end + ',' + p.slice(1).join(',');
-  }
-  return 'Dialogue: 0,' + start + ',' + end + ',Default,,0,0,0,,' + t;
 }
 function hdStripSubTags(raw) {
   var out = '';
@@ -11524,6 +11462,539 @@ function hdExtractMkvFonts(url) {
     });
   }).catch(function() { return []; });
 }
+var HD_BS = String.fromCharCode(92);
+var HD_NL = String.fromCharCode(10);
+function hdTrimStr(s) {
+  var a = 0, b = (s || '').length;
+  while (a < b) { var c = s.charCodeAt(a); if (c === 32 || c === 9 || c === 13 || c === 10) a++; else break; }
+  while (b > a) { var d = s.charCodeAt(b - 1); if (d === 32 || d === 9 || d === 13 || d === 10) b--; else break; }
+  return s.substring(a, b);
+}
+function hdAssParseColor(raw, fallback) {
+  try {
+    var h = (raw || '').toUpperCase();
+    if (h.indexOf('&H') === 0) h = h.substring(2);
+    while (h.length > 0 && h.charAt(h.length - 1) === '&') h = h.substring(0, h.length - 1);
+    while (h.length < 6) h = '0' + h;
+    var a = 255, r = 0, g = 0, b = 0;
+    if (h.length >= 8) {
+      a = 255 - parseInt(h.substring(0, 2), 16);
+      b = parseInt(h.substring(2, 4), 16);
+      g = parseInt(h.substring(4, 6), 16);
+      r = parseInt(h.substring(6, 8), 16);
+    } else {
+      b = parseInt(h.substring(0, 2), 16);
+      g = parseInt(h.substring(2, 4), 16);
+      r = parseInt(h.substring(4, 6), 16);
+    }
+    if (isNaN(r) || isNaN(g) || isNaN(b) || isNaN(a)) return fallback;
+    return 'rgba(' + r + ',' + g + ',' + b + ',' + (a / 255) + ')';
+  } catch (e) { return fallback; }
+}
+function hdAssAlpha01(raw) {
+  try {
+    var h = (raw || '').toUpperCase();
+    if (h.indexOf('&H') === 0) h = h.substring(2);
+    while (h.length > 0 && h.charAt(h.length - 1) === '&') h = h.substring(0, h.length - 1);
+    if (h.length === 2) return 1 - parseInt(h, 16) / 255;
+    if (h.length >= 8) return 1 - parseInt(h.substring(0, 2), 16) / 255;
+    return 1;
+  } catch (e) { return 1; }
+}
+function hdAssWithAlpha(rgbaStr, alpha01) {
+  try {
+    var body = rgbaStr.substring(5, rgbaStr.length - 1);
+    var p = body.split(',');
+    if (p.length < 4) return rgbaStr;
+    return 'rgba(' + p[0] + ',' + p[1] + ',' + p[2] + ',' + alpha01 + ')';
+  } catch (e) { return rgbaStr; }
+}
+function hdAssParseStyles(header) {
+  var out = { styles: {}, playResX: 0, playResY: 0, scaledBorder: true };
+  try {
+    var lines = (header || '').split(HD_NL);
+    var inStyles = false;
+    var fmt = null;
+    for (var i = 0; i < lines.length; i++) {
+      var ln = hdTrimStr(lines[i]);
+      if (!ln) continue;
+      var low = ln.toLowerCase();
+      if (low.indexOf('[script info]') === 0) { inStyles = false; continue; }
+      if (low.indexOf('[v4+ styles]') === 0 || low.indexOf('[v4 styles]') === 0) { inStyles = true; fmt = null; continue; }
+      if (low.charAt(0) === '[') { inStyles = false; continue; }
+      if (!inStyles) {
+        if (low.indexOf('playresx:') === 0) out.playResX = parseInt(ln.substring(9), 10) || 0;
+        else if (low.indexOf('playresy:') === 0) out.playResY = parseInt(ln.substring(9), 10) || 0;
+        else if (low.indexOf('scaledborderandshadow:') === 0) out.scaledBorder = low.indexOf('yes') >= 0;
+        continue;
+      }
+      if (low.indexOf('format:') === 0) {
+        var fparts = ln.substring(7).split(',');
+        fmt = [];
+        for (var k = 0; k < fparts.length; k++) fmt.push(hdTrimStr(fparts[k]).toLowerCase());
+        continue;
+      }
+      if (low.indexOf('style:') === 0 && fmt) {
+        var vparts = ln.substring(6).split(',');
+        var st = {};
+        for (var j = 0; j < fmt.length && j < vparts.length; j++) st[fmt[j]] = hdTrimStr(vparts[j]);
+        var name = st['name'] || 'Default';
+        out.styles[name] = {
+          font: st['fontname'] || 'Arial',
+          size: parseFloat(st['fontsize']) || 48,
+          primary: st['primarycolour'] || '&H00FFFFFF',
+          secondary: st['secondarycolour'] || '&H000000FF',
+          outline: st['outlinecolour'] || '&H00000000',
+          back: st['backcolour'] || '&H00000000',
+          bold: !!st['bold'] && parseInt(st['bold'], 10) !== 0,
+          italic: !!st['italic'] && parseInt(st['italic'], 10) !== 0,
+          borderStyle: parseInt(st['borderstyle'], 10) || 1,
+          outlineW: parseFloat(st['outline']) || 0,
+          shadow: parseFloat(st['shadow']) || 0,
+          align: parseInt(st['alignment'], 10) || 2,
+          ml: parseInt(st['marginl'], 10) || 0,
+          mr: parseInt(st['marginr'], 10) || 0,
+          mv: parseInt(st['marginv'], 10) || 0
+        };
+      }
+    }
+  } catch (e) {}
+  return out;
+}
+function hdAssStyleFor(styles, name) {
+  try {
+    if (styles[name]) return styles[name];
+    var low = (name || '').toLowerCase();
+    for (var k in styles) { if (k.toLowerCase() === low) return styles[k]; }
+    if (styles['Default']) return styles['Default'];
+  } catch (e) {}
+  return { font: 'Arial', size: 48, primary: '&H00FFFFFF', secondary: '&H000000FF', outline: '&H00000000', back: '&H00000000', bold: false, italic: false, borderStyle: 1, outlineW: 2, shadow: 0, align: 2, ml: 10, mr: 10, mv: 10 };
+}
+function hdAssPacketToEvent(text, start, end) {
+  try {
+    var style = 'Default';
+    var ml = -1, mr = -1, mv = -1;
+    var effect = '';
+    var body = text;
+    if (text.indexOf('Comment:') === 0) return null;
+    if (text.indexOf('Dialogue:') === 0) {
+      var rest = text.substring(9);
+      var f = rest.split(',');
+      if (f.length < 10) return null;
+      style = hdTrimStr(f[3]) || 'Default';
+      ml = parseInt(f[5], 10); if (isNaN(ml)) ml = -1;
+      mr = parseInt(f[6], 10); if (isNaN(mr)) mr = -1;
+      mv = parseInt(f[7], 10); if (isNaN(mv)) mv = -1;
+      effect = hdTrimStr(f[8]) || '';
+      body = f.slice(9).join(',');
+    }
+    if (!body) return null;
+    return { start: start, end: end, style: style, ml: ml, mr: mr, mv: mv, effect: effect, text: body, lines: null };
+  } catch (e) { return null; }
+}
+function hdAssCopyTags(src) {
+  var out = {};
+  for (var k in src) out[k] = src[k];
+  return out;
+}
+function hdAssParseTagsInto(block, tags, depth) {
+  try {
+    var parts = block.split(HD_BS);
+    for (var i = 0; i < parts.length; i++) {
+      var tk = parts[i];
+      if (!tk) continue;
+      if (tk.indexOf('pos(') === 0) {
+        var xy = tk.substring(4, tk.length - 1).split(',');
+        if (xy.length >= 2) tags.pos = [parseFloat(xy[0]) || 0, parseFloat(xy[1]) || 0];
+      } else if (tk.indexOf('move(') === 0) {
+        var mv = tk.substring(5, tk.length - 1).split(',');
+        if (mv.length >= 4) tags.move = { x1: parseFloat(mv[0]) || 0, y1: parseFloat(mv[1]) || 0, x2: parseFloat(mv[2]) || 0, y2: parseFloat(mv[3]) || 0, t1: mv.length >= 6 ? (parseFloat(mv[4]) || 0) : 0, t2: mv.length >= 6 ? (parseFloat(mv[5]) || 0) : 0 };
+      } else if (tk.indexOf('an') === 0 && tk.length >= 3) {
+        var an = parseInt(tk.substring(2), 10);
+        if (an >= 1 && an <= 9) tags.an = an;
+      } else if (tk.indexOf('fade(') === 0) {
+        var fa = tk.substring(5, tk.length - 1).split(',');
+        if (fa.length >= 7) tags.fade = [parseFloat(fa[0]) || 0, parseFloat(fa[1]) || 0, parseFloat(fa[2]) || 0, parseFloat(fa[3]) || 0, parseFloat(fa[4]) || 0, parseFloat(fa[5]) || 0, parseFloat(fa[6]) || 0];
+      } else if (tk.indexOf('fad(') === 0) {
+        var fi = tk.substring(4, tk.length - 1).split(',');
+        if (fi.length >= 2) tags.fad = [parseFloat(fi[0]) || 0, parseFloat(fi[1]) || 0];
+      } else if (tk.indexOf('frz') === 0) {
+        tags.frz = parseFloat(tk.substring(3)) || 0;
+      } else if (tk.indexOf('frx') === 0) {
+        tags.frx = parseFloat(tk.substring(3)) || 0;
+      } else if (tk.indexOf('fry') === 0) {
+        tags.fry = parseFloat(tk.substring(3)) || 0;
+      } else if (tk.indexOf('clip(') === 0) {
+      } else if (tk.indexOf('1c') === 0 || tk.indexOf('2c') === 0 || tk.indexOf('3c') === 0 || tk.indexOf('4c') === 0 || (tk.indexOf('c') === 0 && tk.indexOf('&') >= 0)) {
+        var col = tk.substring(tk.indexOf('&'));
+        if (tk.indexOf('1c') === 0 || tk.indexOf('c') === 0) tags.c1 = col;
+        else if (tk.indexOf('2c') === 0) tags.c2 = col;
+        else if (tk.indexOf('3c') === 0) tags.c3 = col;
+        else if (tk.indexOf('4c') === 0) tags.c4 = col;
+      } else if (tk.indexOf('alpha') === 0 || tk.indexOf('1a') === 0 || tk.indexOf('2a') === 0 || tk.indexOf('3a') === 0 || tk.indexOf('4a') === 0) {
+        var av = tk.substring(tk.indexOf('&'));
+        if (tk.indexOf('1a') === 0 || tk.indexOf('alpha') === 0) tags.a1 = av;
+        else if (tk.indexOf('2a') === 0) tags.a2 = av;
+        else if (tk.indexOf('3a') === 0) tags.a3 = av;
+        else if (tk.indexOf('4a') === 0) tags.a4 = av;
+      } else if (tk.indexOf('bord') === 0) {
+        var bv = parseFloat(tk.substring(4));
+        if (!isNaN(bv)) tags.bord = bv;
+      } else if (tk.indexOf('shad') === 0) {
+        var sv = parseFloat(tk.substring(4));
+        if (!isNaN(sv)) tags.shad = sv;
+      } else if (tk.indexOf('blur') === 0) {
+        var blv = parseFloat(tk.substring(4));
+        if (!isNaN(blv)) tags.blur = blv;
+      } else if (tk.indexOf('be') === 0) {
+        var bev = parseFloat(tk.substring(2));
+        if (!isNaN(bev)) tags.blur = bev;
+      } else if (tk.indexOf('fs') === 0) {
+        var fsv = parseFloat(tk.substring(2));
+        if (!isNaN(fsv)) tags.fs = fsv;
+      } else if (tk.indexOf('fn') === 0) {
+        var fnv = hdTrimStr(tk.substring(2));
+        if (fnv) tags.fn = fnv;
+      } else if (tk.indexOf('kf') === 0 || tk.indexOf('ko') === 0) {
+        var kfv = parseFloat(tk.substring(2)) || 0;
+        if (tk.indexOf('kf') === 0) tags.kdur = kfv / 100;
+      } else if ((tk.indexOf('k') === 0 || tk.indexOf('K') === 0) && !isNaN(parseFloat(tk.substring(1)))) {
+        tags.kdur = (parseFloat(tk.substring(1)) || 0) / 100;
+      } else if (tk.indexOf('b') === 0 && tk.length >= 2 && !isNaN(parseInt(tk.substring(1), 10))) {
+        tags.bold = parseInt(tk.substring(1), 10) !== 0;
+      } else if (tk.indexOf('i') === 0 && tk.length >= 2 && !isNaN(parseInt(tk.substring(1), 10))) {
+        tags.italic = parseInt(tk.substring(1), 10) !== 0;
+      } else if (tk.indexOf('t(') === 0 && tk.charAt(tk.length - 1) === ')' && depth < 1) {
+        var content = tk.substring(2, tk.length - 1);
+        var segs = [];
+        var dep = 0, cur2 = '';
+        for (var ci = 0; ci < content.length; ci++) {
+          var ch2 = content.charAt(ci);
+          if (ch2 === '(') dep++;
+          else if (ch2 === ')') dep--;
+          if (ch2 === ',' && dep === 0) { segs.push(cur2); cur2 = ''; }
+          else cur2 += ch2;
+        }
+        segs.push(cur2);
+        var tr = { t1: 0, t2: 0, inner: {} };
+        if (segs.length >= 3 && !isNaN(parseFloat(segs[0])) && !isNaN(parseFloat(segs[1]))) {
+          tr.t1 = parseFloat(segs[0]) || 0;
+          tr.t2 = parseFloat(segs[1]) || 0;
+          hdAssParseTagsInto(segs.slice(2).join(','), tr.inner, 1);
+        } else {
+          hdAssParseTagsInto(content, tr.inner, 1);
+        }
+        tags.transform = tr;
+      } else if (tk === 'r' || tk.indexOf('r') === 0) {
+        for (var rk in tags) delete tags[rk];
+        if (tk.length > 1) tags.styleName = tk.substring(1);
+      } else if (tk.indexOf('p') === 0 && tk.length >= 2 && !isNaN(parseInt(tk.substring(1), 10))) {
+        tags.drawing = parseInt(tk.substring(1), 10) > 0;
+      }
+    }
+  } catch (e) {}
+}
+function hdAssParseEventLines(evText) {
+  var lines = [];
+  try {
+    var rawLines = (evText || '').split(HD_BS + 'N');
+    var allLines = [];
+    for (var li = 0; li < rawLines.length; li++) {
+      var sub = rawLines[li].split(HD_BS + 'n');
+      for (var sj = 0; sj < sub.length; sj++) {
+        var sub2 = sub[sj].split(HD_NL);
+        for (var sk = 0; sk < sub2.length; sk++) allLines.push(sub2[sk]);
+      }
+    }
+    for (var L = 0; L < allLines.length; L++) {
+      var lineText = allLines[L];
+      var segments = [];
+      var cur = {};
+      var buf = '';
+      var idx = 0;
+      while (idx < lineText.length) {
+        var ch = lineText.charAt(idx);
+        if (ch === '{') {
+          var close = lineText.indexOf('}', idx);
+          if (close < 0) { buf += lineText.substring(idx); break; }
+          if (buf) { segments.push({ text: buf, tags: hdAssCopyTags(cur) }); buf = ''; }
+          var block = lineText.substring(idx + 1, close);
+          hdAssParseTagsInto(block, cur, 0);
+          idx = close + 1;
+        } else if (ch === HD_BS && idx + 1 < lineText.length && lineText.charAt(idx + 1) === 'h') {
+          buf += ' ';
+          idx += 2;
+        } else {
+          buf += ch;
+          idx++;
+        }
+      }
+      if (buf) segments.push({ text: buf, tags: hdAssCopyTags(cur) });
+      lines.push({ segments: segments });
+    }
+  } catch (e) {}
+  return lines;
+}
+function hdAssLerpColor(c1, c2, p) {
+  try {
+    var p1 = c1.substring(5, c1.length - 1).split(',');
+    var p2 = c2.substring(5, c2.length - 1).split(',');
+    var r = Math.round(parseFloat(p1[0]) + (parseFloat(p2[0]) - parseFloat(p1[0])) * p);
+    var g = Math.round(parseFloat(p1[1]) + (parseFloat(p2[1]) - parseFloat(p1[1])) * p);
+    var b = Math.round(parseFloat(p1[2]) + (parseFloat(p2[2]) - parseFloat(p1[2])) * p);
+    var a = parseFloat(p1[3]) + (parseFloat(p2[3]) - parseFloat(p1[3])) * p;
+    return 'rgba(' + r + ',' + g + ',' + b + ',' + a + ')';
+  } catch (e) { return c1; }
+}
+function hdAssApplyTransform(firstTags, ev, t) {
+  var eff = {};
+  for (var k in firstTags) eff[k] = firstTags[k];
+  try {
+    var tr = firstTags.transform;
+    if (!tr) return eff;
+    var dur = ev.end - ev.start;
+    var t1 = tr.t1 / 1000, t2 = tr.t2 / 1000;
+    if (t2 <= t1) { t1 = 0; t2 = dur; }
+    var p = (t - ev.start - t1) / (t2 - t1);
+    if (p < 0) p = 0; if (p > 1) p = 1;
+    var inner = tr.inner || {};
+    if (p >= 1) {
+      for (var k2 in inner) eff[k2] = inner[k2];
+      return eff;
+    }
+    if (p <= 0) return eff;
+    if (inner.a1 !== undefined) {
+      var a0 = firstTags.a1 !== undefined ? hdAssAlpha01(firstTags.a1) : 1;
+      var a1v = hdAssAlpha01(inner.a1);
+      eff.alpha = a0 + (a1v - a0) * p;
+    }
+    if (inner.c1 !== undefined) {
+      var c0 = hdAssParseColor(firstTags.c1 || '', 'rgba(255,255,255,1)');
+      var c1v = hdAssParseColor(inner.c1, c0);
+      eff.c1 = hdAssLerpColor(c0, c1v, p);
+    }
+    if (inner.fs !== undefined) {
+      var s0 = firstTags.fs || 0;
+      eff.fs = s0 + (inner.fs - s0) * p;
+    }
+    return eff;
+  } catch (e) { return eff; }
+}
+function hdAssDrawEvent(ctx, ev, t, S) {
+  try {
+    if (t < ev.start || t >= ev.end) return false;
+    if (!ev.lines) ev.lines = hdAssParseEventLines(ev.text);
+    var base = hdAssStyleFor(S.styles, ev.style);
+    var sx = S.prx > 0 ? S.cw / S.prx : 1;
+    var sy = S.pry > 0 ? S.ch / S.pry : 1;
+    var firstTags = {};
+    if (ev.lines.length > 0 && ev.lines[0].segments.length > 0) firstTags = ev.lines[0].segments[0].tags;
+    var eff = hdAssApplyTransform(firstTags, ev, t);
+    var an = eff.an || base.align;
+    var ml = ev.ml >= 0 ? ev.ml : base.ml;
+    var mr = ev.mr >= 0 ? ev.mr : base.mr;
+    var mv = ev.mv >= 0 ? ev.mv : base.mv;
+    var lineInfos = [];
+    var totalH = 0;
+    for (var li = 0; li < ev.lines.length; li++) {
+      var segs = ev.lines[li].segments;
+      var lw = 0, lh = 0;
+      for (var si = 0; si < segs.length; si++) {
+        var sg = segs[si];
+        if (sg.tags.drawing) { sg._w = 0; continue; }
+        var sb = sg.tags.styleName ? hdAssStyleFor(S.styles, sg.tags.styleName) : base;
+        var fsize = (eff.fs !== undefined ? eff.fs : (sg.tags.fs || sb.size)) * sx;
+        var ffont = sg.tags.fn || sb.font;
+        var fbold = eff.bold !== undefined ? eff.bold : (sg.tags.bold !== undefined ? sg.tags.bold : sb.bold);
+        var fitalic = eff.italic !== undefined ? eff.italic : (sg.tags.italic !== undefined ? sg.tags.italic : sb.italic);
+        ctx.font = (fitalic ? 'italic ' : '') + (fbold ? 'bold ' : '') + fsize + 'px "' + ffont.split('"').join('') + '", Arial, sans-serif';
+        var w = ctx.measureText(sg.text).width;
+        sg._w = w;
+        lw += w;
+        if (fsize > lh) lh = fsize;
+      }
+      lineInfos.push({ w: lw, h: lh * 1.25 });
+      totalH += lh * 1.25;
+    }
+    if (totalH <= 0) return false;
+    var col = (an - 1) % 3;
+    var row = Math.floor((an - 1) / 3);
+    var halign = col === 0 ? 'left' : (col === 1 ? 'center' : 'right');
+    var ax = col === 0 ? ml * sx : (col === 1 ? S.cw / 2 : S.cw - mr * sx);
+    var ay = row === 0 ? S.ch - mv * sy : (row === 1 ? S.ch / 2 : mv * sy);
+    var valign = row === 0 ? 'bottom' : (row === 1 ? 'middle' : 'top');
+    var pos = eff.pos || null;
+    var move = eff.move || null;
+    if (move) {
+      var dur = ev.end - ev.start;
+      var mt1 = move.t1 / 1000, mt2 = move.t2 / 1000;
+      if (mt2 <= mt1) { mt1 = 0; mt2 = dur; }
+      var mp = (t - ev.start - mt1) / (mt2 - mt1);
+      if (mp < 0) mp = 0; if (mp > 1) mp = 1;
+      pos = [move.x1 + (move.x2 - move.x1) * mp, move.y1 + (move.y2 - move.y1) * mp];
+    }
+    if (pos) { ax = pos[0] * sx; ay = pos[1] * sy; }
+    var op = 1;
+    var rel = (t - ev.start) * 1000;
+    if (eff.fad) {
+      var f1 = eff.fad[0], f2 = eff.fad[1];
+      if (rel < f1) op *= (f1 > 0 ? rel / f1 : 1);
+      var rem = (ev.end - t) * 1000;
+      if (rem < f2) op *= (f2 > 0 ? rem / f2 : 1);
+    } else if (eff.fade) {
+      var fa = eff.fade;
+      var aNow = fa[1];
+      if (rel < fa[3]) aNow = fa[0] + (fa[1] - fa[0]) * (rel / (fa[3] || 1));
+      else if (rel < fa[5]) aNow = fa[1];
+      else if (rel < fa[6]) aNow = fa[1] + (fa[2] - fa[1]) * ((rel - fa[5]) / ((fa[6] - fa[5]) || 1));
+      else aNow = fa[2];
+      op *= (1 - aNow / 255);
+    }
+    if (eff.alpha !== undefined) op *= eff.alpha;
+    if (op <= 0.01) return false;
+    var frz = eff.frz || 0;
+    var frx = eff.frx || 0;
+    var fry = eff.fry || 0;
+    ctx.save();
+    ctx.globalAlpha = op;
+    ctx.textAlign = halign;
+    ctx.textBaseline = 'middle';
+    var startY = ay;
+    if (valign === 'bottom') startY = ay - totalH;
+    else if (valign === 'middle') startY = ay - totalH / 2;
+    if (frz !== 0 || frx !== 0 || fry !== 0) {
+      ctx.translate(ax, ay);
+      if (frz !== 0) ctx.rotate(-frz * Math.PI / 180);
+      var scx = fry !== 0 ? Math.cos(fry * Math.PI / 180) : 1;
+      var scy = frx !== 0 ? Math.cos(frx * Math.PI / 180) : 1;
+      if (scx === 0) scx = 0.01; if (scy === 0) scy = 0.01;
+      if (scx !== 1 || scy !== 1) ctx.scale(scx, scy);
+      ctx.translate(-ax, -ay);
+    }
+    var drawn = false;
+    var yCursor = startY;
+    for (var li2 = 0; li2 < ev.lines.length; li2++) {
+      var info = lineInfos[li2];
+      var segs2 = ev.lines[li2].segments;
+      if (segs2.length === 0) { yCursor += info.h; continue; }
+      var lineTop = yCursor;
+      var lineY = yCursor + info.h / 2;
+      var x0 = halign === 'left' ? ax : (halign === 'center' ? ax - info.w / 2 : ax - info.w);
+      var sb0 = segs2[0].tags.styleName ? hdAssStyleFor(S.styles, segs2[0].tags.styleName) : base;
+      var bstyle = eff.borderStyle !== undefined ? eff.borderStyle : sb0.borderStyle;
+      var boxBack = hdAssParseColor(eff.c4 || sb0.back, 'rgba(0,0,0,1)');
+      if (bstyle === 3) {
+        ctx.fillStyle = boxBack;
+        ctx.fillRect(x0 - 4 * sx, lineTop, info.w + 8 * sx, info.h);
+      }
+      var hasK = false;
+      for (var ki = 0; ki < segs2.length; ki++) { if (segs2[ki].tags.kdur) { hasK = true; break; } }
+      var sweepX = x0;
+      if (hasK) {
+        var cum = 0;
+        for (var kj = 0; kj < segs2.length; kj++) {
+          var kd = segs2[kj].tags.kdur || 0;
+          var ss = ev.start + cum;
+          var se = ss + kd;
+          if (kd > 0) {
+            if (t >= se) sweepX += segs2[kj]._w;
+            else if (t > ss) sweepX += segs2[kj]._w * ((t - ss) / kd);
+          } else if (t >= ss) {
+            sweepX += segs2[kj]._w;
+          }
+          cum += kd;
+        }
+      }
+      var drawPass = function(mode) {
+        var x = x0;
+        for (var si2 = 0; si2 < segs2.length; si2++) {
+          var sg2 = segs2[si2];
+          if (sg2.tags.drawing) continue;
+          var sb2 = sg2.tags.styleName ? hdAssStyleFor(S.styles, sg2.tags.styleName) : base;
+          var fsize2 = (eff.fs !== undefined ? eff.fs : (sg2.tags.fs || sb2.size)) * sx;
+          var ffont2 = sg2.tags.fn || sb2.font;
+          var fbold2 = eff.bold !== undefined ? eff.bold : (sg2.tags.bold !== undefined ? sg2.tags.bold : sb2.bold);
+          var fitalic2 = eff.italic !== undefined ? eff.italic : (sg2.tags.italic !== undefined ? sg2.tags.italic : sb2.italic);
+          ctx.font = (fitalic2 ? 'italic ' : '') + (fbold2 ? 'bold ' : '') + fsize2 + 'px "' + ffont2.split('"').join('') + '", Arial, sans-serif';
+          var prim = eff.c1 !== undefined ? eff.c1 : hdAssParseColor(sg2.tags.c1 || sb2.primary, 'rgba(255,255,255,1)');
+          if (sg2.tags.a1 !== undefined) prim = hdAssWithAlpha(prim, hdAssAlpha01(sg2.tags.a1));
+          var sec = hdAssParseColor(sg2.tags.c2 || sb2.secondary, 'rgba(255,255,0,1)');
+          var outc = hdAssParseColor(sg2.tags.c3 || sb2.outline, 'rgba(0,0,0,1)');
+          var ow = (sg2.tags.bord !== undefined ? sg2.tags.bord : sb2.outlineW) * sx;
+          var sh = (sg2.tags.shad !== undefined ? sg2.tags.shad : sb2.shadow) * sx;
+          var bl = (sg2.tags.blur || 0) * sx;
+          var fill = mode === 'secondary' ? sec : prim;
+          if (mode === 'primary' && sh > 0) {
+            ctx.shadowColor = boxBack;
+            ctx.shadowOffsetX = sh;
+            ctx.shadowOffsetY = sh;
+            ctx.shadowBlur = bl;
+            ctx.fillStyle = fill;
+            ctx.fillText(sg2.text, x, lineY);
+            ctx.shadowColor = 'rgba(0,0,0,0)';
+            ctx.shadowOffsetX = 0;
+            ctx.shadowOffsetY = 0;
+            ctx.shadowBlur = 0;
+          }
+          if (bstyle !== 3 && ow > 0) {
+            ctx.strokeStyle = outc;
+            ctx.lineWidth = ow * 2;
+            ctx.lineJoin = 'round';
+            ctx.strokeText(sg2.text, x, lineY);
+          }
+          ctx.fillStyle = fill;
+          ctx.fillText(sg2.text, x, lineY);
+          x += sg2._w;
+        }
+      };
+      drawPass('primary');
+      if (hasK && sweepX > x0) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(x0, lineTop, sweepX - x0, info.h);
+        ctx.clip();
+        drawPass('secondary');
+        ctx.restore();
+      }
+      drawn = true;
+      yCursor += info.h;
+    }
+    ctx.restore();
+    return drawn;
+  } catch (e) { try { ctx.restore(); } catch (e2) {} return false; }
+}
+function hdAssRenderFrame(ad, t) {
+  var drawn = 0;
+  try {
+    var cv = ad.canvas;
+    if (!cv) return 0;
+    var ctx = cv.getContext('2d');
+    if (!ctx) return 0;
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    if (ad.assEvents.length > 300) {
+      var kept = [];
+      for (var i = 0; i < ad.assEvents.length; i++) { if (ad.assEvents[i].end >= t - 5) kept.push(ad.assEvents[i]); }
+      ad.assEvents = kept;
+    }
+    var S = { cw: cv.width, ch: cv.height, prx: ad.playResX || 0, pry: ad.playResY || 0, styles: ad.parsedStyles || {} };
+    for (var j = 0; j < ad.assEvents.length; j++) {
+      var ev = ad.assEvents[j];
+      if (hdAssDrawEvent(ctx, ev, t, S)) drawn++;
+    }
+  } catch (e) {}
+  return drawn;
+}
+function hdAssEventCovers(t) {
+  try {
+    var ad = hdCurrentSubAdapter;
+    if (!ad) return false;
+    for (var i = 0; i < ad.assEvents.length; i++) {
+      var ev = ad.assEvents[i];
+      if (t >= ev.start && t < ev.end) return true;
+    }
+  } catch (e) {}
+  return false;
+}
 function hdCreateSubAdapter(el) {
   var adapter = {
     el: el,
@@ -11533,7 +12004,10 @@ function hdCreateSubAdapter(el) {
     srtLayer: null,
     mode: 'none',
     header: '',
-    dialogues: [],
+    assEvents: [],
+    parsedStyles: {},
+    playResX: 0,
+    playResY: 0,
     cues: [],
     delay: 0,
     lastClock: 0,
@@ -11631,11 +12105,13 @@ function hdCreateSubAdapter(el) {
         if (isAss) {
           adapter.mode = 'ass';
           adapter.header = head;
-          adapter.dialogues = [];
-          adapter.dirty = true;
-          adapter.startJassub();
-          adapter.maybeLoadFonts();
+          adapter.assEvents = [];
+          var parsed = hdAssParseStyles(head);
+          adapter.parsedStyles = parsed.styles;
+          adapter.playResX = parsed.playResX;
+          adapter.playResY = parsed.playResY;
           hdSubDebug.mode = 'ass';
+          hdSubDebug.jassub = 'canvas';
           hdSubDebug.sty = (head.indexOf('[V4+ Styles]') >= 0 || head.indexOf('[V4 Styles]') >= 0) ? 'yes' : 'no';
           hdSubDebugSync();
           return;
@@ -11647,61 +12123,8 @@ function hdCreateSubAdapter(el) {
         if (HD_SUB_ADAPTER_ASS_ONLY) hdSubScheduleUninstall(track.id);
       } catch (e) {}
     },
-    startJassub: function() {
-      if (adapter.jassub || adapter.jassubStarting) return;
-      adapter.jassubStarting = true;
-      hdSubDebug.jassub = 'starting';
-      hdSubDebugSync();
-      Promise.all([hdEnsureJassub(), hdJassubWorkerBlobUrl()]).then(function(results) {
-        var JASSUB = results[0];
-        var workerBlob = results[1];
-        adapter.jassubStarting = false;
-        if (adapter.mode !== 'ass') return;
-        if (!adapter.canvas) {
-          try { adapter.ensureOwnCanvas(); } catch (e2) {}
-          if (!adapter.canvas) { adapter.onJassubBroken('ass mode but no canvas'); return; }
-        }
-        try {
-          adapter.jassub = new JASSUB({
-            canvas: adapter.canvas,
-            subContent: adapter.buildAssDoc(),
-            workerUrl: workerBlob,
-            wasmUrl: 'https://cdn.jsdelivr.net/npm/jassub@1.7.13/dist/jassub-worker.wasm',
-            modernWasmUrl: 'https://cdn.jsdelivr.net/npm/jassub@1.7.13/dist/jassub-worker-modern.wasm'
-          });
-          if (adapter.jassub.ready && adapter.jassub.ready.then) {
-            adapter.jassub.ready.then(function() { adapter.jassubReady = true; hdSubDebug.jassub = 'ready'; hdSubDebugSync(); adapter.maybeLoadFonts(); }).catch(function() { adapter.onJassubBroken('ready rejected'); });
-          } else {
-            adapter.jassubReady = true;
-            hdSubDebug.jassub = 'ready';
-            hdSubDebugSync();
-            adapter.maybeLoadFonts();
-          }
-        } catch (e) {
-          adapter.onJassubBroken('construct failed: ' + (e && e.message ? e.message : String(e)));
-        }
-      }).catch(function(err) {
-        adapter.jassubStarting = false;
-        adapter.onJassubBroken('load failed: ' + (err && err.message ? err.message : String(err)));
-      });
-    },
-    maybeLoadFonts: function() {
-      if (adapter.broken || !adapter.jassub || !adapter.jassubReady || adapter.mode !== 'ass') return;
-      var url = '';
-      try { url = (typeof moviState !== 'undefined' && moviState.url) ? moviState.url : ''; } catch (e) {}
-      var fid = hdMkvFileIdFromUrl(url);
-      if (!fid || adapter.fontsLoadedFor === fid) return;
-      adapter.fontsLoadedFor = fid;
-      hdExtractMkvFonts(url).then(function(fonts) {
-        if (!adapter.jassub || adapter.fontsLoadedFor !== fid) return;
-        for (var i = 0; i < fonts.length; i++) {
-          var nm = (fonts[i].name || '').toLowerCase();
-          if (nm && adapter.fontNames[nm]) continue;
-          if (nm) adapter.fontNames[nm] = true;
-          try { adapter.jassub.addFont(fonts[i].data); } catch (e2) {}
-        }
-      }).catch(function() {});
-    },
+    startJassub: function() { return; },
+    maybeLoadFonts: function() { return; },
     onJassubBroken: function(reason) {
       if (adapter.broken) return;
       adapter.broken = true;
@@ -11725,18 +12148,6 @@ function hdCreateSubAdapter(el) {
         }
       } catch (e) {}
     },
-    buildAssDoc: function() {
-      var nl = String.fromCharCode(10);
-      var doc = adapter.header;
-      if (doc.indexOf('[Events]') >= 0) {
-        if (doc && doc.slice(-1) !== nl) doc += nl;
-        return doc + adapter.dialogues.join(nl);
-      }
-      if (doc && doc.slice(-1) !== nl) doc += nl;
-      doc += '[Events]' + nl + 'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text' + nl;
-      doc += adapter.dialogues.join(nl);
-      return doc;
-    },
     pushPacket: function(packet) {
       try {
         if (!packet || adapter.mode === 'none' || adapter.mode === 'image') return;
@@ -11746,15 +12157,15 @@ function hdCreateSubAdapter(el) {
         var text = hdDecodeBytes(packet.data);
         if (!text) return;
         if (adapter.mode === 'ass') {
-          var dg = hdAssDialogue(text, start, end);
-          adapter.dialogues.push(dg);
-          adapter.dirty = true;
-          hdSubDebug.pkt = (hdSubDebug.pkt || 0) + 1;
-          hdSubDebug.dlg = adapter.dialogues.length;
-          var dp = dg.split(',');
-          if (hdSubDebug.pkt === 1) hdSubDebug.firstT = dp[1] || '';
-          hdSubDebug.lastT = dp[2] || '';
-          hdSubDebugSync();
+          var ev = hdAssPacketToEvent(text, start, end);
+          if (ev) {
+            adapter.assEvents.push(ev);
+            hdSubDebug.pkt = (hdSubDebug.pkt || 0) + 1;
+            hdSubDebug.dlg = adapter.assEvents.length;
+            if (hdSubDebug.pkt === 1) hdSubDebug.firstT = hdAssTime(start);
+            hdSubDebug.lastT = hdAssTime(end);
+            hdSubDebugSync();
+          }
           return;
         }
         adapter.cues.push({ start: start, end: end, html: hdSubHtml(text) });
@@ -11765,23 +12176,27 @@ function hdCreateSubAdapter(el) {
         if (adapter.mode === 'ass') {
           adapter.lastClock = t;
           hdSubDebug.clk = Math.floor(t);
-          hdSubDebug.cv = adapter.canvasW + 'x' + adapter.canvasH;
-          if (adapter.canvas && adapter.overlay) {
-            var ow = adapter.overlay.clientWidth || 0;
-            var oh = adapter.overlay.clientHeight || 0;
-            if (ow > 0 && oh > 0 && (adapter.canvasW !== ow || adapter.canvasH !== oh)) {
-              adapter.canvasW = ow;
-              adapter.canvasH = oh;
-              adapter.canvas.width = ow;
-              adapter.canvas.height = oh;
+          if (adapter.canvas) {
+            var par = adapter.canvas.parentNode;
+            var pw = par ? par.clientWidth : 0;
+            var ph = par ? par.clientHeight : 0;
+            if (!pw || !ph) {
+              var wr = document.getElementById('moviPlayerWrap');
+              if (wr) { if (!pw) pw = wr.clientWidth; if (!ph) ph = wr.clientHeight; }
+            }
+            if (!pw) pw = vw || 1280;
+            if (!ph) ph = vh || 720;
+            if (adapter.canvasW !== pw || adapter.canvasH !== ph) {
+              adapter.canvasW = pw;
+              adapter.canvasH = ph;
+              adapter.canvas.width = pw;
+              adapter.canvas.height = ph;
             }
           }
-          if (adapter.dirty && adapter.jassub && adapter.jassubReady) {
-            try { adapter.jassub.setTrack(adapter.buildAssDoc()); adapter.dirty = false; } catch (e) {}
-          }
-          if (adapter.jassub && adapter.jassubReady) {
-            try { adapter.jassub.setCurrentTime(t - adapter.delay); } catch (e) {}
-          }
+          hdSubDebug.cv = adapter.canvasW + 'x' + adapter.canvasH;
+          var dr = 0;
+          try { dr = hdAssRenderFrame(adapter, t); } catch (e) {}
+          hdSubDebug.drw = dr;
           return;
         }
         if (adapter.mode === 'text') {
@@ -11814,7 +12229,7 @@ function hdCreateSubAdapter(el) {
       if (typeof sec === 'number' && isFinite(sec)) adapter.delay = sec;
     },
     clear: function() {
-      adapter.dialogues = [];
+      adapter.assEvents = [];
       adapter.cues = [];
       adapter.dirty = true;
       adapter.lastSrtHtml = null;
@@ -11835,7 +12250,7 @@ function hdCreateSubAdapter(el) {
       hdSubDebug.canvas = 'no';
       adapter.srtLayer = null;
       adapter.overlay = null;
-      adapter.dialogues = [];
+      adapter.assEvents = [];
       adapter.cues = [];
     }
   };
@@ -11892,30 +12307,6 @@ function hdSubReconcile(el) {
     hdSubUninstallToNative(el);
   }
 }
-function hdAssTimeToSec(str) {
-  try {
-    var parts = (str || '').split(':');
-    if (parts.length !== 3) return -1;
-    var h = parseFloat(parts[0]) || 0;
-    var m = parseFloat(parts[1]) || 0;
-    var s = parseFloat(parts[2]) || 0;
-    return h * 3600 + m * 60 + s;
-  } catch (e) { return -1; }
-}
-function hdAssDialogueCovers(t) {
-  try {
-    var ad = hdCurrentSubAdapter;
-    if (!ad) return false;
-    for (var i = 0; i < ad.dialogues.length; i++) {
-      var f = ad.dialogues[i].split(',');
-      if (f.length < 3) continue;
-      var st = hdAssTimeToSec(f[1]);
-      var en = hdAssTimeToSec(f[2]);
-      if (st >= 0 && en >= 0 && t >= st && t < en) return true;
-    }
-  } catch (e) {}
-  return false;
-}
 function hdAssCanvasBlank() {
   try {
     var ad = hdCurrentSubAdapter;
@@ -11940,10 +12331,10 @@ function hdAssCanvasBlank() {
 function hdAssWatchdogTick(el) {
   try {
     var ad = hdCurrentSubAdapter;
-    if (!ad || ad.mode !== 'ass' || !ad.jassubReady || !ad.canvas) return;
+    if (!ad || ad.mode !== 'ass' || !ad.canvas) return;
     var t = ad.lastClock;
     if (typeof t !== 'number' || t <= 0) return;
-    if (!hdAssDialogueCovers(t)) { hdSubState.blankStreak = 0; hdSubDebug.blank = 0; return; }
+    if (!hdAssEventCovers(t)) { hdSubState.blankStreak = 0; hdSubDebug.blank = 0; return; }
     var blank = hdAssCanvasBlank();
     if (blank === -1) return;
     if (blank) {
@@ -11972,6 +12363,7 @@ function hdSubPollStart(el) {
       if (!cur) return;
       hdSubReconcile(cur);
       hdAssWatchdogTick(cur);
+      hdSubDebugSync();
     } catch (e2) {}
   }, 1000);
 }
@@ -11996,28 +12388,12 @@ function hdInstallSubAdapterWaitUpgrade(el) {
 }
 function hdInstallSubAdapter(el) {
   if (!HD_SUB_ADAPTER_ENABLED) return;
-  if (hdJassubModule) {
-    try {
-      if (el.setSubtitleRenderer) { el.setSubtitleRenderer(hdCreateSubAdapter(el)); hdSubDebug.installed = true; hdSubState.installed = true; hdSubDebug.installError = ''; }
-      else if (typeof customElements !== 'undefined' && customElements.whenDefined) { hdInstallSubAdapterWaitUpgrade(el); }
-      else { hdSubDebug.installError = 'renderer method missing'; }
-    } catch (e) { hdSubDebug.installError = 'install: ' + (e && e.message ? e.message : String(e)); try { console.warn('[HaruDrive] sub adapter install failed: ' + hdSubDebug.installError); } catch (e2) {} }
-    hdSubDebugSync();
-    return;
-  }
-  hdEnsureJassub().then(function() {
-    try {
-      if (moviState.el === el && el.setSubtitleRenderer) { el.setSubtitleRenderer(hdCreateSubAdapter(el)); hdSubDebug.installed = true; hdSubState.installed = true; hdSubDebug.installError = ''; }
-      else if (moviState.el !== el) { hdSubDebug.installError = 'stale element'; }
-      else if (typeof customElements !== 'undefined' && customElements.whenDefined) { hdInstallSubAdapterWaitUpgrade(el); }
-      else { hdSubDebug.installError = 'renderer method missing'; }
-    } catch (e) { hdSubDebug.installError = 'install: ' + (e && e.message ? e.message : String(e)); try { console.warn('[HaruDrive] sub adapter install failed: ' + hdSubDebug.installError); } catch (e2) {} }
-    hdSubDebugSync();
-  }).catch(function(err) {
-    hdSubDebug.installError = 'jassub import: ' + (err && err.message ? err.message : String(err));
-    try { console.warn('[HaruDrive] sub adapter install failed: ' + hdSubDebug.installError); } catch (e2) {}
-    hdSubDebugSync();
-  });
+  try {
+    if (el.setSubtitleRenderer) { el.setSubtitleRenderer(hdCreateSubAdapter(el)); hdSubDebug.installed = true; hdSubState.installed = true; hdSubDebug.installError = ''; }
+    else if (typeof customElements !== 'undefined' && customElements.whenDefined) { hdInstallSubAdapterWaitUpgrade(el); }
+    else { hdSubDebug.installError = 'renderer method missing'; }
+  } catch (e) { hdSubDebug.installError = 'install: ' + (e && e.message ? e.message : String(e)); try { console.warn('[HaruDrive] sub adapter install failed: ' + hdSubDebug.installError); } catch (e2) {} }
+  hdSubDebugSync();
 }
 function startMoviPlayer() {
   var wrap = document.getElementById('moviPlayerWrap');
