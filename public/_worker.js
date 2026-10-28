@@ -12070,6 +12070,7 @@ function hdCreateSubAdapter(el) {
       adapter.overlay = overlay;
       adapter.moviOverlay = overlay;
       try { adapter.ensureOwnCanvas(); } catch (e0) {}
+      try { hdSubFullscreenSync(); } catch (e2) {}
       if (!adapter.canvas) {
         try { adapter.buildCanvas(overlay); hdSubDebug.cvSrc = 'overlay'; } catch (e1) {}
       }
@@ -12441,12 +12442,12 @@ function hdSubFullscreenSync() {
     var inFs = !!document.fullscreenElement || pseudo;
     var sr = null;
     try { sr = el ? el.shadowRoot : null; } catch (e) {}
-    if (inFs && sr) {
+    if (sr) {
       if (cv.parentNode !== sr) { try { sr.appendChild(cv); } catch (e) {} }
       if (layer && layer.parentNode !== sr) { try { sr.appendChild(layer); } catch (e) {} }
-      hdSubDebug.cvSrc = 'shadow-fs';
-      hdSubDebug.fsMove = 'shadow';
-    } else if (!inFs && adapter.ownContainer && cv.parentNode !== adapter.ownContainer) {
+      hdSubDebug.cvSrc = 'shadow';
+      if (inFs) hdSubDebug.fsMove = 'shadow';
+    } else if (adapter.ownContainer && cv.parentNode !== adapter.ownContainer) {
       try { adapter.ownContainer.appendChild(cv); } catch (e) {}
       if (layer) { try { adapter.ownContainer.appendChild(layer); } catch (e) {} }
       hdSubDebug.cvSrc = 'box';
