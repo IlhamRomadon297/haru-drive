@@ -11588,6 +11588,18 @@ function hdAssPacketToEvent(text, start, end) {
       effect = hdTrimStr(f[8]) || '';
       body = f.slice(9).join(',');
     }
+    // movi stripped ASS packet: index, layer, style, name, ml, mr, mv, effect, text (times come from packet header)
+    if (body === text) {
+      var g = text.split(',');
+      if (g.length >= 9 && hdIsDigits(g[0]) && hdIsDigits(g[1]) && hdIsDigits(g[4]) && hdIsDigits(g[5]) && hdIsDigits(g[6])) {
+        style = hdTrimStr(g[2]) || 'Default';
+        ml = parseInt(g[4], 10); if (isNaN(ml)) ml = -1;
+        mr = parseInt(g[5], 10); if (isNaN(mr)) mr = -1;
+        mv = parseInt(g[6], 10); if (isNaN(mv)) mv = -1;
+        effect = hdTrimStr(g[7]) || '';
+        body = g.slice(8).join(',');
+      }
+    }
     if (!body) return null;
     return { start: start, end: end, style: style, ml: ml, mr: mr, mv: mv, effect: effect, text: body, lines: null };
   } catch (e) { return null; }
@@ -12029,9 +12041,10 @@ function hdCreateSubAdapter(el) {
     canvasH: 0,
     mount: function(overlay) {
       adapter.overlay = overlay;
-      try { overlay.style.position = 'relative'; overlay.style.zIndex = '9999'; } catch (e0) {}
-      hdSubDebug.cvSrc = 'overlay';
-      adapter.buildCanvas(overlay);
+      try { adapter.ensureOwnCanvas(); } catch (e0) {}
+      if (!adapter.canvas) {
+        try { adapter.buildCanvas(overlay); hdSubDebug.cvSrc = 'overlay'; } catch (e1) {}
+      }
     },
     buildCanvas: function(container) {
       try {
