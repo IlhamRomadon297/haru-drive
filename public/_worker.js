@@ -11139,7 +11139,7 @@ function buildMoviPlaylist(fileId) {
   return items;
 }
 var hdTextDecoder = null;
-var hdSubDebug = { installed: false, installError: '', mode: '', codec: '', headSeen: false, jassub: 'idle', jassubError: '', pkt: 0, dlg: 0, canvas: 'no', clk: 0, cv: '0x0', sty: '?', firstT: '', lastT: '', blank: 0, drw: 0 };
+var hdSubDebug = { installed: false, installError: '', mode: '', codec: '', headSeen: false, jassub: 'idle', jassubError: '', pkt: 0, dlg: 0, canvas: 'no', clk: 0, cv: '0x0', sty: '?', firstT: '', lastT: '', blank: 0, drw: 0, maxA: 0, lastDraw: '' };
 function hdSubDebugSync() {
   try {
     if (typeof window === 'undefined' || !window.location || window.location.search.indexOf('hdsubdebug=1') < 0) return;
@@ -11162,7 +11162,7 @@ function hdSubDebugSync() {
       document.body.appendChild(badge);
     }
     var nl = String.fromCharCode(10);
-    badge.textContent = 'SUBDEBUG installed=' + (hdSubDebug.installed ? 'yes' : 'no') + nl + 'mode=' + hdSubDebug.mode + ' codec=' + hdSubDebug.codec + ' head=' + (hdSubDebug.headSeen ? 'yes' : 'no') + nl + 'jassub=' + hdSubDebug.jassub + ' canvas=' + hdSubDebug.canvas + ' dlg=' + hdSubDebug.dlg + ' pkt=' + hdSubDebug.pkt + nl + 'clk=' + hdSubDebug.clk + ' cv=' + hdSubDebug.cv + ' blk=' + hdSubDebug.blank + ' drw=' + hdSubDebug.drw + ' sty=' + hdSubDebug.sty + ' dlgT=' + hdSubDebug.firstT + '..' + hdSubDebug.lastT + nl + 'installErr=' + hdSubDebug.installError + nl + 'jassubErr=' + hdSubDebug.jassubError;
+    badge.textContent = 'SUBDEBUG installed=' + (hdSubDebug.installed ? 'yes' : 'no') + nl + 'mode=' + hdSubDebug.mode + ' codec=' + hdSubDebug.codec + ' head=' + (hdSubDebug.headSeen ? 'yes' : 'no') + nl + 'jassub=' + hdSubDebug.jassub + ' canvas=' + hdSubDebug.canvas + ' dlg=' + hdSubDebug.dlg + ' pkt=' + hdSubDebug.pkt + nl + 'clk=' + hdSubDebug.clk + ' cv=' + hdSubDebug.cv + ' blk=' + hdSubDebug.blank + ' drw=' + hdSubDebug.drw + ' maxA=' + hdSubDebug.maxA + ' sty=' + hdSubDebug.sty + ' dlgT=' + hdSubDebug.firstT + '..' + hdSubDebug.lastT + nl + 'last=' + hdSubDebug.lastDraw + nl + 'installErr=' + hdSubDebug.installError + nl + 'jassubErr=' + hdSubDebug.jassubError;
   } catch (e) {}
 }
 function hdDecodeBytes(data) {
@@ -11956,7 +11956,12 @@ function hdAssDrawEvent(ctx, ev, t, S) {
         drawPass('secondary');
         ctx.restore();
       }
-      drawn = true;
+      var visText = '';
+      for (var vt = 0; vt < segs2.length; vt++) { if (segs2[vt].text && !segs2[vt].tags.drawing) visText += segs2[vt].text; }
+      if (visText) {
+        drawn = true;
+        if (li2 === 0) hdSubDebug.lastDraw = Math.round(x0) + ',' + Math.round(lineTop) + ',' + Math.round(info.w) + 'x' + Math.round(info.h) + ':' + visText.substring(0, 24);
+      }
       yCursor += info.h;
     }
     ctx.restore();
@@ -12317,14 +12322,29 @@ function hdAssCanvasBlank() {
     if (!ctx) return -1;
     var w = cv.width;
     var h = cv.height;
+    var maxA = 0;
     for (var gy = 0; gy < 4; gy++) {
       for (var gx = 0; gx < 8; gx++) {
         var x = Math.floor((gx + 0.5) * w / 8);
         var y = Math.floor((gy + 0.5) * h / 4);
         var d = ctx.getImageData(x, y, 1, 1).data;
-        if (d[3] > 10) return false;
+        if (d[3] > maxA) maxA = d[3];
+        if (d[3] > 10) { hdSubDebug.maxA = maxA; return false; }
       }
     }
+    var scanStrip = function(y0, y1) {
+      var strip = ctx.getImageData(0, y0, w, y1 - y0).data;
+      for (var i = 3; i < strip.length; i += 16) {
+        if (strip[i] > maxA) maxA = strip[i];
+        if (strip[i] > 10) return false;
+      }
+      return true;
+    };
+    var topOk = scanStrip(0, Math.floor(h * 0.25));
+    if (!topOk) { hdSubDebug.maxA = maxA; return false; }
+    var botOk = scanStrip(Math.floor(h * 0.75), h);
+    if (!botOk) { hdSubDebug.maxA = maxA; return false; }
+    hdSubDebug.maxA = maxA;
     return true;
   } catch (e) { return -1; }
 }
