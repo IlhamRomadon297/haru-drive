@@ -273,6 +273,8 @@ export default {
             storage_hf: body.storage_hf === '0' ? '0' : '1',
             public_password: body.public_password === undefined ? existing.public_password : (body.public_password === '0' ? '0' : '1')
           };
+          const dlRaw = parseInt(body.guest_dl_max, 10);
+          updated.guest_dl_max = isFinite(dlRaw) ? String(Math.min(10000, Math.max(1, dlRaw))) : (existing.guest_dl_max || '100');
           await setPublicAccessConfig(env, updated);
           return new Response(JSON.stringify({ success: true, ...updated }), {
             headers: { 'Content-Type': 'application/json' }
@@ -1008,8 +1010,9 @@ export default {
         const totals = await env.harudrive_db.prepare('SELECT COUNT(*) AS c, COUNT(DISTINCT ip) AS ips, SUM(size) AS bytes FROM dl_limits WHERE day = ?').bind(day).first().catch(() => null);
         const top = await env.harudrive_db.prepare('SELECT ip, COUNT(*) AS files, SUM(size) AS bytes FROM dl_limits WHERE day = ? GROUP BY ip ORDER BY files DESC LIMIT 10').bind(day).all().catch(() => ({ results: [] }));
         const topRows = top.results || [];
-        const atCap = topRows.filter(function (r) { return (r.files || 0) >= GUEST_DL_MAX_FILES; }).map(function (r) { return r.ip; });
-        return new Response(JSON.stringify({ day: day, total_files: totals ? (totals.c || 0) : 0, total_ips: totals ? (totals.ips || 0) : 0, total_bytes: totals ? (totals.bytes || 0) : 0, top: topRows, at_cap: atCap }), { headers: { 'Content-Type': 'application/json' } });
+        const dlMax = guestDlMaxFiles(await getPublicAccessConfig(env));
+        const atCap = topRows.filter(function (r) { return (r.files || 0) >= dlMax; }).map(function (r) { return r.ip; });
+        return new Response(JSON.stringify({ day: day, total_files: totals ? (totals.c || 0) : 0, total_ips: totals ? (totals.ips || 0) : 0, total_bytes: totals ? (totals.bytes || 0) : 0, top: topRows, at_cap: atCap, max_files: dlMax }), { headers: { 'Content-Type': 'application/json' } });
       } catch (e) { return new Response(JSON.stringify({ day: dlDayStr(Date.now()), total_files: 0, total_ips: 0, total_bytes: 0, top: [], at_cap: [] }), { headers: { 'Content-Type': 'application/json' } }); }
     }
 
@@ -2856,7 +2859,8 @@ export default {
       let pathAfterPrefix = url.pathname.replace(/^\/(file|d|raw)\//, '');
       const shortId = pathAfterPrefix.split('/')[0];
 
-      // Guest daily file limit: 100 distinct files/day per IP (admins bypass).
+      // Guest daily file limit: N distinct files/day per IP (admins bypass;
+      // N is admin-configurable in Akses Publik settings, default 100).
       // Counts first GET per (ip, file, day); later Range requests for the same
       // file pass freely so playback never breaks mid-stream. The record is
       // written at the successful return points below (with total file size).
@@ -2866,7 +2870,7 @@ export default {
         dlIp = clientIpOf(request);
         dlCheck = await checkGuestDlAllowed(env, dlIp, shortId);
         if (!dlCheck.allowed) {
-          return new Response(JSON.stringify({ error: 'Batas streaming/download harian untuk tamu tercapai (100 file/hari). Coba lagi besok.' }), {
+          return new Response(JSON.stringify({ error: 'Batas streaming/download harian untuk tamu tercapai (' + (dlCheck.max || GUEST_DL_MAX_FILES) + ' file/hari). Coba lagi besok.' }), {
             status: 429,
             headers: { 'Content-Type': 'application/json', 'Retry-After': String(dlCheck.retrySec) }
           });
@@ -3614,6 +3618,13 @@ async function generateShortId(path) {
 // links burn nothing. Rows older than 7 days are pruned on ~1% of records.
 const GUEST_DL_MAX_FILES = 100;
 const GUEST_DL_KEEP_DAYS = 7;
+// Effective guest daily file cap: admin-configurable via meta guest_dl_max
+// (Akses Publik settings), clamped 1..10000, default GUEST_DL_MAX_FILES.
+function guestDlMaxFiles(cfg) {
+  const n = parseInt(cfg && cfg.guest_dl_max, 10);
+  if (!isFinite(n)) return GUEST_DL_MAX_FILES;
+  return Math.min(10000, Math.max(1, n));
+}
 function dlDayStr(now) {
   const d = new Date(now);
   return d.getUTCFullYear() + '-' + String(d.getUTCMonth() + 1).padStart(2, '0') + '-' + String(d.getUTCDate()).padStart(2, '0');
@@ -3622,17 +3633,18 @@ async function checkGuestDlAllowed(env, ip, fileId) {
   if (!env || !env.harudrive_db) return { allowed: true };
   const day = dlDayStr(Date.now());
   try {
+    const maxFiles = guestDlMaxFiles(await getPublicAccessConfig(env));
     const seen = await env.harudrive_db.prepare('SELECT 1 AS one FROM dl_limits WHERE ip = ? AND file_id = ? AND day = ?').bind(ip, fileId, day).first().catch(() => null);
     if (seen) return { allowed: true };
     const row = await env.harudrive_db.prepare('SELECT COUNT(*) AS c FROM dl_limits WHERE ip = ? AND day = ?').bind(ip, day).first().catch(() => null);
     const used = row ? (row.c || 0) : 0;
-    if (used >= GUEST_DL_MAX_FILES) {
+    if (used >= maxFiles) {
       const now = Date.now();
       const nd = new Date(now);
       const nextMid = Date.UTC(nd.getUTCFullYear(), nd.getUTCMonth(), nd.getUTCDate() + 1);
-      return { allowed: false, retrySec: Math.ceil((nextMid - now) / 1000), used: used };
+      return { allowed: false, retrySec: Math.ceil((nextMid - now) / 1000), used: used, max: maxFiles };
     }
-    return { allowed: true, isNew: true, day: day };
+    return { allowed: true, isNew: true, day: day, max: maxFiles };
   } catch (e) { return { allowed: true }; }
 }
 function totalSizeFromHeaders(headers) {
@@ -3762,11 +3774,11 @@ async function peekPinFromRequest(request) {
   return null;
 }
 async function getPublicAccessConfig(env) {
-  const def = { public_access: 'open', public_index: '1', guest_access: '1', storage_gdrive: '1', storage_hf: '1', public_password: '0' };
+  const def = { public_access: 'open', public_index: '1', guest_access: '1', storage_gdrive: '1', storage_hf: '1', public_password: '0', guest_dl_max: '100' };
   if (!env || !env.harudrive_db) return def;
   try {
     // Pure SELECT read without executing CREATE TABLE on every HTTP request
-    const rows = await env.harudrive_db.prepare("SELECT key, value FROM meta WHERE key IN ('public_access', 'public_index', 'guest_access', 'storage_gdrive', 'storage_hf', 'public_password')").all().catch(() => ({ results: [] }));
+    const rows = await env.harudrive_db.prepare("SELECT key, value FROM meta WHERE key IN ('public_access', 'public_index', 'guest_access', 'storage_gdrive', 'storage_hf', 'public_password', 'guest_dl_max')").all().catch(() => ({ results: [] }));
     if (rows && rows.results) {
       for (const r of rows.results) {
         if (r.key in def && r.value !== null && r.value !== undefined) def[r.key] = String(r.value);
@@ -3782,7 +3794,7 @@ async function setPublicAccessConfig(env, cfg) {
   if (!env || !env.harudrive_db) return false;
   try {
     await env.harudrive_db.prepare('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)').run().catch(() => {});
-    const keys = ['public_access', 'public_index', 'guest_access', 'storage_gdrive', 'storage_hf', 'public_password'];
+    const keys = ['public_access', 'public_index', 'guest_access', 'storage_gdrive', 'storage_hf', 'public_password', 'guest_dl_max'];
     for (const k of keys) {
       if (k in cfg) {
         await env.harudrive_db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)").bind(k, String(cfg[k])).run();
@@ -6189,7 +6201,7 @@ async function initAdminConsole() {
 }
 
 // Public & Guest System Access Management
-let currentAccessConfig = { public_access: 'open', public_index: '1', guest_access: '1', storage_gdrive: '1', storage_hf: '1', public_password: '0' };
+let currentAccessConfig = { public_access: 'open', public_index: '1', guest_access: '1', storage_gdrive: '1', storage_hf: '1', public_password: '0', guest_dl_max: '100' };
 
 async function fetchPublicAccessStatus() {
   try {
@@ -6205,6 +6217,7 @@ async function fetchPublicAccessStatus() {
         storage_hf: data.storage_hf !== undefined ? String(data.storage_hf) : '1',
         public_password: data.public_password !== undefined ? String(data.public_password) : '0'
       };
+      if (data.guest_dl_max !== undefined) currentAccessConfig.guest_dl_max = String(data.guest_dl_max);
       updatePublicAccessNavbarUI();
       updateStorageModeUI();
     }
@@ -6244,6 +6257,8 @@ function openPublicAccessModal() {
   if (gdToggle) gdToggle.checked = (currentAccessConfig.storage_gdrive === '1');
   if (hfToggle) hfToggle.checked = (currentAccessConfig.storage_hf === '1');
   if (pwToggle) pwToggle.checked = (currentAccessConfig.public_password === '1');
+  const dlInput = document.getElementById('guestDlMaxInput');
+  if (dlInput) dlInput.value = currentAccessConfig.guest_dl_max || '100';
   
   handleMasterAccessChange();
   if (modal) modal.style.display = 'flex';
@@ -6291,6 +6306,12 @@ async function savePublicAccessConfig() {
     public_password: pwToggle && pwToggle.checked ? '1' : '0'
   };
 
+  const dlInput = document.getElementById('guestDlMaxInput');
+  let dlMaxVal = parseInt(dlInput ? dlInput.value : '', 10);
+  if (!isFinite(dlMaxVal)) dlMaxVal = 100;
+  dlMaxVal = Math.min(10000, Math.max(1, dlMaxVal));
+  payload.guest_dl_max = String(dlMaxVal);
+
   try {
     const res = await fetch('/api/admin/system-access', {
       method: 'POST',
@@ -6307,6 +6328,7 @@ async function savePublicAccessConfig() {
         storage_hf: payload.storage_hf,
         public_password: payload.public_password
       };
+      currentAccessConfig.guest_dl_max = payload.guest_dl_max;
       updatePublicAccessNavbarUI();
       updateStorageModeUI();
       closePublicAccessModal();
@@ -13819,9 +13841,9 @@ function adminConsoleUI() {
           <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M12 2v8M12 14v8"/><path d="M4.93 10a5 5 0 0 1 6.07-6"/><path d="M19.07 14a5 5 0 0 1-6.07 6"/><circle cx="12" cy="12" r="3"/></svg>
           <span id="storageModeLabelAdmin">Mode: GDrive</span>
         </button>
-        <button class="nav-btn" id="publicAccessToggleAdmin" onclick="openPublicAccessModal()" title="Pengaturan Akses Publik & Mode Maintenance" style="border-color: rgba(16,185,129,0.35);">
-          <span id="publicAccessDot" style="width: 8px; height: 8px; border-radius: 50%; background: #10b981; display: inline-block; box-shadow: 0 0 8px #10b981;"></span>
-          <span id="publicAccessLabel">Akses: Terbuka</span>
+        <button class="nav-btn" id="publicAccessToggleAdmin" onclick="openPublicAccessModal()" title="Pengaturan Akses Publik & Mode Maintenance" aria-label="Pengaturan" style="border-color: rgba(16,185,129,0.35); position: relative; padding: 8px 10px;">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          <span id="publicAccessDot" style="position: absolute; top: 5px; right: 5px; width: 8px; height: 8px; border-radius: 50%; background: #10b981; display: inline-block; box-shadow: 0 0 8px #10b981;"></span>
         </button>
         <a href="/" class="nav-btn" title="Kembali ke Web Publik">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
@@ -14723,6 +14745,15 @@ function adminConsoleUI() {
               <input type="checkbox" id="togglePublicPassword" style="opacity: 0; width: 0; height: 0;">
               <span class="slider-round round-sm" style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #374151; transition: .3s; border-radius: 22px;"></span>
             </label>
+          </div>
+
+          <!-- Guest Download Limit -->
+          <div style="padding: 12px 14px; border-radius: 12px; background: rgba(255,255,255,0.02); border: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between;">
+            <div>
+              <div style="font-weight: 600; font-size: 0.84rem; color: var(--text);">⬇️ Batas Download Tamu</div>
+              <div style="font-size: 0.74rem; color: var(--text-muted);">Maks file berbeda yang boleh didownload / streaming tamu per hari (per IP). File yang sama dihitung sekali. Admin tidak dibatasi.</div>
+            </div>
+            <input type="number" id="guestDlMaxInput" min="1" max="10000" step="1" style="width: 86px; flex-shrink: 0; margin-left: 12px; padding: 7px 8px; border-radius: 8px; border: 1px solid var(--border); background: rgba(255,255,255,0.05); color: var(--text); font-size: 0.85rem; font-weight: 600; text-align: center;">
           </div>
 
           <!-- Storage Controls Section -->
